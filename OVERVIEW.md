@@ -112,6 +112,8 @@ All commands support `--verbose` (progress steps) and `--debug` (AWS SDK call de
 
 **`mint ssh-config [--vm <name>]`** — Generates or updates `~/.ssh/config` with a `Host mint-<vm>` entry using a `ProxyCommand` that routes through EC2 Instance Connect. This enables VS Code Remote-SSH and other standard SSH clients to connect without managing keys.
 
+**`mint code [project] [--vm <name>]`** — Opens VS Code connected to the VM via Remote-SSH. If a project name is given, opens that project's directory. Runs `code --remote ssh-remote+mint-<vm> <path>`. Ensures `mint ssh-config` has been run first, and that the VM is running.
+
 **`mint key add <public-key> [--vm <name>]`** — Adds a public key to the VM's `~/.ssh/authorized_keys` via EC2 Instance Connect. Use this for clients that cannot use Instance Connect directly (e.g. Termius on iPad, CI runners, third-party tools). Accepts a file path or `-` for stdin.
 
 ### Projects
@@ -208,12 +210,11 @@ For clients that cannot use EC2 Instance Connect (e.g. Termius on iPad, CI runne
 The primary workflow uses VS Code Remote-SSH. After `mint up`, the developer:
 
 1. Runs `mint ssh-config` to generate/update their SSH config (one-time per VM, or after `mint destroy` + `mint up` allocates a new Elastic IP)
-2. Connects via Remote-SSH in VS Code using the `mint-<vm>` host
-3. Opens the project folder, which has a devcontainer configuration
-4. VS Code detects and reopens in the devcontainer
-5. Claude Code runs in the integrated terminal
+2. Runs `mint code <project>` to open VS Code connected to the project on the VM
+3. VS Code detects the devcontainer configuration and reopens in the devcontainer
+4. Claude Code runs in the integrated terminal
 
-`mint ssh-config` writes a `ProxyCommand` entry that routes through EC2 Instance Connect, so VS Code connects without any SSH key configuration. VS Code's existing Remote-SSH and Dev Containers extensions handle the rest natively.
+`mint ssh-config` writes a `ProxyCommand` entry that routes through EC2 Instance Connect, so VS Code connects without any SSH key configuration. `mint code` wraps the `code --remote` invocation so the user never needs to remember the syntax. VS Code's existing Remote-SSH and Dev Containers extensions handle the rest natively.
 
 ## Future Considerations (out of scope for v1)
 
