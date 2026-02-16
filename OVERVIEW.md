@@ -19,6 +19,12 @@ Secondary: iPad (Termius) → mosh → EC2 host → tmux → docker exec → dev
 
 tmux lives on the EC2 host, not inside containers. When the iPad disconnects (iOS suspends Termius, network drops), tmux keeps the session alive. Reconnecting is a single `tmux attach`.
 
+## Security Model
+
+Mint is a **trusted-team tool**. Multiple users share an AWS account and operate with PowerUser permissions. The `mint:owner` tag provides **ownership tracking for cost attribution and resource discovery, not access control**. Any PowerUser in the account can modify another user's resources via AWS APIs.
+
+If the threat model changes (untrusted users, compliance requirements), the escalation path is IAM permission boundaries with `aws:ResourceTag` conditions or separate AWS accounts per user.
+
 ## Resource Tagging
 
 Every AWS resource Mint creates is tagged for discovery and billing.
@@ -29,6 +35,7 @@ Every AWS resource Mint creates is tagged for discovery and billing.
 | `mint:component` | `instance`, `volume`, `security-group`, `key-pair`, `elastic-ip` | Resource type |
 | `mint:vm` | VM name (e.g. `default`, `gpu-box`) | Which VM this resource belongs to |
 | `mint:owner` | IAM username or configured owner identifier | Which user owns this resource |
+| `mint:bootstrap` | `complete` | Set by health-check script after successful first-boot provisioning |
 | `Name` | `mint/<owner>/<vm-name>` | Standard AWS console display |
 
 Mint discovers its own resources exclusively via tags. There is no local state file tracking resource IDs. Multiple users in the same AWS account coexist by filtering on `mint:owner`.
@@ -41,7 +48,7 @@ An AWS administrator performs this once per account. It creates shared infrastru
 
 ### What the admin creates
 
-**IAM Role: `mint-instance-role`** — Allows Mint VMs to stop themselves when idle. Scoped so an instance can only stop instances tagged `mint=true` with its own instance ID. Also needs `ec2:DescribeInstances` and `ec2:DescribeTags` for self-identification.
+**IAM Role: `mint-instance-role`** — Allows Mint VMs to stop themselves when idle and tag themselves for bootstrap verification. Scoped so an instance can only stop instances tagged `mint=true` with its own instance ID. Permissions: `ec2:StopInstances` (conditioned on own instance ID + `mint=true` tag), `ec2:DescribeInstances`, `ec2:DescribeTags`, `ec2:CreateTags` (on own instance, for `mint:bootstrap` tag).
 
 **IAM Instance Profile: `mint-instance-profile`** — Wraps the role above. Mint passes this profile to instances at launch.
 
@@ -49,16 +56,18 @@ Mint ships with documentation containing the exact IAM policy JSON and a CloudFo
 
 ### Validation
 
-`mint init` checks for the instance profile. If missing, it exits with an error message directing the admin to the setup documentation. This is the only blocker — everything else Mint creates on its own.
+`mint init` checks for the instance profile. If missing, it exits with an error message directing the admin to the setup documentation. `mint init` also validates that the default VPC exists with a public subnet in the configured region. These are the only blockers — everything else Mint creates on its own.
 
 ## Per-User Init
 
 Each Mint user runs `mint init` once from their machine. This creates user-scoped resources within the shared AWS account using PowerUser permissions:
 
-- Generates an SSH key pair (Ed25519) and registers it with AWS, tagged with `mint:owner`
-- Creates a security group allowing SSH (TCP 22) and mosh (UDP 60000-61000), tagged
+- Generates an SSH key pair (Ed25519) and registers it with AWS, tagged with `mint:owner`. Alternatively, `--public-key <path>` imports an existing public key for users with SSH agents (SSH_AUTH_SOCK, 1Password, Yubikey).
+- Creates a security group allowing SSH (TCP 22) and mosh (UDP 60000-61000) from the user's current public IP, tagged. The source IP is not 0.0.0.0/0.
+- Sets the AWS region explicitly (not inherited from AWS CLI default config)
 - Validates that the admin-created instance profile exists
-- Stores the private key locally for SSH/mosh access and for import into Termius
+- Validates that the default VPC exists with a public subnet
+- Stores the private key locally for SSH/mosh access and for import into Termius (skipped when using `--public-key`)
 
 ## CLI Commands
 
@@ -66,15 +75,17 @@ Each Mint user runs `mint init` once from their machine. This creates user-scope
 
 Most users have one VM. The `--vm` flag defaults to `default` and can be omitted. Advanced users name their VMs to run multiple.
 
-**`mint up [--vm <name>]`** — Creates and starts a VM. If a stopped VM with that name exists (found by tag), starts it instead. The VM gets an Elastic IP for a stable address. On first boot, the VM bootstraps itself with Docker, devcontainer CLI, tmux, mosh-server, Git, GitHub CLI, Node.js, and AWS CLI. Base image is Ubuntu 24.04 LTS, resolved dynamically. Instance type defaults to m6i.xlarge (4 vCPU, 16GB). All resources are tagged.
+All commands support `--verbose` (progress steps) and `--debug` (AWS SDK call details) flags globally.
+
+**`mint up [--vm <name>]`** — Creates and starts a VM. If a stopped VM with that name exists (found by tag), starts it instead. The VM gets an Elastic IP for a stable address (Mint checks EIP quota before allocation). On first boot, the VM bootstraps itself and `mint up` polls for the `mint:bootstrap=complete` tag before reporting success, showing progress with phase labels ("Launching instance...", "Allocating Elastic IP...", "Waiting for bootstrap..."). On subsequent starts, a boot-time reconciliation script verifies installed software versions. Base image is Ubuntu 24.04 LTS, resolved dynamically. Instance type defaults to m6i.xlarge (4 vCPU, 16GB). All resources are tagged.
 
 **`mint down [--vm <name>]`** — Stops the VM. EBS volume persists. Compute billing stops. Elastic IP remains allocated so the address doesn't change on next start.
 
-**`mint destroy [--vm <name>]`** — Terminates the VM and releases all associated resources (EBS, Elastic IP) found by tag.
+**`mint destroy [--vm <name>]`** — Terminates the VM and releases all associated resources (EBS, Elastic IP) found by tag. Requires interactive confirmation by default. Use `--yes` to skip confirmation in scripts.
 
-**`mint list`** — Shows all VMs owned by the current user with their state (running, stopped), IP, uptime, and idle timer status.
+**`mint list [--json]`** — Shows all VMs owned by the current user with their state (running, stopped), IP, uptime, and idle timer status.
 
-**`mint status [--vm <name>]`** — Detailed status for a VM: state, IP, instance type, volume size, running devcontainers, tmux sessions, idle timer remaining.
+**`mint status [--vm <name>] [--json]`** — Detailed status for a VM: state, IP, instance type, volume size, disk usage, running devcontainers, tmux sessions, idle timer remaining.
 
 ### Connecting
 
@@ -86,13 +97,15 @@ Most users have one VM. The `--vm` flag defaults to `default` and can be omitted
 
 **`mint sessions [--vm <name>]`** — Lists active tmux sessions on the VM.
 
+**`mint ssh-config [--vm <name>]`** — Generates or updates `~/.ssh/config` with a `Host mint-<vm>` entry pointing to the VM's Elastic IP. Uses AWS CLI to discover the Elastic IP. For users who ran `mint init` with `--public-key`, the `IdentityFile` directive is omitted so the SSH agent handles authentication.
+
 ### Projects
 
 Projects live on VMs. A single VM typically hosts multiple projects, each in its own devcontainer.
 
-**`mint project add <git-url> [--branch <branch>] [--name <name>] [--vm <name>]`** — On the specified VM: clones the repo, builds the devcontainer, and creates a named tmux session with a `docker exec` shell into the running container. The project name defaults to the repo name. The repo URL and branch are not stored in Mint's config — this is an imperative action on the VM.
+**`mint project add <git-url> [--branch <branch>] [--name <name>] [--vm <name>]`** — On the specified VM: clones the repo, builds the devcontainer (using BuildKit cache for layer reuse), and creates a named tmux session with a `docker exec` shell into the running container. The project name defaults to the repo name. The repo URL and branch are not stored in Mint's config — this is an imperative action on the VM.
 
-**`mint project list [--vm <name>]`** — Lists projects on the VM by inspecting running devcontainers and project directories.
+**`mint project list [--vm <name>] [--json]`** — Lists projects on the VM by inspecting running devcontainers and project directories.
 
 **`mint project rebuild <project> [--vm <name>]`** — Tears down and rebuilds the devcontainer for a project.
 
@@ -102,15 +115,17 @@ Projects live on VMs. A single VM typically hosts multiple projects, each in its
 
 ### Configuration
 
-**`mint config`** — Shows current configuration.
+**`mint config [--json]`** — Shows current configuration.
 
 **`mint config set <key> <value>`** — Sets a configuration value (e.g. `mint config set idle.timeout_minutes 90`).
 
-Configuration covers: AWS region, default instance type, default volume size, idle timeout, and owner identifier. It does not store project or repo information — that lives on the VMs themselves.
+Configuration is stored at `~/.config/mint/config.toml` (following XDG conventions). Configuration covers: AWS region, default instance type, default volume size, idle timeout, and owner identifier. It does not store project or repo information — that lives on the VMs themselves.
 
 ## Auto-Stop
 
-Each VM runs an idle detection system (systemd timer checking every 5 minutes). A VM is considered active if any of these are true:
+Each VM runs an idle detection system (systemd timer checking every 5 minutes). The idle detection service writes structured JSON logs to journald with fields: `check_timestamp`, `active_criteria_met`, `idle_elapsed_minutes`, `action_taken`, `stop_result`.
+
+A VM is considered active if any of these are true:
 
 - An SSH or mosh session is connected
 - A tmux session has an attached client
@@ -118,6 +133,14 @@ Each VM runs an idle detection system (systemd timer checking every 5 minutes). 
 - The idle timer was manually extended
 
 When none are true for the configured timeout (default 60 minutes), the VM stops itself using the IAM permissions from the instance role.
+
+## Bootstrap Verification
+
+On first boot, the VM runs user-data to install all required software. A health-check script runs at the end of the bootstrap process to validate that all components are operational (Docker daemon running, devcontainer CLI in PATH, mosh-server available, tmux installed, etc.). On success, it tags the instance with `mint:bootstrap=complete`.
+
+`mint up` polls for this tag before reporting success. If the tag does not appear within a timeout, `mint up` reports a bootstrap failure and directs the user to check cloud-init logs.
+
+On subsequent starts (stop/start cycles), a boot-time reconciliation script (systemd unit) compares installed component versions against expected versions and logs discrepancies. This catches drift from manual modifications or extended periods between restarts.
 
 ## Multiple VMs (advanced)
 
@@ -139,14 +162,17 @@ Each VM has its own Elastic IP, EBS volume, idle timer, and set of devcontainers
 
 - **AMI**: Ubuntu 24.04 LTS, resolved via SSM parameter (not hardcoded)
 - **Instance type**: m6i.xlarge (4 vCPU, 16GB RAM), configurable per VM
-- **Storage**: 100GB gp3 EBS root volume, persists across stop/start
-- **Elastic IP**: One per VM, stable across stop/start cycles
-- **Security group**: Shared across user's VMs (SSH + mosh ports)
+- **Storage**: 200GB gp3 EBS root volume, persists across stop/start
+- **Elastic IP**: One per VM, stable across stop/start cycles (default quota: 5 per region — admin should request increase via Service Quotas for multi-user setups)
+- **Security group**: Shared across user's VMs (SSH + mosh ports, scoped to user's IP)
 - **Instance profile**: `mint-instance-profile` (admin-created, shared)
+- **Networking**: Default VPC with public subnet. No custom VPC, no bastion, no SSM Session Manager.
 
 ### Software installed on first boot
 
 Docker Engine, Docker Compose, devcontainer CLI, tmux (with mouse support and large scroll buffer), mosh-server, Git, GitHub CLI, Node.js LTS, AWS CLI v2.
+
+Docker BuildKit cache mounts are persisted on the EBS volume so devcontainer rebuilds reuse layers across projects.
 
 ### tmux configuration
 
@@ -158,19 +184,19 @@ Mouse support enabled, 50k line scroll buffer, 256-color terminal. This is host-
 
 **Claude Code**: Users authenticate interactively on first connect. Claude Code prompts for login. Mint does not manage Anthropic credentials.
 
-**SSH/mosh**: Key pair generated by `mint init`, stored locally. User imports into Termius manually (documented).
+**SSH/mosh**: Key pair generated by `mint init` (or user-provided via `--public-key`), stored locally. User imports into Termius manually (documented). Users with SSH agents (SSH_AUTH_SOCK, 1Password, Yubikey) use their existing key via the BYOK flow.
 
 ## VS Code Integration
 
 The primary workflow uses VS Code Remote-SSH. After `mint up`, the developer:
 
-1. Adds the VM's Elastic IP to their SSH config (or uses the key directly)
-2. Connects via Remote-SSH in VS Code
+1. Runs `mint ssh-config` to generate/update their SSH config
+2. Connects via Remote-SSH in VS Code using the `mint-<vm>` host
 3. Opens the project folder, which has a devcontainer configuration
 4. VS Code detects and reopens in the devcontainer
 5. Claude Code runs in the integrated terminal
 
-Mint documents this workflow but does not automate VS Code configuration — VS Code's existing Remote-SSH and Dev Containers extensions handle it natively.
+Mint automates SSH config generation via `mint ssh-config`. VS Code's existing Remote-SSH and Dev Containers extensions handle the rest natively.
 
 ## Future Considerations (out of scope for v1)
 
@@ -180,5 +206,7 @@ Mint documents this workflow but does not automate VS Code configuration — VS 
 - EBS snapshot/restore for fast recreation
 - Team shared instances with per-user tmux sessions
 - Push notifications when Claude Code needs input
-- `mint ssh-config` command to auto-generate SSH config entries
-
+- Dead-man's switch Lambda for detecting auto-stop failures (watchdog that checks heartbeat tags and force-stops stale instances)
+- SSH key rotation via `mint rotate-key`
+- Dedicated Docker EBS volume at `/var/lib/docker` (upgrade from shared root volume)
+- IAM permission boundaries for untrusted multi-user environments
