@@ -14,9 +14,11 @@ Mint discovers all resources exclusively via AWS resource tags. There is no loca
 | Tag | Purpose |
 |-----|---------|
 | `mint=true` | Primary filter for all Mint-managed resources |
-| `mint:component` | Resource type (instance, volume, security-group, key-pair, elastic-ip) |
+| `mint:component` | Resource type (instance, volume, security-group, elastic-ip) |
 | `mint:vm` | VM name this resource belongs to |
-| `mint:owner` | IAM username or configured owner identifier |
+| `mint:owner` | Friendly name derived from AWS identity ARN (see ADR-0013) |
+| `mint:owner-arn` | Full caller ARN for auditability (see ADR-0013) |
+| `mint:bootstrap` | Set to `complete` after successful first-boot provisioning (see ADR-0009) |
 | `Name` | `mint/<owner>/<vm-name>` for AWS Console display |
 
 Multi-user isolation is achieved by filtering on `mint:owner`. Billing review filters Cost Explorer on `mint=true` and groups by `mint:vm` or `mint:owner`.
@@ -27,5 +29,5 @@ Multi-user isolation is achieved by filtering on `mint:owner`. Billing review fi
 - **No "where is the state" problem.** Any developer can run Mint from any machine and discover their resources.
 - **Billing visibility for free.** Cost Explorer tag filters give per-user and per-VM cost breakdowns without additional tooling.
 - **Slower resource discovery.** Every command must query AWS APIs with tag filters instead of reading a local file. Acceptable for a CLI managing a handful of resources.
-- **Tag limits.** AWS allows 50 tags per resource. Mint uses 5, leaving headroom but establishing a dependency on the tagging system.
+- **Tag limits.** AWS allows 50 tags per resource. Mint uses 7, leaving headroom but establishing a dependency on the tagging system.
 - **Tag-based isolation is not access control.** Any PowerUser in the account can modify another user's resources. See ADR-0005.

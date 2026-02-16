@@ -14,7 +14,7 @@ Promote `mint ssh-config` from "future consideration" to v1. The command auto-ge
 The command writes `Host mint-<vm-name>` blocks containing:
 - `HostName` set to the VM's Elastic IP
 - `User` set to `ubuntu`
-- `IdentityFile` pointing to the Mint-generated key (omitted for BYOK users, per ADR-0007)
+- `ProxyCommand` routing through EC2 Instance Connect (see ADR-0007), enabling keyless SSH access
 
 ## Consequences
 - **Closes the primary workflow gap.** After `mint up` and `mint ssh-config`, the user can immediately `code --remote ssh-remote+mint-default /path` or select the host in VS Code's Remote-SSH picker.

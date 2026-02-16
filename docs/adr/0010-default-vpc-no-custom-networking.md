@@ -16,7 +16,7 @@ Use the default VPC. No custom VPC, no bastion host, no NAT gateway, no SSM Sess
 
 `mint init` validates that the default VPC exists and has at least one public subnet in the configured region. If the default VPC was deleted (some organizations do this), `mint init` exits with an error and guidance.
 
-Network security is handled by IP-scoped security groups (ADR-0006) and key-based SSH authentication.
+Network security is handled by IP-scoped security groups (ADR-0006) and EC2 Instance Connect with ephemeral keys (ADR-0007).
 
 ## Consequences
 - **Zero networking setup.** No VPC, subnet, route table, NAT gateway, or bastion to provision or pay for.

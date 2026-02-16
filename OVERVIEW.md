@@ -207,7 +207,7 @@ For clients that cannot use EC2 Instance Connect (e.g. Termius on iPad, CI runne
 
 The primary workflow uses VS Code Remote-SSH. After `mint up`, the developer:
 
-1. Runs `mint ssh-config` to generate/update their SSH config (one-time, or after IP changes)
+1. Runs `mint ssh-config` to generate/update their SSH config (one-time per VM, or after `mint destroy` + `mint up` allocates a new Elastic IP)
 2. Connects via Remote-SSH in VS Code using the `mint-<vm>` host
 3. Opens the project folder, which has a devcontainer configuration
 4. VS Code detects and reopens in the devcontainer

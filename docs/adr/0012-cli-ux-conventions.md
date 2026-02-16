@@ -12,13 +12,13 @@ Adopt the following conventions across the Mint CLI:
 **Configuration**: `~/.config/mint/config.toml`
 - Follows XDG Base Directory conventions (`~/.config/`).
 - TOML format: human-readable, supports nested keys, well-supported in the Rust/Go/Python ecosystems.
-- Config covers: AWS region, default instance type, default volume size, idle timeout, owner identifier.
+- Config covers: AWS region, default instance type, default volume size, idle timeout. Owner identity is derived at runtime from AWS credentials, not stored in config (see ADR-0013).
 
 **Machine-readable output**: `--json` flag on all read commands (`list`, `status`, `config`, `project list`). Outputs structured JSON for scripting and piping. Not available on write commands (`up`, `down`, `destroy`) where the primary output is progress feedback.
 
 **Verbosity**: `--verbose` and `--debug` flags available globally.
-- `--verbose`: shows additional operational detail (API calls being made, resource IDs).
-- `--debug`: full diagnostic output including request/response payloads. For troubleshooting.
+- `--verbose`: shows progress steps and operational phases during long-running commands.
+- `--debug`: shows AWS SDK call details and request/response payloads. For troubleshooting.
 
 **Destructive operation safety**: `mint destroy` requires interactive confirmation by default. The user must type the VM name to confirm. A `--yes` flag bypasses confirmation for use in scripts and automation.
 
