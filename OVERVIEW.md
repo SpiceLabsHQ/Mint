@@ -32,7 +32,7 @@ Every AWS resource Mint creates is tagged for discovery and billing.
 | Tag Key | Value | Purpose |
 |---|---|---|
 | `mint` | `true` | Primary filter — identifies all Mint-managed resources |
-| `mint:component` | `instance`, `volume`, `security-group`, `key-pair`, `elastic-ip` | Resource type |
+| `mint:component` | `instance`, `volume`, `security-group`, `elastic-ip` | Resource type |
 | `mint:vm` | VM name (e.g. `default`, `gpu-box`) | Which VM this resource belongs to |
 | `mint:owner` | Friendly name derived from AWS identity ARN (e.g. `ryan`) | Resource discovery and filtering |
 | `mint:owner-arn` | Full caller ARN from `sts get-caller-identity` | Auditability, disambiguation if friendly names collide |
@@ -75,12 +75,12 @@ Mint ships with documentation containing the exact IAM policy JSON and a CloudFo
 
 Each Mint user runs `mint init` once from their machine. This creates user-scoped resources within the shared AWS account using PowerUser permissions:
 
-- Generates an SSH key pair (Ed25519) and registers it with AWS, tagged with `mint:owner`. Alternatively, `--public-key <path>` imports an existing public key for users with SSH agents (SSH_AUTH_SOCK, 1Password, Yubikey).
 - Creates a security group allowing SSH (TCP 22) and mosh (UDP 60000-61000) from the user's current public IP, tagged. The source IP is not 0.0.0.0/0.
 - Sets the AWS region explicitly (not inherited from AWS CLI default config)
 - Validates that the admin-created instance profile exists
 - Validates that the default VPC exists with a public subnet
-- Stores the private key locally for SSH/mosh access and for import into Termius (skipped when using `--public-key`)
+
+No SSH keys are generated or stored. SSH access is handled by EC2 Instance Connect (see Authentication).
 
 ## CLI Commands
 
@@ -102,15 +102,17 @@ All commands support `--verbose` (progress steps) and `--debug` (AWS SDK call de
 
 ### Connecting
 
-**`mint ssh [--vm <name>]`** — Opens an SSH session to the VM.
+**`mint ssh [--vm <name>]`** — Opens an SSH session to the VM via EC2 Instance Connect.
 
-**`mint mosh [--vm <name>]`** — Opens a mosh session to the VM.
+**`mint mosh [--vm <name>]`** — Opens a mosh session to the VM. Uses EC2 Instance Connect for the initial SSH handshake, then switches to UDP.
 
 **`mint connect [session] [--vm <name>]`** — Opens a mosh session and automatically attaches to the named tmux session. If no session name is given, presents a session picker.
 
 **`mint sessions [--vm <name>]`** — Lists active tmux sessions on the VM.
 
-**`mint ssh-config [--vm <name>]`** — Generates or updates `~/.ssh/config` with a `Host mint-<vm>` entry pointing to the VM's Elastic IP. Uses AWS CLI to discover the Elastic IP. For users who ran `mint init` with `--public-key`, the `IdentityFile` directive is omitted so the SSH agent handles authentication.
+**`mint ssh-config [--vm <name>]`** — Generates or updates `~/.ssh/config` with a `Host mint-<vm>` entry using a `ProxyCommand` that routes through EC2 Instance Connect. This enables VS Code Remote-SSH and other standard SSH clients to connect without managing keys.
+
+**`mint key add <public-key> [--vm <name>]`** — Adds a public key to the VM's `~/.ssh/authorized_keys` via EC2 Instance Connect. Use this for clients that cannot use Instance Connect directly (e.g. Termius on iPad, CI runners, third-party tools). Accepts a file path or `-` for stdin.
 
 ### Projects
 
@@ -169,7 +171,7 @@ mint list                        # shows both VMs
 mint down --vm gpu-box           # stops only gpu-box
 ```
 
-Each VM has its own Elastic IP, EBS volume, idle timer, and set of devcontainers. They share the user's security group and key pair.
+Each VM has its own Elastic IP, EBS volume, idle timer, and set of devcontainers. They share the user's security group.
 
 ## EC2 Instance Details
 
@@ -183,7 +185,7 @@ Each VM has its own Elastic IP, EBS volume, idle timer, and set of devcontainers
 
 ### Software installed on first boot
 
-Docker Engine, Docker Compose, devcontainer CLI, tmux (with mouse support and large scroll buffer), mosh-server, Git, GitHub CLI, Node.js LTS, AWS CLI v2.
+Docker Engine, Docker Compose, devcontainer CLI, tmux (with mouse support and large scroll buffer), mosh-server, Git, GitHub CLI, Node.js LTS, AWS CLI v2, EC2 Instance Connect agent.
 
 Docker BuildKit cache mounts are persisted on the EBS volume so devcontainer rebuilds reuse layers across projects.
 
@@ -193,23 +195,25 @@ Mouse support enabled, 50k line scroll buffer, 256-color terminal. This is host-
 
 ## Authentication
 
-**AWS**: Users authenticate via standard AWS CLI credentials (profiles, SSO, env vars). Mint uses whatever `aws` is configured to use.
+**AWS**: Users authenticate via standard AWS CLI credentials (profiles, SSO, env vars). Mint uses whatever `aws` is configured to use. Users need `ec2-instance-connect:SendSSHPublicKey` permission (included in PowerUser).
 
 **Claude Code**: Users authenticate interactively on first connect. Claude Code prompts for login. Mint does not manage Anthropic credentials.
 
-**SSH/mosh**: Key pair generated by `mint init` (or user-provided via `--public-key`), stored locally. User imports into Termius manually (documented). Users with SSH agents (SSH_AUTH_SOCK, 1Password, Yubikey) use their existing key via the BYOK flow.
+**SSH/mosh**: EC2 Instance Connect is the primary mechanism. On each connection, Mint pushes an ephemeral public key to the instance (valid for 60 seconds) and opens an SSH session. No persistent keys are generated, stored, or managed by Mint.
+
+For clients that cannot use EC2 Instance Connect (e.g. Termius on iPad, CI runners), `mint key add` appends a public key to the VM's `authorized_keys` via Instance Connect, enabling direct SSH access with that key.
 
 ## VS Code Integration
 
 The primary workflow uses VS Code Remote-SSH. After `mint up`, the developer:
 
-1. Runs `mint ssh-config` to generate/update their SSH config
+1. Runs `mint ssh-config` to generate/update their SSH config (one-time, or after IP changes)
 2. Connects via Remote-SSH in VS Code using the `mint-<vm>` host
 3. Opens the project folder, which has a devcontainer configuration
 4. VS Code detects and reopens in the devcontainer
 5. Claude Code runs in the integrated terminal
 
-Mint automates SSH config generation via `mint ssh-config`. VS Code's existing Remote-SSH and Dev Containers extensions handle the rest natively.
+`mint ssh-config` writes a `ProxyCommand` entry that routes through EC2 Instance Connect, so VS Code connects without any SSH key configuration. VS Code's existing Remote-SSH and Dev Containers extensions handle the rest natively.
 
 ## Future Considerations (out of scope for v1)
 
@@ -220,6 +224,5 @@ Mint automates SSH config generation via `mint ssh-config`. VS Code's existing R
 - Team shared instances with per-user tmux sessions
 - Push notifications when Claude Code needs input
 - Dead-man's switch Lambda for detecting auto-stop failures (watchdog that checks heartbeat tags and force-stops stale instances)
-- SSH key rotation via `mint rotate-key`
 - Dedicated Docker EBS volume at `/var/lib/docker` (upgrade from shared root volume)
 - IAM permission boundaries for untrusted multi-user environments
