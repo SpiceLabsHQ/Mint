@@ -1,7 +1,7 @@
 # ADR-0006: Security Group IP Scoping
 
 ## Status
-Accepted
+Superseded by ADR-0016
 
 ## Context
 Mint VMs expose SSH (TCP 22) and mosh (UDP 60000-61000) to inbound traffic. The original spec did not specify the source IP range for the security group. The simplest approach is `0.0.0.0/0` (open to the internet), but this exposes the VM to SSH scanning, brute-force attempts, and exploitation of any SSH/mosh vulnerabilities.

@@ -75,7 +75,7 @@ Mint ships with documentation containing the exact IAM policy JSON and a CloudFo
 
 Each Mint user runs `mint init` once from their machine. This creates user-scoped resources within the shared AWS account using PowerUser permissions:
 
-- Creates a security group allowing SSH (TCP 22) and mosh (UDP 60000-61000) from the user's current public IP, tagged. The source IP is not 0.0.0.0/0.
+- Creates a security group allowing SSH (TCP 41122) and mosh (UDP 60000-61000), tagged. Uses non-standard SSH port to avoid automated scanning; inbound is open to all IPs, with security provided by key-only authentication (see ADR-0016).
 - Sets the AWS region explicitly (not inherited from AWS CLI default config)
 - Validates that the admin-created instance profile exists
 - Validates that the default VPC exists with a public subnet
@@ -90,7 +90,7 @@ Most users have one VM. The `--vm` flag defaults to `default` and can be omitted
 
 All commands support `--verbose` (progress steps) and `--debug` (AWS SDK call details) flags globally.
 
-**`mint up [--vm <name>]`** — Creates and starts a VM. If a stopped VM with that name exists (found by tag), starts it instead. The VM gets an Elastic IP for a stable address (Mint checks EIP quota before allocation). On first boot, the VM bootstraps itself and `mint up` polls for the `mint:bootstrap=complete` tag before reporting success, showing progress with phase labels ("Launching instance...", "Allocating Elastic IP...", "Waiting for bootstrap..."). On subsequent starts, a boot-time reconciliation script verifies installed software versions. Base image is Ubuntu 24.04 LTS, resolved dynamically. Instance type defaults to m6i.xlarge (4 vCPU, 16GB). All resources are tagged.
+**`mint up [--vm <name>]`** — Creates and starts a VM. If a stopped VM with that name exists (found by tag), starts it instead. The VM gets an Elastic IP for a stable address (Mint checks EIP quota before allocation). On first boot, the VM bootstraps itself and `mint up` polls for the `mint:bootstrap=complete` tag before reporting success, showing progress with phase labels ("Launching instance...", "Allocating Elastic IP...", "Waiting for bootstrap..."). On subsequent starts, a boot-time reconciliation script verifies installed software versions. Base image is Ubuntu 24.04 LTS, resolved dynamically. Instance type defaults to m6i.xlarge (4 vCPU, 16GB). All resources are tagged. After the VM is ready, `mint up` auto-generates the SSH config entry (prompting for permission on first run — see ADR-0015).
 
 **`mint down [--vm <name>]`** — Stops the VM. EBS volume persists. Compute billing stops. Elastic IP remains allocated so the address doesn't change on next start.
 
@@ -181,7 +181,7 @@ Each VM has its own Elastic IP, EBS volume, idle timer, and set of devcontainers
 - **Instance type**: m6i.xlarge (4 vCPU, 16GB RAM), configurable per VM
 - **Storage**: 200GB gp3 EBS root volume, persists across stop/start
 - **Elastic IP**: One per VM, stable across stop/start cycles (default quota: 5 per region — admin should request increase via Service Quotas for multi-user setups)
-- **Security group**: Shared across user's VMs (SSH + mosh ports, scoped to user's IP)
+- **Security group**: Shared across user's VMs (SSH on port 41122 + mosh ports, open to all IPs)
 - **Instance profile**: `mint-instance-profile` (admin-created, shared)
 - **Networking**: Default VPC with public subnet. No custom VPC, no bastion, no SSM Session Manager.
 
@@ -209,12 +209,11 @@ For clients that cannot use EC2 Instance Connect (e.g. Termius on iPad, CI runne
 
 The primary workflow uses VS Code Remote-SSH. After `mint up`, the developer:
 
-1. Runs `mint ssh-config` to generate/update their SSH config (one-time per VM, or after `mint destroy` + `mint up` allocates a new Elastic IP)
-2. Runs `mint code <project>` to open VS Code connected to the project on the VM
-3. VS Code detects the devcontainer configuration and reopens in the devcontainer
-4. Claude Code runs in the integrated terminal
+1. Runs `mint code <project>` to open VS Code connected to the project on the VM
+2. VS Code detects the devcontainer configuration and reopens in the devcontainer
+3. Claude Code runs in the integrated terminal
 
-`mint ssh-config` writes a `ProxyCommand` entry that routes through EC2 Instance Connect, so VS Code connects without any SSH key configuration. `mint code` wraps the `code --remote` invocation so the user never needs to remember the syntax. VS Code's existing Remote-SSH and Dev Containers extensions handle the rest natively.
+`mint up` auto-generates the SSH config entry, so there's no separate setup step. `mint code` wraps the `code --remote` invocation so the user never needs to remember the syntax. VS Code's existing Remote-SSH and Dev Containers extensions handle the rest natively. `mint ssh-config` remains available for manual re-generation if needed.
 
 ## Future Considerations (out of scope for v1)
 
@@ -227,3 +226,4 @@ The primary workflow uses VS Code Remote-SSH. After `mint up`, the developer:
 - Dead-man's switch Lambda for detecting auto-stop failures (watchdog that checks heartbeat tags and force-stops stale instances)
 - Dedicated Docker EBS volume at `/var/lib/docker` (upgrade from shared root volume)
 - IAM permission boundaries for untrusted multi-user environments
+- `mint up --project <git-url>` to provision a VM and clone a project in one command

@@ -9,7 +9,7 @@ Mint is a CLI tool that provisions and manages EC2-based development environment
 **Primary workflow**: MacBook → VS Code Remote-SSH → EC2 host → (user opens devcontainer via VS Code)
 **Secondary workflow**: iPad (Termius) → mosh → EC2 host → tmux → (user connects to container manually)
 
-**Current state**: Specification and architecture phase. `OVERVIEW.md` is the authoritative specification. `docs/adr/` contains 14 Architecture Decision Records that are binding design constraints.
+**Current state**: Specification and architecture phase. `OVERVIEW.md` is the authoritative specification. `docs/adr/` contains Architecture Decision Records that are binding design constraints.
 
 ## The Five Keys
 
@@ -38,7 +38,8 @@ These are non-negotiable constraints from the ADRs. Do not deviate without updat
 - **tmux on host** (ADR-0003): Not inside containers. Survives container rebuilds and iOS app suspension.
 - **Single 200GB gp3 root volume** (ADR-0004): No separate Docker volume.
 - **Default VPC** (ADR-0010): No custom networking, no bastion, no NAT gateway.
-- **IP-scoped security groups** (ADR-0006): SSH/mosh ports scoped to user's public IP, never `0.0.0.0/0`.
+- **Non-standard ports, open inbound** (ADR-0016): SSH on non-standard high port, mosh on 60000-61000. Open to all IPs; security via key-only auth, not network restriction.
+- **Permission before modifying user files** (ADR-0015): Mint prompts before writing files outside `~/.config/mint/`. Approval remembered in config.
 
 ## CLI UX Conventions (ADR-0012)
 
@@ -53,4 +54,4 @@ These are non-negotiable constraints from the ADRs. Do not deviate without updat
 | Document | Purpose |
 |----------|---------|
 | `OVERVIEW.md` | Complete specification — the authoritative source |
-| `docs/adr/0001-*.md` through `docs/adr/0014-*.md` | Architecture Decision Records — binding constraints |
+| `docs/adr/0001-*.md` through `docs/adr/0016-*.md` | Architecture Decision Records — binding constraints |

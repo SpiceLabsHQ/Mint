@@ -16,11 +16,11 @@ Use the default VPC. No custom VPC, no bastion host, no NAT gateway, no SSM Sess
 
 `mint init` validates that the default VPC exists and has at least one public subnet in the configured region. If the default VPC was deleted (some organizations do this), `mint init` exits with an error and guidance.
 
-Network security is handled by IP-scoped security groups (ADR-0006) and EC2 Instance Connect with ephemeral keys (ADR-0007).
+Network security is handled by non-standard ports with key-only authentication (ADR-0016) and EC2 Instance Connect with ephemeral keys (ADR-0007).
 
 ## Consequences
 - **Zero networking setup.** No VPC, subnet, route table, NAT gateway, or bastion to provision or pay for.
 - **Direct connectivity.** SSH and mosh connect directly to the Elastic IP. No bastion hop, no SSM plugin, no port forwarding.
-- **Public exposure.** The VM has a public IP. Mitigated by IP-scoped security groups and key-only SSH, but the instance is on the public internet, unlike a private-subnet approach.
+- **Public exposure.** The VM has a public IP. Mitigated by non-standard SSH port and key-only authentication (ADR-0016), but the instance is on the public internet, unlike a private-subnet approach.
 - **Default VPC dependency.** If the default VPC is deleted or misconfigured, Mint cannot provision. This is detected at `mint init` with a clear error.
 - **Not suitable for regulated environments.** Organizations requiring private subnets, VPC flow logs, or network-level compliance controls cannot use Mint without modification.
