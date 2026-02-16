@@ -34,11 +34,24 @@ Every AWS resource Mint creates is tagged for discovery and billing.
 | `mint` | `true` | Primary filter — identifies all Mint-managed resources |
 | `mint:component` | `instance`, `volume`, `security-group`, `key-pair`, `elastic-ip` | Resource type |
 | `mint:vm` | VM name (e.g. `default`, `gpu-box`) | Which VM this resource belongs to |
-| `mint:owner` | IAM username or configured owner identifier | Which user owns this resource |
+| `mint:owner` | Friendly name derived from AWS identity ARN (e.g. `ryan`) | Resource discovery and filtering |
+| `mint:owner-arn` | Full caller ARN from `sts get-caller-identity` | Auditability, disambiguation if friendly names collide |
 | `mint:bootstrap` | `complete` | Set by health-check script after successful first-boot provisioning |
 | `Name` | `mint/<owner>/<vm-name>` | Standard AWS console display |
 
 Mint discovers its own resources exclusively via tags. There is no local state file tracking resource IDs. Multiple users in the same AWS account coexist by filtering on `mint:owner`.
+
+### Owner Identity
+
+The owner is derived at runtime from `aws sts get-caller-identity` — it is not stored in config. The ARN's trailing identifier is normalized to a friendly name: strip `@domain` for SSO emails, lowercase, replace non-alphanumeric characters with `-`.
+
+| Auth Type | ARN | Derived Owner |
+|---|---|---|
+| IAM user | `arn:aws:iam::123456789012:user/ryan` | `ryan` |
+| SSO | `arn:aws:sts::123456789012:assumed-role/AWSReservedSSO_.../ryan@example.com` | `ryan` |
+| Assumed role | `arn:aws:sts::123456789012:assumed-role/RoleName/session-name` | `session-name` |
+
+If a user authenticates with a different AWS identity, they will not see resources created under the previous identity. This is correct behavior — different identity, different owner.
 
 Billing review: filter Cost Explorer on `mint=true`, group by `mint:vm` or `mint:owner`.
 
@@ -119,7 +132,7 @@ Projects live on VMs. A single VM typically hosts multiple projects, each in its
 
 **`mint config set <key> <value>`** — Sets a configuration value (e.g. `mint config set idle.timeout_minutes 90`).
 
-Configuration is stored at `~/.config/mint/config.toml` (following XDG conventions). Configuration covers: AWS region, default instance type, default volume size, idle timeout, and owner identifier. It does not store project or repo information — that lives on the VMs themselves.
+Configuration is stored at `~/.config/mint/config.toml` (following XDG conventions). Configuration covers: AWS region, default instance type, default volume size, and idle timeout. Owner identity is derived at runtime from AWS credentials, not stored in config. It does not store project or repo information — that lives on the VMs themselves.
 
 ## Auto-Stop
 
