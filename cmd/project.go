@@ -1,11 +1,13 @@
 package cmd
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"path"
+	"regexp"
 	"strings"
 
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
@@ -32,6 +34,15 @@ type projectListDeps struct {
 	remote   RemoteCommandRunner
 }
 
+// projectRebuildDeps holds the injectable dependencies for the project rebuild command.
+type projectRebuildDeps struct {
+	describe mintaws.DescribeInstancesAPI
+	sendKey  mintaws.SendSSHPublicKeyAPI
+	owner    string
+	remote   RemoteCommandRunner
+	stdin    io.Reader
+}
+
 // projectInfo represents a project on the VM with its container status.
 type projectInfo struct {
 	Name            string `json:"name"`
@@ -55,6 +66,7 @@ func newProjectCommandWithDeps(deps *projectAddDeps) *cobra.Command {
 
 	cmd.AddCommand(newProjectAddCommandWithDeps(deps))
 	cmd.AddCommand(newProjectListCommand())
+	cmd.AddCommand(newProjectRebuildCommand())
 
 	return cmd
 }
@@ -70,6 +82,22 @@ func newProjectCommandWithListDeps(listDeps *projectListDeps) *cobra.Command {
 
 	cmd.AddCommand(newProjectAddCommand())
 	cmd.AddCommand(newProjectListCommandWithDeps(listDeps))
+
+	return cmd
+}
+
+// newProjectCommandWithRebuildDeps creates the project command tree with explicit
+// rebuild dependencies for testing.
+func newProjectCommandWithRebuildDeps(rebuildDeps *projectRebuildDeps) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "project",
+		Short: "Manage projects on the VM",
+		Long:  "Clone repositories, build devcontainers, and manage projects on the VM.",
+	}
+
+	cmd.AddCommand(newProjectAddCommand())
+	cmd.AddCommand(newProjectListCommand())
+	cmd.AddCommand(newProjectRebuildCommandWithDeps(rebuildDeps))
 
 	return cmd
 }
@@ -135,6 +163,10 @@ func runProjectAdd(cmd *cobra.Command, deps *projectAddDeps, gitURL string) erro
 	nameOverride, _ := cmd.Flags().GetString("name")
 	if nameOverride != "" {
 		projectName = nameOverride
+	}
+
+	if err := validateProjectName(projectName); err != nil {
+		return err
 	}
 
 	branch, _ := cmd.Flags().GetString("branch")
@@ -248,6 +280,24 @@ func extractProjectName(gitURL string) (string, error) {
 	}
 
 	return name, nil
+}
+
+// projectNamePattern enforces safe project names: alphanumeric start, then
+// alphanumeric plus dots, hyphens, and underscores. This prevents shell
+// injection when names are interpolated into remote commands.
+var projectNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
+
+// validateProjectName checks that a project name is safe for use in shell
+// commands and file paths. Returns an error if the name contains shell
+// metacharacters or does not start with an alphanumeric character.
+func validateProjectName(name string) error {
+	if name == "" {
+		return fmt.Errorf("invalid project name: must not be empty")
+	}
+	if !projectNamePattern.MatchString(name) {
+		return fmt.Errorf("invalid project name %q: must start with alphanumeric and contain only alphanumeric, dots, hyphens, or underscores", name)
+	}
+	return nil
 }
 
 // newProjectListCommand creates the production project list subcommand.
@@ -443,4 +493,142 @@ func writeProjectListHuman(w io.Writer, projects []projectInfo) {
 		}
 		fmt.Fprintf(w, "%-20s  %-10s  %s\n", p.Name, p.ContainerStatus, image)
 	}
+}
+
+// newProjectRebuildCommand creates the production project rebuild subcommand.
+func newProjectRebuildCommand() *cobra.Command {
+	return newProjectRebuildCommandWithDeps(nil)
+}
+
+// newProjectRebuildCommandWithDeps creates the project rebuild subcommand with
+// explicit dependencies for testing.
+func newProjectRebuildCommandWithDeps(deps *projectRebuildDeps) *cobra.Command {
+	return &cobra.Command{
+		Use:   "rebuild <project-name>",
+		Short: "Tear down and rebuild a project's devcontainer",
+		Long: "Stop and remove the existing devcontainer for a project, " +
+			"then rebuild it with devcontainer up. Requires confirmation " +
+			"unless --yes is set.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if deps != nil {
+				return runProjectRebuild(cmd, deps, args[0])
+			}
+			clients := awsClientsFromContext(cmd.Context())
+			if clients == nil {
+				return fmt.Errorf("AWS clients not configured")
+			}
+			return runProjectRebuild(cmd, &projectRebuildDeps{
+				describe: clients.ec2Client,
+				sendKey:  clients.icClient,
+				owner:    clients.owner,
+				remote:   defaultRemoteRunner,
+				stdin:    cmd.InOrStdin(),
+			}, args[0])
+		},
+	}
+}
+
+// runProjectRebuild executes the project rebuild logic: discover VM, verify
+// project exists, confirm, stop container, remove container, rebuild.
+func runProjectRebuild(cmd *cobra.Command, deps *projectRebuildDeps, projectName string) error {
+	if err := validateProjectName(projectName); err != nil {
+		return err
+	}
+
+	ctx := cmd.Context()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	cliCtx := cli.FromCommand(cmd)
+	vmName := "default"
+	yes := false
+	if cliCtx != nil {
+		vmName = cliCtx.VM
+		yes = cliCtx.Yes
+	}
+
+	// Discover VM by owner + VM name.
+	found, err := vm.FindVM(ctx, deps.describe, deps.owner, vmName)
+	if err != nil {
+		return fmt.Errorf("discovering VM: %w", err)
+	}
+	if found == nil {
+		return fmt.Errorf("no VM %q found — run mint up first to create one", vmName)
+	}
+
+	// Verify VM is running.
+	if found.State != string(ec2types.InstanceStateNameRunning) {
+		return fmt.Errorf("VM %q (%s) is not running (state: %s) — run mint up to start it",
+			vmName, found.ID, found.State)
+	}
+
+	w := cmd.OutOrStdout()
+	projectPath := fmt.Sprintf("/mint/projects/%s", projectName)
+
+	// Step 1: Verify project exists.
+	fmt.Fprintf(w, "Verifying project %q exists...\n", projectName)
+	testCmd := []string{"test", "-d", projectPath}
+	_, err = deps.remote(ctx, deps.sendKey, found.ID, found.AvailabilityZone,
+		found.PublicIP, defaultSSHPort, defaultSSHUser, testCmd)
+	if err != nil {
+		return fmt.Errorf("project %q not found — run mint project list to see available projects", projectName)
+	}
+
+	// Step 2: Confirmation prompt (unless --yes).
+	if !yes {
+		fmt.Fprintf(w, "This will destroy and rebuild the devcontainer for %q.\n", projectName)
+		fmt.Fprintf(w, "Type the project name to confirm: ")
+
+		stdin := deps.stdin
+		if stdin == nil {
+			stdin = cmd.InOrStdin()
+		}
+		scanner := bufio.NewScanner(stdin)
+		if scanner.Scan() {
+			input := strings.TrimSpace(scanner.Text())
+			if input != projectName {
+				return fmt.Errorf("confirmation %q does not match project name %q — rebuild aborted", input, projectName)
+			}
+		} else {
+			return fmt.Errorf("no confirmation input received — rebuild aborted")
+		}
+	}
+
+	// Step 3: Stop container (graceful if none found).
+	fmt.Fprintf(w, "Stopping container...\n")
+	stopCmd := []string{
+		"sh", "-c",
+		fmt.Sprintf("docker stop $(docker ps -q --filter label=devcontainer.local_folder=%s) 2>/dev/null || true", projectPath),
+	}
+	_, err = deps.remote(ctx, deps.sendKey, found.ID, found.AvailabilityZone,
+		found.PublicIP, defaultSSHPort, defaultSSHUser, stopCmd)
+	if err != nil {
+		return fmt.Errorf("stopping container: %w", err)
+	}
+
+	// Step 4: Remove container (graceful if none found).
+	fmt.Fprintf(w, "Removing container...\n")
+	rmCmd := []string{
+		"sh", "-c",
+		fmt.Sprintf("docker rm $(docker ps -aq --filter label=devcontainer.local_folder=%s) 2>/dev/null || true", projectPath),
+	}
+	_, err = deps.remote(ctx, deps.sendKey, found.ID, found.AvailabilityZone,
+		found.PublicIP, defaultSSHPort, defaultSSHUser, rmCmd)
+	if err != nil {
+		return fmt.Errorf("removing container: %w", err)
+	}
+
+	// Step 5: Rebuild devcontainer.
+	fmt.Fprintf(w, "Rebuilding devcontainer...\n")
+	buildCmd := []string{"devcontainer", "up", "--workspace-folder", projectPath}
+	_, err = deps.remote(ctx, deps.sendKey, found.ID, found.AvailabilityZone,
+		found.PublicIP, defaultSSHPort, defaultSSHUser, buildCmd)
+	if err != nil {
+		return fmt.Errorf("rebuilding devcontainer: %w", err)
+	}
+
+	fmt.Fprintf(w, "Rebuilt devcontainer for %q\n", projectName)
+	return nil
 }

@@ -17,6 +17,58 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// --- Project name validation tests ---
+
+func TestValidateProjectName(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		// Valid names.
+		{name: "simple alpha", input: "myproject", wantErr: false},
+		{name: "alphanumeric", input: "project123", wantErr: false},
+		{name: "with hyphens", input: "my-project", wantErr: false},
+		{name: "with underscores", input: "my_project", wantErr: false},
+		{name: "with dots", input: "my.project", wantErr: false},
+		{name: "mixed valid chars", input: "my-project_v2.0", wantErr: false},
+		{name: "single char", input: "a", wantErr: false},
+		{name: "starts with digit", input: "1project", wantErr: false},
+
+		// Invalid names: shell metacharacters.
+		{name: "semicolon injection", input: "foo;rm -rf /", wantErr: true},
+		{name: "backtick injection", input: "foo`whoami`", wantErr: true},
+		{name: "dollar substitution", input: "foo$(whoami)", wantErr: true},
+		{name: "pipe injection", input: "foo|cat /etc/passwd", wantErr: true},
+		{name: "ampersand injection", input: "foo&&evil", wantErr: true},
+		{name: "space in name", input: "foo bar", wantErr: true},
+		{name: "newline injection", input: "foo\nbar", wantErr: true},
+		{name: "single quote", input: "foo'bar", wantErr: true},
+		{name: "double quote", input: "foo\"bar", wantErr: true},
+		{name: "angle brackets", input: "foo>bar", wantErr: true},
+		{name: "slash in name", input: "foo/bar", wantErr: true},
+		{name: "backslash in name", input: "foo\\bar", wantErr: true},
+
+		// Invalid names: structural issues.
+		{name: "empty string", input: "", wantErr: true},
+		{name: "starts with hyphen", input: "-project", wantErr: true},
+		{name: "starts with dot", input: ".project", wantErr: true},
+		{name: "starts with underscore", input: "_project", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateProjectName(tt.input)
+			if tt.wantErr && err == nil {
+				t.Errorf("validateProjectName(%q) expected error, got nil", tt.input)
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("validateProjectName(%q) unexpected error: %v", tt.input, err)
+			}
+		})
+	}
+}
+
 // --- URL parsing tests ---
 
 func TestExtractProjectName(t *testing.T) {
@@ -410,6 +462,36 @@ func TestProjectAddCommand(t *testing.T) {
 					t.Errorf("expected az us-west-2a, got %s", calls[0].az)
 				}
 			},
+		},
+		{
+			name: "name flag with shell metacharacters rejected",
+			describe: &mockDescribeForProject{
+				output: makeRunningInstanceForProject("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
+			},
+			sendKey: &mockSendKeyForProject{
+				output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
+			},
+			remote:         &projectMockRemote{},
+			owner:          "alice",
+			args:           []string{"project", "add", "--name", "foo;rm -rf /", "https://github.com/org/repo.git"},
+			wantErr:        true,
+			wantErrContain: "invalid project name",
+			wantCalls:      0,
+		},
+		{
+			name: "name flag with backtick injection rejected",
+			describe: &mockDescribeForProject{
+				output: makeRunningInstanceForProject("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
+			},
+			sendKey: &mockSendKeyForProject{
+				output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
+			},
+			remote:         &projectMockRemote{},
+			owner:          "alice",
+			args:           []string{"project", "add", "--name", "foo`whoami`", "https://github.com/org/repo.git"},
+			wantErr:        true,
+			wantErrContain: "invalid project name",
+			wantCalls:      0,
 		},
 		{
 			name: "describe API error propagates",
@@ -875,5 +957,376 @@ func TestProjectAddRequiresGitURL(t *testing.T) {
 	err := root.Execute()
 	if err == nil {
 		t.Fatal("expected error for missing argument")
+	}
+}
+
+// --- Project rebuild tests ---
+
+func TestProjectRebuildCommand(t *testing.T) {
+	tests := []struct {
+		name           string
+		describe       *mockDescribeForProject
+		sendKey        *mockSendKeyForProject
+		remote         *projectMockRemote
+		owner          string
+		args           []string
+		stdinInput     string
+		wantErr        bool
+		wantErrContain string
+		wantCalls      int
+		checkCalls     func(t *testing.T, calls []projectRemoteCall)
+		checkOutput    func(t *testing.T, output string)
+	}{
+		{
+			name: "successful rebuild with yes flag",
+			describe: &mockDescribeForProject{
+				output: makeRunningInstanceForProject("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
+			},
+			sendKey: &mockSendKeyForProject{
+				output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
+			},
+			remote: &projectMockRemote{
+				outputs: [][]byte{nil, nil, nil, nil},
+				errors:  []error{nil, nil, nil, nil},
+			},
+			owner:     "alice",
+			args:      []string{"--yes", "project", "rebuild", "myproject"},
+			wantCalls: 4,
+			checkCalls: func(t *testing.T, calls []projectRemoteCall) {
+				t.Helper()
+				// Call 0: test -d /mint/projects/myproject
+				testCmd := strings.Join(calls[0].command, " ")
+				if !strings.Contains(testCmd, "test -d /mint/projects/myproject") {
+					t.Errorf("first call should verify project exists, got: %s", testCmd)
+				}
+				// Call 1: docker stop
+				stopCmd := strings.Join(calls[1].command, " ")
+				if !strings.Contains(stopCmd, "docker stop") {
+					t.Errorf("second call should stop container, got: %s", stopCmd)
+				}
+				if !strings.Contains(stopCmd, "devcontainer.local_folder=/mint/projects/myproject") {
+					t.Errorf("stop should filter by project path, got: %s", stopCmd)
+				}
+				// Call 2: docker rm
+				rmCmd := strings.Join(calls[2].command, " ")
+				if !strings.Contains(rmCmd, "docker rm") {
+					t.Errorf("third call should remove container, got: %s", rmCmd)
+				}
+				// Call 3: devcontainer up
+				buildCmd := strings.Join(calls[3].command, " ")
+				if !strings.Contains(buildCmd, "devcontainer up") {
+					t.Errorf("fourth call should rebuild, got: %s", buildCmd)
+				}
+				if !strings.Contains(buildCmd, "--workspace-folder /mint/projects/myproject") {
+					t.Errorf("rebuild should target workspace folder, got: %s", buildCmd)
+				}
+			},
+			checkOutput: func(t *testing.T, output string) {
+				t.Helper()
+				if !strings.Contains(output, "Verifying") {
+					t.Errorf("output should show verify step, got: %s", output)
+				}
+				if !strings.Contains(output, "Stopping") {
+					t.Errorf("output should show stop step, got: %s", output)
+				}
+				if !strings.Contains(output, "Removing") {
+					t.Errorf("output should show remove step, got: %s", output)
+				}
+				if !strings.Contains(output, "Rebuilding") {
+					t.Errorf("output should show rebuild step, got: %s", output)
+				}
+				if !strings.Contains(output, "Rebuilt devcontainer for") {
+					t.Errorf("output should show success message, got: %s", output)
+				}
+			},
+		},
+		{
+			name: "successful rebuild with confirmation prompt",
+			describe: &mockDescribeForProject{
+				output: makeRunningInstanceForProject("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
+			},
+			sendKey: &mockSendKeyForProject{
+				output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
+			},
+			remote: &projectMockRemote{
+				outputs: [][]byte{nil, nil, nil, nil},
+				errors:  []error{nil, nil, nil, nil},
+			},
+			owner:      "alice",
+			args:       []string{"project", "rebuild", "myproject"},
+			stdinInput: "myproject\n",
+			wantCalls:  4,
+			checkOutput: func(t *testing.T, output string) {
+				t.Helper()
+				if !strings.Contains(output, "Type the project name to confirm") {
+					t.Errorf("output should show confirmation prompt, got: %s", output)
+				}
+				if !strings.Contains(output, "Rebuilt devcontainer for") {
+					t.Errorf("output should show success, got: %s", output)
+				}
+			},
+		},
+		{
+			name: "confirmation mismatch aborts rebuild",
+			describe: &mockDescribeForProject{
+				output: makeRunningInstanceForProject("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
+			},
+			sendKey: &mockSendKeyForProject{
+				output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
+			},
+			remote: &projectMockRemote{
+				outputs: [][]byte{nil},
+				errors:  []error{nil},
+			},
+			owner:          "alice",
+			args:           []string{"project", "rebuild", "myproject"},
+			stdinInput:     "wrong-name\n",
+			wantErr:        true,
+			wantErrContain: "rebuild aborted",
+			wantCalls:      1,
+		},
+		{
+			name: "empty confirmation aborts rebuild",
+			describe: &mockDescribeForProject{
+				output: makeRunningInstanceForProject("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
+			},
+			sendKey: &mockSendKeyForProject{
+				output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
+			},
+			remote: &projectMockRemote{
+				outputs: [][]byte{nil},
+				errors:  []error{nil},
+			},
+			owner:          "alice",
+			args:           []string{"project", "rebuild", "myproject"},
+			stdinInput:     "",
+			wantErr:        true,
+			wantErrContain: "no confirmation input received",
+			wantCalls:      1,
+		},
+		{
+			name: "project not found returns error",
+			describe: &mockDescribeForProject{
+				output: makeRunningInstanceForProject("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
+			},
+			sendKey: &mockSendKeyForProject{
+				output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
+			},
+			remote: &projectMockRemote{
+				errors: []error{fmt.Errorf("exit status 1")},
+			},
+			owner:          "alice",
+			args:           []string{"--yes", "project", "rebuild", "nonexistent"},
+			wantErr:        true,
+			wantErrContain: "not found",
+			wantCalls:      1,
+		},
+		{
+			name: "rebuild with shell metacharacters rejected",
+			describe: &mockDescribeForProject{
+				output: makeRunningInstanceForProject("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
+			},
+			sendKey: &mockSendKeyForProject{
+				output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
+			},
+			remote:         &projectMockRemote{},
+			owner:          "alice",
+			args:           []string{"--yes", "project", "rebuild", "foo$(whoami)"},
+			wantErr:        true,
+			wantErrContain: "invalid project name",
+			wantCalls:      0,
+		},
+		{
+			name: "rebuild with pipe injection rejected",
+			describe: &mockDescribeForProject{
+				output: makeRunningInstanceForProject("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
+			},
+			sendKey: &mockSendKeyForProject{
+				output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
+			},
+			remote:         &projectMockRemote{},
+			owner:          "alice",
+			args:           []string{"--yes", "project", "rebuild", "foo|cat /etc/passwd"},
+			wantErr:        true,
+			wantErrContain: "invalid project name",
+			wantCalls:      0,
+		},
+		{
+			name: "VM not found returns error",
+			describe: &mockDescribeForProject{
+				output: &ec2.DescribeInstancesOutput{},
+			},
+			sendKey:        &mockSendKeyForProject{},
+			remote:         &projectMockRemote{},
+			owner:          "alice",
+			args:           []string{"--yes", "project", "rebuild", "myproject"},
+			wantErr:        true,
+			wantErrContain: "mint up",
+		},
+		{
+			name: "stopped VM returns error",
+			describe: &mockDescribeForProject{
+				output: makeStoppedInstanceForProject("i-abc123", "default", "alice"),
+			},
+			sendKey:        &mockSendKeyForProject{},
+			remote:         &projectMockRemote{},
+			owner:          "alice",
+			args:           []string{"--yes", "project", "rebuild", "myproject"},
+			wantErr:        true,
+			wantErrContain: "not running",
+		},
+		{
+			name: "devcontainer rebuild failure returns error",
+			describe: &mockDescribeForProject{
+				output: makeRunningInstanceForProject("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
+			},
+			sendKey: &mockSendKeyForProject{
+				output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
+			},
+			remote: &projectMockRemote{
+				outputs: [][]byte{nil, nil, nil},
+				errors:  []error{nil, nil, nil, fmt.Errorf("Dockerfile syntax error")},
+			},
+			owner:          "alice",
+			args:           []string{"--yes", "project", "rebuild", "myproject"},
+			wantErr:        true,
+			wantErrContain: "rebuilding devcontainer",
+			wantCalls:      4,
+		},
+		{
+			name: "missing project name argument",
+			describe: &mockDescribeForProject{
+				output: makeRunningInstanceForProject("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
+			},
+			sendKey: &mockSendKeyForProject{},
+			remote:  &projectMockRemote{},
+			owner:   "alice",
+			args:    []string{"project", "rebuild"},
+			wantErr: true,
+		},
+		{
+			name: "remote commands use correct SSH params",
+			describe: &mockDescribeForProject{
+				output: makeRunningInstanceForProject("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
+			},
+			sendKey: &mockSendKeyForProject{
+				output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
+			},
+			remote: &projectMockRemote{
+				outputs: [][]byte{nil, nil, nil, nil},
+				errors:  []error{nil, nil, nil, nil},
+			},
+			owner:     "alice",
+			args:      []string{"--yes", "project", "rebuild", "myproject"},
+			wantCalls: 4,
+			checkCalls: func(t *testing.T, calls []projectRemoteCall) {
+				t.Helper()
+				for i, call := range calls {
+					if call.instanceID != "i-abc123" {
+						t.Errorf("call %d: instanceID = %q, want i-abc123", i, call.instanceID)
+					}
+					if call.host != "1.2.3.4" {
+						t.Errorf("call %d: host = %q, want 1.2.3.4", i, call.host)
+					}
+					if call.port != 41122 {
+						t.Errorf("call %d: port = %d, want 41122", i, call.port)
+					}
+					if call.user != "ubuntu" {
+						t.Errorf("call %d: user = %q, want ubuntu", i, call.user)
+					}
+					if call.az != "us-east-1a" {
+						t.Errorf("call %d: az = %q, want us-east-1a", i, call.az)
+					}
+				}
+			},
+		},
+		{
+			name: "stop container failure propagates",
+			describe: &mockDescribeForProject{
+				output: makeRunningInstanceForProject("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
+			},
+			sendKey: &mockSendKeyForProject{
+				output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
+			},
+			remote: &projectMockRemote{
+				outputs: [][]byte{nil},
+				errors:  []error{nil, fmt.Errorf("connection reset")},
+			},
+			owner:          "alice",
+			args:           []string{"--yes", "project", "rebuild", "myproject"},
+			wantErr:        true,
+			wantErrContain: "stopping container",
+			wantCalls:      2,
+		},
+		{
+			name: "remove container failure propagates",
+			describe: &mockDescribeForProject{
+				output: makeRunningInstanceForProject("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
+			},
+			sendKey: &mockSendKeyForProject{
+				output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
+			},
+			remote: &projectMockRemote{
+				outputs: [][]byte{nil, nil},
+				errors:  []error{nil, nil, fmt.Errorf("permission denied")},
+			},
+			owner:          "alice",
+			args:           []string{"--yes", "project", "rebuild", "myproject"},
+			wantErr:        true,
+			wantErrContain: "removing container",
+			wantCalls:      3,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			buf := new(bytes.Buffer)
+
+			deps := &projectRebuildDeps{
+				describe: tt.describe,
+				sendKey:  tt.sendKey,
+				owner:    tt.owner,
+				remote:   tt.remote.run,
+				stdin:    strings.NewReader(tt.stdinInput),
+			}
+
+			projectCmd := newProjectCommandWithRebuildDeps(deps)
+			root := newTestRootForProject()
+			root.AddCommand(projectCmd)
+			root.SetOut(buf)
+			root.SetErr(buf)
+			root.SetArgs(tt.args)
+
+			err := root.Execute()
+
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if tt.wantErrContain != "" && !strings.Contains(err.Error(), tt.wantErrContain) {
+					t.Errorf("error %q does not contain %q", err.Error(), tt.wantErrContain)
+				}
+				if tt.wantCalls > 0 && len(tt.remote.calls) != tt.wantCalls {
+					t.Errorf("expected %d remote calls, got %d", tt.wantCalls, len(tt.remote.calls))
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if tt.wantCalls > 0 && len(tt.remote.calls) != tt.wantCalls {
+				t.Errorf("expected %d remote calls, got %d", tt.wantCalls, len(tt.remote.calls))
+			}
+
+			if tt.checkCalls != nil {
+				tt.checkCalls(t, tt.remote.calls)
+			}
+
+			if tt.checkOutput != nil {
+				tt.checkOutput(t, buf.String())
+			}
+		})
 	}
 }
