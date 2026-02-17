@@ -3,16 +3,20 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/aws/aws-sdk-go-v2/service/ec2instanceconnect"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
+	mintaws "github.com/nicholasgasior/mint/internal/aws"
 	"github.com/nicholasgasior/mint/internal/cli"
 	"github.com/nicholasgasior/mint/internal/identity"
 	"github.com/nicholasgasior/mint/internal/sshconfig"
@@ -39,6 +43,70 @@ type mockDoctorDescribeAddresses struct {
 
 func (m *mockDoctorDescribeAddresses) DescribeAddresses(ctx context.Context, params *ec2.DescribeAddressesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeAddressesOutput, error) {
 	return m.output, m.err
+}
+
+// mockDoctorDescribeInstances implements mintaws.DescribeInstancesAPI for
+// doctor VM checks.
+type mockDoctorDescribeInstances struct {
+	output *ec2.DescribeInstancesOutput
+	err    error
+}
+
+func (m *mockDoctorDescribeInstances) DescribeInstances(ctx context.Context, params *ec2.DescribeInstancesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error) {
+	return m.output, m.err
+}
+
+// mockDoctorSendSSHPublicKey implements mintaws.SendSSHPublicKeyAPI for
+// doctor VM checks.
+type mockDoctorSendSSHPublicKey struct {
+	output *ec2instanceconnect.SendSSHPublicKeyOutput
+	err    error
+}
+
+func (m *mockDoctorSendSSHPublicKey) SendSSHPublicKey(ctx context.Context, params *ec2instanceconnect.SendSSHPublicKeyInput, optFns ...func(*ec2instanceconnect.Options)) (*ec2instanceconnect.SendSSHPublicKeyOutput, error) {
+	return m.output, m.err
+}
+
+// mockDoctorRemoteRunner records remote commands and returns configured
+// output per command. It matches on the first element of the command slice.
+type mockDoctorRemoteRunner struct {
+	// responses maps a command keyword to its output/error.
+	responses map[string]mockRemoteResponse
+	// calls records each invocation.
+	calls []mockRemoteCall
+}
+
+type mockRemoteResponse struct {
+	output []byte
+	err    error
+}
+
+type mockRemoteCall struct {
+	instanceID string
+	command    []string
+}
+
+func (m *mockDoctorRemoteRunner) run(
+	ctx context.Context,
+	sendKey mintaws.SendSSHPublicKeyAPI,
+	instanceID string,
+	az string,
+	host string,
+	port int,
+	user string,
+	command []string,
+) ([]byte, error) {
+	m.calls = append(m.calls, mockRemoteCall{instanceID: instanceID, command: command})
+
+	if len(command) > 0 {
+		// Try matching the full first command element.
+		key := command[0]
+		if resp, ok := m.responses[key]; ok {
+			return resp.output, resp.err
+		}
+	}
+
+	return nil, fmt.Errorf("unexpected command: %v", command)
 }
 
 // ---------------------------------------------------------------------------
@@ -128,8 +196,67 @@ func newHappyDoctorDeps(t *testing.T) *doctorDeps {
 	}
 }
 
+// makeDoctorInstance creates a DescribeInstancesOutput for doctor VM checks.
+func makeDoctorInstance(id, vmName, owner, state, ip string, extraTags ...ec2types.Tag) *ec2.DescribeInstancesOutput {
+	inst := ec2types.Instance{
+		InstanceId:   aws.String(id),
+		InstanceType: ec2types.InstanceTypeM6iXlarge,
+		LaunchTime:   aws.Time(time.Now().Add(-1 * time.Hour)),
+		State: &ec2types.InstanceState{
+			Name: ec2types.InstanceStateName(state),
+		},
+		Placement: &ec2types.Placement{
+			AvailabilityZone: aws.String("us-west-2a"),
+		},
+		Tags: []ec2types.Tag{
+			{Key: aws.String("mint"), Value: aws.String("true")},
+			{Key: aws.String("mint:vm"), Value: aws.String(vmName)},
+			{Key: aws.String("mint:owner"), Value: aws.String(owner)},
+			{Key: aws.String("mint:bootstrap"), Value: aws.String("complete")},
+		},
+	}
+	if ip != "" {
+		inst.PublicIpAddress = aws.String(ip)
+	}
+	inst.Tags = append(inst.Tags, extraTags...)
+	return &ec2.DescribeInstancesOutput{
+		Reservations: []ec2types.Reservation{{Instances: []ec2types.Instance{inst}}},
+	}
+}
+
+// happyRemoteRunner returns a mock runner where all component checks succeed.
+func happyRemoteRunner() *mockDoctorRemoteRunner {
+	return &mockDoctorRemoteRunner{
+		responses: map[string]mockRemoteResponse{
+			"df":           {output: []byte("Use%\n 42%\n")},
+			"docker":       {output: []byte("Docker version 24.0.7\n")},
+			"devcontainer": {output: []byte("0.52.1\n")},
+			"tmux":         {output: []byte("tmux 3.3a\n")},
+			"mosh-server":  {output: []byte("mosh 1.4.0\n")},
+		},
+	}
+}
+
+// newHappyDoctorDepsWithVM returns doctor deps that include VM discovery
+// and SSH deps for VM health checks.
+func newHappyDoctorDepsWithVM(t *testing.T) (*doctorDeps, *mockDoctorRemoteRunner) {
+	t.Helper()
+	deps := newHappyDoctorDeps(t)
+	runner := happyRemoteRunner()
+	deps.describe = &mockDoctorDescribeInstances{
+		output: makeDoctorInstance("i-vm1", "default", "alice", "running", "1.2.3.4",
+			ec2types.Tag{Key: aws.String("mint:health"), Value: aws.String("healthy")},
+		),
+	}
+	deps.sendKey = &mockDoctorSendSSHPublicKey{
+		output: &ec2instanceconnect.SendSSHPublicKeyOutput{},
+	}
+	deps.remoteRun = runner.run
+	return deps, runner
+}
+
 // ---------------------------------------------------------------------------
-// Tests
+// Local check tests (existing, preserved)
 // ---------------------------------------------------------------------------
 
 func TestDoctorAllPass(t *testing.T) {
@@ -508,5 +635,579 @@ func TestDoctorNoErrorOnWarnOnly(t *testing.T) {
 	err := root.Execute()
 	if err != nil {
 		t.Fatalf("expected no error with only warnings, got: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// VM-specific check tests
+// ---------------------------------------------------------------------------
+
+func TestDoctorVMHealthy(t *testing.T) {
+	deps, _ := newHappyDoctorDepsWithVM(t)
+
+	buf := new(bytes.Buffer)
+	cmd := newDoctorCommandWithDeps(deps)
+	root := newDoctorTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"doctor"})
+
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := buf.String()
+	// VM health check should pass
+	if !strings.Contains(output, "vm/default/health") || !strings.Contains(output, "healthy") {
+		t.Errorf("expected vm/default/health PASS with healthy, got: %s", output)
+	}
+	// Disk usage should be reported
+	if !strings.Contains(output, "vm/default/disk") || !strings.Contains(output, "42%") {
+		t.Errorf("expected vm/default/disk with 42%%, got: %s", output)
+	}
+	// Component checks should pass
+	for _, comp := range []string{"docker", "devcontainer", "tmux", "mosh-server"} {
+		if !strings.Contains(output, "vm/default/"+comp) {
+			t.Errorf("expected vm/default/%s check in output, got: %s", comp, output)
+		}
+	}
+}
+
+func TestDoctorVMDriftDetected(t *testing.T) {
+	deps, _ := newHappyDoctorDepsWithVM(t)
+	// Set health tag to drift-detected.
+	deps.describe = &mockDoctorDescribeInstances{
+		output: makeDoctorInstance("i-vm1", "default", "alice", "running", "1.2.3.4",
+			ec2types.Tag{Key: aws.String("mint:health"), Value: aws.String("drift-detected")},
+		),
+	}
+
+	buf := new(bytes.Buffer)
+	cmd := newDoctorCommandWithDeps(deps)
+	root := newDoctorTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"doctor"})
+
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "[WARN]") || !strings.Contains(output, "drift-detected") {
+		t.Errorf("expected WARN drift-detected, got: %s", output)
+	}
+}
+
+func TestDoctorVMHealthTagMissing(t *testing.T) {
+	deps, _ := newHappyDoctorDepsWithVM(t)
+	// No health tag.
+	deps.describe = &mockDoctorDescribeInstances{
+		output: makeDoctorInstance("i-vm1", "default", "alice", "running", "1.2.3.4"),
+	}
+
+	buf := new(bytes.Buffer)
+	cmd := newDoctorCommandWithDeps(deps)
+	root := newDoctorTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"doctor"})
+
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "[WARN]") || !strings.Contains(output, "health tag missing") {
+		t.Errorf("expected WARN for missing health tag, got: %s", output)
+	}
+}
+
+func TestDoctorVMNotRunning(t *testing.T) {
+	deps, _ := newHappyDoctorDepsWithVM(t)
+	// VM is stopped.
+	deps.describe = &mockDoctorDescribeInstances{
+		output: makeDoctorInstance("i-vm1", "default", "alice", "stopped", "",
+			ec2types.Tag{Key: aws.String("mint:health"), Value: aws.String("healthy")},
+		),
+	}
+
+	buf := new(bytes.Buffer)
+	cmd := newDoctorCommandWithDeps(deps)
+	root := newDoctorTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"doctor"})
+
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := buf.String()
+	// Should warn about non-running VM, not attempt SSH checks.
+	if !strings.Contains(output, "[WARN]") || !strings.Contains(output, "stopped") {
+		t.Errorf("expected WARN for stopped VM, got: %s", output)
+	}
+	// Should NOT contain SSH-based checks.
+	if strings.Contains(output, "vm/default/disk") {
+		t.Error("should not run disk check on stopped VM")
+	}
+}
+
+func TestDoctorVMNoVMs(t *testing.T) {
+	deps := newHappyDoctorDeps(t)
+	// Describe returns no VMs.
+	deps.describe = &mockDoctorDescribeInstances{
+		output: &ec2.DescribeInstancesOutput{},
+	}
+
+	buf := new(bytes.Buffer)
+	cmd := newDoctorCommandWithDeps(deps)
+	root := newDoctorTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"doctor"})
+
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := buf.String()
+	// Should not contain VM checks (no VMs found).
+	if strings.Contains(output, "vm/") {
+		t.Errorf("expected no VM checks, got: %s", output)
+	}
+}
+
+func TestDoctorVMComponentFail(t *testing.T) {
+	deps, _ := newHappyDoctorDepsWithVM(t)
+	// Override remote runner: docker fails.
+	runner := &mockDoctorRemoteRunner{
+		responses: map[string]mockRemoteResponse{
+			"df":           {output: []byte("Use%\n 42%\n")},
+			"docker":       {err: fmt.Errorf("docker: command not found")},
+			"devcontainer": {output: []byte("0.52.1\n")},
+			"tmux":         {output: []byte("tmux 3.3a\n")},
+			"mosh-server":  {output: []byte("mosh 1.4.0\n")},
+		},
+	}
+	deps.remoteRun = runner.run
+
+	buf := new(bytes.Buffer)
+	cmd := newDoctorCommandWithDeps(deps)
+	root := newDoctorTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"doctor"})
+
+	err := root.Execute()
+	// Docker check failure should cause overall failure.
+	if err == nil {
+		t.Fatal("expected error from failed docker check")
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "[FAIL]") || !strings.Contains(output, "docker") {
+		t.Errorf("expected [FAIL] docker, got: %s", output)
+	}
+	// Other components should still pass.
+	if !strings.Contains(output, "[PASS]") {
+		t.Errorf("expected some [PASS] for other components, got: %s", output)
+	}
+}
+
+func TestDoctorFixMode(t *testing.T) {
+	deps, _ := newHappyDoctorDepsWithVM(t)
+	// Docker fails, fix mode will attempt reinstall.
+	runner := &mockDoctorRemoteRunner{
+		responses: map[string]mockRemoteResponse{
+			"df":           {output: []byte("Use%\n 42%\n")},
+			"docker":       {err: fmt.Errorf("docker: command not found")},
+			"devcontainer": {output: []byte("0.52.1\n")},
+			"tmux":         {output: []byte("tmux 3.3a\n")},
+			"mosh-server":  {output: []byte("mosh 1.4.0\n")},
+			"sudo":         {output: []byte("installed\n")}, // fix command uses sudo
+		},
+	}
+	deps.remoteRun = runner.run
+
+	buf := new(bytes.Buffer)
+	cmd := newDoctorCommandWithDeps(deps)
+	root := newDoctorTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"doctor", "--fix"})
+
+	err := root.Execute()
+	// Still fails because the original docker check failed, but fix was attempted.
+	if err == nil {
+		t.Fatal("expected error (original check still FAIL)")
+	}
+
+	output := buf.String()
+	// Should contain the fix result.
+	if !strings.Contains(output, "docker/fix") {
+		t.Errorf("expected docker/fix result in output, got: %s", output)
+	}
+	if !strings.Contains(output, "reinstalled successfully") {
+		t.Errorf("expected 'reinstalled successfully', got: %s", output)
+	}
+
+	// Verify fix command was called (sudo is the first arg).
+	fixCalled := false
+	for _, call := range runner.calls {
+		if len(call.command) > 0 && call.command[0] == "sudo" {
+			fixCalled = true
+			break
+		}
+	}
+	if !fixCalled {
+		t.Error("expected fix command (sudo) to be called")
+	}
+}
+
+func TestDoctorFixModeSkipsPassingComponents(t *testing.T) {
+	deps, runner := newHappyDoctorDepsWithVM(t)
+	// All components pass — fix should not attempt any reinstalls.
+	// Add sudo response just in case (should not be called).
+	runner.responses["sudo"] = mockRemoteResponse{output: []byte("ok\n")}
+
+	buf := new(bytes.Buffer)
+	cmd := newDoctorCommandWithDeps(deps)
+	root := newDoctorTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"doctor", "--fix"})
+
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := buf.String()
+	// Should NOT contain any /fix results.
+	if strings.Contains(output, "/fix") {
+		t.Errorf("expected no fix attempts when all checks pass, got: %s", output)
+	}
+}
+
+func TestDoctorJSONOutput(t *testing.T) {
+	deps, _ := newHappyDoctorDepsWithVM(t)
+
+	buf := new(bytes.Buffer)
+	cmd := newDoctorCommandWithDeps(deps)
+	root := newDoctorTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"doctor", "--json"})
+
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := buf.String()
+
+	// Parse as JSON array.
+	var results []checkResultJSON
+	if err := json.Unmarshal([]byte(output), &results); err != nil {
+		t.Fatalf("JSON output is not valid: %v\noutput: %s", err, output)
+	}
+
+	// Should contain both local and VM checks.
+	if len(results) < 6 {
+		t.Errorf("expected at least 6 check results (local + VM), got %d", len(results))
+	}
+
+	// Verify structure of each result.
+	for _, r := range results {
+		if r.Name == "" {
+			t.Error("check result has empty name")
+		}
+		if r.Status == "" {
+			t.Error("check result has empty status")
+		}
+		if r.Status != "PASS" && r.Status != "FAIL" && r.Status != "WARN" {
+			t.Errorf("unexpected status %q for check %q", r.Status, r.Name)
+		}
+	}
+
+	// Verify VM checks are present.
+	hasVMHealth := false
+	hasVMDisk := false
+	for _, r := range results {
+		if r.Name == "vm/default/health" {
+			hasVMHealth = true
+		}
+		if r.Name == "vm/default/disk" {
+			hasVMDisk = true
+		}
+	}
+	if !hasVMHealth {
+		t.Error("JSON output missing vm/default/health check")
+	}
+	if !hasVMDisk {
+		t.Error("JSON output missing vm/default/disk check")
+	}
+}
+
+func TestDoctorJSONOutputLocalOnly(t *testing.T) {
+	// When no VMs are available, JSON should still include local checks.
+	deps := newHappyDoctorDeps(t)
+
+	buf := new(bytes.Buffer)
+	cmd := newDoctorCommandWithDeps(deps)
+	root := newDoctorTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"doctor", "--json"})
+
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var results []checkResultJSON
+	if err := json.Unmarshal(buf.Bytes(), &results); err != nil {
+		t.Fatalf("JSON output is not valid: %v", err)
+	}
+
+	// Should have local checks.
+	if len(results) < 5 {
+		t.Errorf("expected at least 5 local checks, got %d", len(results))
+	}
+}
+
+func TestDoctorVMSpecificVM(t *testing.T) {
+	deps, _ := newHappyDoctorDepsWithVM(t)
+	// Override describe to return a VM named "dev-box".
+	deps.describe = &mockDoctorDescribeInstances{
+		output: makeDoctorInstance("i-dev", "dev-box", "alice", "running", "10.0.0.1",
+			ec2types.Tag{Key: aws.String("mint:health"), Value: aws.String("healthy")},
+		),
+	}
+
+	buf := new(bytes.Buffer)
+	cmd := newDoctorCommandWithDeps(deps)
+	root := newDoctorTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"doctor", "--vm", "dev-box"})
+
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := buf.String()
+	// Should check the dev-box VM.
+	if !strings.Contains(output, "vm/dev-box/health") {
+		t.Errorf("expected vm/dev-box/health check, got: %s", output)
+	}
+}
+
+func TestDoctorMultipleVMs(t *testing.T) {
+	deps, _ := newHappyDoctorDepsWithVM(t)
+	// Return two running VMs.
+	inst1 := ec2types.Instance{
+		InstanceId:   aws.String("i-vm1"),
+		InstanceType: ec2types.InstanceTypeM6iXlarge,
+		LaunchTime:   aws.Time(time.Now()),
+		State:        &ec2types.InstanceState{Name: ec2types.InstanceStateNameRunning},
+		Placement:    &ec2types.Placement{AvailabilityZone: aws.String("us-west-2a")},
+		PublicIpAddress: aws.String("1.2.3.4"),
+		Tags: []ec2types.Tag{
+			{Key: aws.String("mint"), Value: aws.String("true")},
+			{Key: aws.String("mint:vm"), Value: aws.String("default")},
+			{Key: aws.String("mint:owner"), Value: aws.String("alice")},
+			{Key: aws.String("mint:health"), Value: aws.String("healthy")},
+		},
+	}
+	inst2 := ec2types.Instance{
+		InstanceId:   aws.String("i-vm2"),
+		InstanceType: ec2types.InstanceTypeM6iXlarge,
+		LaunchTime:   aws.Time(time.Now()),
+		State:        &ec2types.InstanceState{Name: ec2types.InstanceStateNameRunning},
+		Placement:    &ec2types.Placement{AvailabilityZone: aws.String("us-west-2b")},
+		PublicIpAddress: aws.String("5.6.7.8"),
+		Tags: []ec2types.Tag{
+			{Key: aws.String("mint"), Value: aws.String("true")},
+			{Key: aws.String("mint:vm"), Value: aws.String("dev-box")},
+			{Key: aws.String("mint:owner"), Value: aws.String("alice")},
+			{Key: aws.String("mint:health"), Value: aws.String("healthy")},
+		},
+	}
+	deps.describe = &mockDoctorDescribeInstances{
+		output: &ec2.DescribeInstancesOutput{
+			Reservations: []ec2types.Reservation{{
+				Instances: []ec2types.Instance{inst1, inst2},
+			}},
+		},
+	}
+
+	buf := new(bytes.Buffer)
+	cmd := newDoctorCommandWithDeps(deps)
+	root := newDoctorTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"doctor"})
+
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := buf.String()
+	// Both VMs should be checked.
+	if !strings.Contains(output, "vm/default/health") {
+		t.Errorf("expected vm/default/health check, got: %s", output)
+	}
+	if !strings.Contains(output, "vm/dev-box/health") {
+		t.Errorf("expected vm/dev-box/health check, got: %s", output)
+	}
+}
+
+func TestDoctorDiskUsageHighWarn(t *testing.T) {
+	deps, _ := newHappyDoctorDepsWithVM(t)
+	// Disk at 85%.
+	runner := &mockDoctorRemoteRunner{
+		responses: map[string]mockRemoteResponse{
+			"df":           {output: []byte("Use%\n 85%\n")},
+			"docker":       {output: []byte("Docker version 24.0.7\n")},
+			"devcontainer": {output: []byte("0.52.1\n")},
+			"tmux":         {output: []byte("tmux 3.3a\n")},
+			"mosh-server":  {output: []byte("mosh 1.4.0\n")},
+		},
+	}
+	deps.remoteRun = runner.run
+
+	buf := new(bytes.Buffer)
+	cmd := newDoctorCommandWithDeps(deps)
+	root := newDoctorTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"doctor"})
+
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "[WARN]") || !strings.Contains(output, "85%") {
+		t.Errorf("expected WARN for 85%% disk usage, got: %s", output)
+	}
+}
+
+func TestDoctorDiskUsageCriticalFail(t *testing.T) {
+	deps, _ := newHappyDoctorDepsWithVM(t)
+	// Disk at 95% — critical.
+	runner := &mockDoctorRemoteRunner{
+		responses: map[string]mockRemoteResponse{
+			"df":           {output: []byte("Use%\n 95%\n")},
+			"docker":       {output: []byte("Docker version 24.0.7\n")},
+			"devcontainer": {output: []byte("0.52.1\n")},
+			"tmux":         {output: []byte("tmux 3.3a\n")},
+			"mosh-server":  {output: []byte("mosh 1.4.0\n")},
+		},
+	}
+	deps.remoteRun = runner.run
+
+	buf := new(bytes.Buffer)
+	cmd := newDoctorCommandWithDeps(deps)
+	root := newDoctorTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"doctor"})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error from critical disk usage")
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "[FAIL]") || !strings.Contains(output, "95%") {
+		t.Errorf("expected FAIL for 95%% disk usage, got: %s", output)
+	}
+}
+
+func TestDoctorSSHConnectionFail(t *testing.T) {
+	deps, _ := newHappyDoctorDepsWithVM(t)
+	// All SSH commands fail — should warn, not hard fail.
+	runner := &mockDoctorRemoteRunner{
+		responses: map[string]mockRemoteResponse{},
+	}
+	deps.remoteRun = runner.run
+
+	buf := new(bytes.Buffer)
+	cmd := newDoctorCommandWithDeps(deps)
+	root := newDoctorTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"doctor"})
+
+	err := root.Execute()
+	// Component failures are FAIL, so the command should error.
+	if err == nil {
+		t.Fatal("expected error from failed component checks")
+	}
+
+	output := buf.String()
+	// Should contain VM checks with WARN/FAIL (SSH failed).
+	if !strings.Contains(output, "vm/default") {
+		t.Errorf("expected vm/default checks in output, got: %s", output)
+	}
+}
+
+func TestDoctorJSONWithFailures(t *testing.T) {
+	deps, _ := newHappyDoctorDepsWithVM(t)
+	// Docker fails.
+	runner := &mockDoctorRemoteRunner{
+		responses: map[string]mockRemoteResponse{
+			"df":           {output: []byte("Use%\n 42%\n")},
+			"docker":       {err: fmt.Errorf("not found")},
+			"devcontainer": {output: []byte("0.52.1\n")},
+			"tmux":         {output: []byte("tmux 3.3a\n")},
+			"mosh-server":  {output: []byte("mosh 1.4.0\n")},
+		},
+	}
+	deps.remoteRun = runner.run
+
+	buf := new(bytes.Buffer)
+	cmd := newDoctorCommandWithDeps(deps)
+	root := newDoctorTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"doctor", "--json"})
+
+	err := root.Execute()
+	// Should return error because docker check failed.
+	if err == nil {
+		t.Fatal("expected error from failed docker check in JSON mode")
+	}
+
+	output := buf.String()
+	var results []checkResultJSON
+	if err := json.Unmarshal([]byte(output), &results); err != nil {
+		t.Fatalf("JSON output is not valid despite error: %v\noutput: %s", err, output)
+	}
+
+	// Find the docker check.
+	dockerFound := false
+	for _, r := range results {
+		if r.Name == "vm/default/docker" {
+			dockerFound = true
+			if r.Status != "FAIL" {
+				t.Errorf("expected docker status FAIL, got %s", r.Status)
+			}
+		}
+	}
+	if !dockerFound {
+		t.Error("docker check not found in JSON output")
 	}
 }
