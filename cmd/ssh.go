@@ -96,10 +96,9 @@ func runSSH(cmd *cobra.Command, deps *sshDeps, extraArgs []string) error {
 			vmName, found.ID, found.State)
 	}
 
-	// Look up availability zone from the instance (needed for SendSSHPublicKey).
-	az, err := lookupInstanceAZ(ctx, deps.describe, found.ID)
-	if err != nil {
-		return fmt.Errorf("looking up availability zone: %w", err)
+	// Use availability zone from FindVM (already populated via DescribeInstances).
+	if found.AvailabilityZone == "" {
+		return fmt.Errorf("VM %q (%s) has no availability zone — this is unexpected, try mint destroy && mint up", vmName, found.ID)
 	}
 
 	// Generate ephemeral SSH key pair.
@@ -114,7 +113,7 @@ func runSSH(cmd *cobra.Command, deps *sshDeps, extraArgs []string) error {
 		InstanceId:       aws.String(found.ID),
 		InstanceOSUser:   aws.String(defaultSSHUser),
 		SSHPublicKey:     aws.String(pubKey),
-		AvailabilityZone: aws.String(az),
+		AvailabilityZone: aws.String(found.AvailabilityZone),
 	})
 	if err != nil {
 		return fmt.Errorf("pushing SSH key via Instance Connect: %w", err)

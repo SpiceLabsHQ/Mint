@@ -14,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2instanceconnect"
 	mintaws "github.com/nicholasgasior/mint/internal/aws"
 	"github.com/nicholasgasior/mint/internal/cli"
+	"github.com/nicholasgasior/mint/internal/sshconfig"
 	"github.com/spf13/cobra"
 )
 
@@ -960,7 +961,182 @@ func TestProjectAddRequiresGitURL(t *testing.T) {
 	}
 }
 
+// --- Project add TOFU tests ---
+
+func TestProjectAddTOFUKeyscanTriggered(t *testing.T) {
+	// Verify that TOFU keyscan is triggered on project add when
+	// hostKeyStore and hostKeyScanner are provided.
+	scanCalls := 0
+	scanner := func(host string, port int) (string, string, error) {
+		scanCalls++
+		return "SHA256:projectfp", "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest", nil
+	}
+
+	remote := &projectMockRemote{
+		outputs: [][]byte{nil, nil, nil},
+		errors:  []error{nil, nil, nil},
+	}
+	deps := &projectAddDeps{
+		describe:       &mockDescribeForProject{output: makeRunningInstanceForProject("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a")},
+		sendKey:        &mockSendKeyForProject{output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true}},
+		owner:          "alice",
+		remote:         remote.run,
+		hostKeyStore:   sshconfig.NewHostKeyStore(t.TempDir()),
+		hostKeyScanner: scanner,
+	}
+
+	projectCmd := newProjectCommandWithDeps(deps)
+	root := newTestRootForProject()
+	root.AddCommand(projectCmd)
+
+	buf := new(bytes.Buffer)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"project", "add", "https://github.com/org/repo.git"})
+
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// 3 remote calls (clone, devcontainer up, tmux), keyscan once.
+	if len(remote.calls) != 3 {
+		t.Fatalf("expected 3 remote calls, got %d", len(remote.calls))
+	}
+	if scanCalls != 1 {
+		t.Errorf("keyscan should be called exactly once (cached), got %d calls", scanCalls)
+	}
+}
+
+func TestProjectAddTOFUHostKeyMismatch(t *testing.T) {
+	store := sshconfig.NewHostKeyStore(t.TempDir())
+	// Pre-record a different key.
+	if err := store.RecordKey("default", "SHA256:oldfp"); err != nil {
+		t.Fatalf("RecordKey: %v", err)
+	}
+
+	scanner := func(host string, port int) (string, string, error) {
+		return "SHA256:newfp", "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINew", nil
+	}
+
+	remote := &projectMockRemote{}
+	deps := &projectAddDeps{
+		describe:       &mockDescribeForProject{output: makeRunningInstanceForProject("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a")},
+		sendKey:        &mockSendKeyForProject{output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true}},
+		owner:          "alice",
+		remote:         remote.run,
+		hostKeyStore:   store,
+		hostKeyScanner: scanner,
+	}
+
+	projectCmd := newProjectCommandWithDeps(deps)
+	root := newTestRootForProject()
+	root.AddCommand(projectCmd)
+
+	buf := new(bytes.Buffer)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"project", "add", "https://github.com/org/repo.git"})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error for host key mismatch, got nil")
+	}
+	if !strings.Contains(err.Error(), "HOST KEY CHANGED") {
+		t.Errorf("error should mention HOST KEY CHANGED, got: %s", err.Error())
+	}
+	if len(remote.calls) != 0 {
+		t.Errorf("remote runner should not be called on host key mismatch, got %d calls", len(remote.calls))
+	}
+}
+
 // --- Project rebuild tests ---
+
+func TestProjectRebuildTOFUKeyscanTriggered(t *testing.T) {
+	scanCalls := 0
+	scanner := func(host string, port int) (string, string, error) {
+		scanCalls++
+		return "SHA256:rebuildfp", "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest", nil
+	}
+
+	remote := &projectMockRemote{
+		outputs: [][]byte{nil, nil, nil, nil},
+		errors:  []error{nil, nil, nil, nil},
+	}
+	deps := &projectRebuildDeps{
+		describe:       &mockDescribeForProject{output: makeRunningInstanceForProject("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a")},
+		sendKey:        &mockSendKeyForProject{output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true}},
+		owner:          "alice",
+		remote:         remote.run,
+		stdin:          strings.NewReader(""),
+		hostKeyStore:   sshconfig.NewHostKeyStore(t.TempDir()),
+		hostKeyScanner: scanner,
+	}
+
+	projectCmd := newProjectCommandWithRebuildDeps(deps)
+	root := newTestRootForProject()
+	root.AddCommand(projectCmd)
+
+	buf := new(bytes.Buffer)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"--yes", "project", "rebuild", "myproject"})
+
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// 4 remote calls (test, stop, rm, devcontainer up), keyscan once.
+	if len(remote.calls) != 4 {
+		t.Fatalf("expected 4 remote calls, got %d", len(remote.calls))
+	}
+	if scanCalls != 1 {
+		t.Errorf("keyscan should be called exactly once (cached), got %d calls", scanCalls)
+	}
+}
+
+func TestProjectRebuildTOFUHostKeyMismatch(t *testing.T) {
+	store := sshconfig.NewHostKeyStore(t.TempDir())
+	if err := store.RecordKey("default", "SHA256:oldfp"); err != nil {
+		t.Fatalf("RecordKey: %v", err)
+	}
+
+	scanner := func(host string, port int) (string, string, error) {
+		return "SHA256:newfp", "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINew", nil
+	}
+
+	remote := &projectMockRemote{}
+	deps := &projectRebuildDeps{
+		describe:       &mockDescribeForProject{output: makeRunningInstanceForProject("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a")},
+		sendKey:        &mockSendKeyForProject{output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true}},
+		owner:          "alice",
+		remote:         remote.run,
+		stdin:          strings.NewReader(""),
+		hostKeyStore:   store,
+		hostKeyScanner: scanner,
+	}
+
+	projectCmd := newProjectCommandWithRebuildDeps(deps)
+	root := newTestRootForProject()
+	root.AddCommand(projectCmd)
+
+	buf := new(bytes.Buffer)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"--yes", "project", "rebuild", "myproject"})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error for host key mismatch, got nil")
+	}
+	if !strings.Contains(err.Error(), "HOST KEY CHANGED") {
+		t.Errorf("error should mention HOST KEY CHANGED, got: %s", err.Error())
+	}
+	if len(remote.calls) != 0 {
+		t.Errorf("remote runner should not be called on host key mismatch, got %d calls", len(remote.calls))
+	}
+}
 
 func TestProjectRebuildCommand(t *testing.T) {
 	tests := []struct {

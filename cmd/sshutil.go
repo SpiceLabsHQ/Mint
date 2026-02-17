@@ -17,6 +17,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	mintaws "github.com/nicholasgasior/mint/internal/aws"
+	"github.com/nicholasgasior/mint/internal/sshconfig"
 )
 
 // HostKeyScanner is a function type that scans a remote host for its SSH
@@ -107,6 +108,104 @@ func defaultRemoteRunner(
 	}
 
 	return stdout.Bytes(), nil
+}
+
+// TOFURemoteRunner wraps a RemoteCommandRunner with TOFU host key
+// verification (ADR-0019). It runs ssh-keyscan once on the first call
+// and caches the result for subsequent calls in the same command
+// invocation. Write commands (key add, project add, project rebuild)
+// use this to verify the host before modifying state on the VM.
+type TOFURemoteRunner struct {
+	inner          RemoteCommandRunner
+	hostKeyStore   *sshconfig.HostKeyStore
+	hostKeyScanner HostKeyScanner
+	vmName         string
+	verified       bool
+}
+
+// NewTOFURemoteRunner creates a TOFURemoteRunner that verifies the host
+// key via TOFU before delegating to the inner runner.
+func NewTOFURemoteRunner(
+	inner RemoteCommandRunner,
+	store *sshconfig.HostKeyStore,
+	scanner HostKeyScanner,
+	vmName string,
+) *TOFURemoteRunner {
+	return &TOFURemoteRunner{
+		inner:          inner,
+		hostKeyStore:   store,
+		hostKeyScanner: scanner,
+		vmName:         vmName,
+	}
+}
+
+// Run executes a remote command with TOFU verification on the first call.
+// Subsequent calls reuse the cached verification result. If the host key
+// has changed since it was first recorded, Run returns an error and does
+// not execute the command.
+func (t *TOFURemoteRunner) Run(
+	ctx context.Context,
+	sendKey mintaws.SendSSHPublicKeyAPI,
+	instanceID string,
+	az string,
+	host string,
+	port int,
+	user string,
+	command []string,
+) ([]byte, error) {
+	if !t.verified {
+		if err := t.verifyHostKey(host, port); err != nil {
+			return nil, err
+		}
+		t.verified = true
+	}
+	return t.inner(ctx, sendKey, instanceID, az, host, port, user, command)
+}
+
+// verifyHostKey implements the TOFU logic: scan the host key, check
+// against the store, record on first use, reject on mismatch.
+func (t *TOFURemoteRunner) verifyHostKey(host string, port int) error {
+	fingerprint, _, scanErr := t.hostKeyScanner(host, port)
+	if scanErr != nil {
+		return fmt.Errorf("scanning host key: %w", scanErr)
+	}
+
+	matched, existing, checkErr := t.hostKeyStore.CheckKey(t.vmName, fingerprint)
+	if checkErr != nil {
+		return fmt.Errorf("checking host key: %w", checkErr)
+	}
+
+	if existing == "" {
+		// First connection -- trust on first use.
+		if err := t.hostKeyStore.RecordKey(t.vmName, fingerprint); err != nil {
+			return fmt.Errorf("recording host key: %w", err)
+		}
+		return nil
+	}
+
+	if !matched {
+		return fmt.Errorf(
+			"HOST KEY CHANGED for VM %q!\n\n"+
+				"  Stored fingerprint: %s\n"+
+				"  Current fingerprint: %s\n\n"+
+				"This could indicate a man-in-the-middle attack, or the VM was rebuilt.\n"+
+				"If this is expected (VM was rebuilt), run: mint destroy && mint up",
+			t.vmName, existing, fingerprint,
+		)
+	}
+
+	return nil
+}
+
+// isTOFUError returns true if the error is a TOFU host key verification
+// error that should be propagated directly rather than masked by
+// command-specific error wrapping.
+func isTOFUError(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "HOST KEY CHANGED") ||
+		strings.Contains(msg, "scanning host key") ||
+		strings.Contains(msg, "checking host key") ||
+		strings.Contains(msg, "recording host key")
 }
 
 // lookupInstanceAZ queries DescribeInstances for a single instance ID

@@ -228,10 +228,10 @@ func TestKeyAddReadsFromFile(t *testing.T) {
 		t.Fatalf("expected 2 remote calls, got %d", len(remote.calls))
 	}
 
-	// First call should be grep to check for duplicates.
+	// First call should be sh -c grep wrapper to check for duplicates.
 	grepCall := remote.calls[0]
-	if len(grepCall.command) < 1 || grepCall.command[0] != "grep" {
-		t.Errorf("first remote call should be grep, got: %v", grepCall.command)
+	if len(grepCall.command) < 1 || grepCall.command[0] != "sh" {
+		t.Errorf("first remote call should be sh (grep wrapper), got: %v", grepCall.command)
 	}
 
 	// Second call should be the append command.
@@ -539,13 +539,29 @@ func TestKeyAddRemoteCommandConstruction(t *testing.T) {
 		t.Fatalf("expected 2 remote calls, got %d", len(remote.calls))
 	}
 
-	// Verify grep call uses correct arguments.
+	// Verify grep call uses sh -c wrapper with correct arguments.
 	grepCall := remote.calls[0]
-	if grepCall.command[0] != "grep" {
-		t.Errorf("first call should be grep, got: %v", grepCall.command)
+	if grepCall.command[0] != "sh" {
+		t.Errorf("first call should be sh, got: %v", grepCall.command)
 	}
-	if grepCall.command[1] != "-F" {
-		t.Errorf("grep should use -F for fixed-string, got: %v", grepCall.command)
+	if grepCall.command[1] != "-c" {
+		t.Errorf("second arg should be -c, got: %v", grepCall.command)
+	}
+	grepScript := grepCall.command[2]
+	if !strings.Contains(grepScript, "grep -F") {
+		t.Errorf("grep script should contain 'grep -F', got: %s", grepScript)
+	}
+	if !strings.Contains(grepScript, "authorized_keys") {
+		t.Errorf("grep script should reference authorized_keys, got: %s", grepScript)
+	}
+	if !strings.Contains(grepScript, "|| true") {
+		t.Errorf("grep script should contain '|| true' to tolerate missing files, got: %s", grepScript)
+	}
+	if grepCall.command[3] != "--" {
+		t.Errorf("expected '--' separator in grep call, got: %s", grepCall.command[3])
+	}
+	if !strings.HasPrefix(grepCall.command[4], "ssh-ed25519") {
+		t.Errorf("key should be passed as positional arg to grep, got: %s", grepCall.command[4])
 	}
 	if grepCall.instanceID != "i-abc123" {
 		t.Errorf("wrong instance ID: %s", grepCall.instanceID)
@@ -569,6 +585,9 @@ func TestKeyAddRemoteCommandConstruction(t *testing.T) {
 	shellScript := appendCall.command[2] // the sh -c argument
 	if strings.Contains(shellScript, "ssh-ed25519") {
 		t.Errorf("shell script should not contain key content (use positional params): %s", shellScript)
+	}
+	if !strings.Contains(shellScript, "mkdir -p") {
+		t.Errorf("shell script should mkdir -p the .ssh directory: %s", shellScript)
 	}
 	if !strings.Contains(shellScript, "authorized_keys") {
 		t.Errorf("shell script should reference authorized_keys: %s", shellScript)
@@ -719,6 +738,148 @@ func TestKeyAddRejectsShellInjection(t *testing.T) {
 	// The remote runner must NOT have been called at all.
 	if len(remote.calls) != 0 {
 		t.Errorf("remote runner should not be called for malicious key, got %d calls", len(remote.calls))
+	}
+}
+
+func TestKeyAddTOFUKeyscanCachedAcrossCalls(t *testing.T) {
+	// Verify that the TOFU keyscan runs exactly once across the grep
+	// and append remote calls (caching via TOFURemoteRunner).
+	scanCalls := 0
+	scanner := func(host string, port int) (string, string, error) {
+		scanCalls++
+		return "SHA256:cachedfp", "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest", nil
+	}
+
+	remote := &keyMockRemote{output: []byte{}} // grep returns empty (no match)
+	deps := &keyAddDeps{
+		describe:       &mockDescribeForSSH{output: makeRunningInstanceWithAZ("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a")},
+		sendKey:        &mockSendSSHPublicKey{output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true}},
+		owner:          "alice",
+		remoteRunner:   remote.run,
+		hostKeyStore:   sshconfig.NewHostKeyStore(t.TempDir()),
+		hostKeyScanner: scanner,
+		fingerprintFn:  func(key string) (string, error) { return "SHA256:cached", nil },
+	}
+
+	cmd := newKeyAddCommandWithDeps(deps)
+	root := newTestRootForKey()
+	root.AddCommand(newKeyCommandWithChild(cmd))
+
+	buf := new(bytes.Buffer)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"key", "add", testEd25519Key})
+
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Grep + append = 2 remote calls, but keyscan should only run once.
+	if len(remote.calls) != 2 {
+		t.Fatalf("expected 2 remote calls, got %d", len(remote.calls))
+	}
+	if scanCalls != 1 {
+		t.Errorf("keyscan should be called exactly once (cached), got %d calls", scanCalls)
+	}
+}
+
+func TestKeyAddFreshVMMissingAuthorizedKeys(t *testing.T) {
+	// On a fresh VM, authorized_keys doesn't exist. The old bare grep command
+	// would exit with code 2 (file not found), causing remoteRunner to return
+	// an error. The sh -c wrapper with "|| true" tolerates this and returns
+	// empty output, so the key add proceeds to append.
+	remote := &keyMockRemote{output: []byte{}} // grep wrapper returns empty (file missing or no match)
+	deps := &keyAddDeps{
+		describe:       &mockDescribeForSSH{output: makeRunningInstanceWithAZ("i-fresh", "default", "alice", "1.2.3.4", "us-east-1a")},
+		sendKey:        &mockSendSSHPublicKey{output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true}},
+		owner:          "alice",
+		remoteRunner:   remote.run,
+		hostKeyStore:   sshconfig.NewHostKeyStore(t.TempDir()),
+		hostKeyScanner: mockHostKeyScanner("SHA256:freshfp", "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest", nil),
+		fingerprintFn:  func(key string) (string, error) { return "SHA256:fresh123", nil },
+	}
+
+	cmd := newKeyAddCommandWithDeps(deps)
+	root := newTestRootForKey()
+	root.AddCommand(newKeyCommandWithChild(cmd))
+
+	buf := new(bytes.Buffer)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"key", "add", testEd25519Key})
+
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Should have called remote runner twice: grep check + append.
+	if len(remote.calls) != 2 {
+		t.Fatalf("expected 2 remote calls, got %d", len(remote.calls))
+	}
+
+	// Verify grep uses sh -c wrapper with || true.
+	grepCall := remote.calls[0]
+	if grepCall.command[0] != "sh" || grepCall.command[1] != "-c" {
+		t.Errorf("grep should use sh -c wrapper, got: %v", grepCall.command)
+	}
+	grepScript := grepCall.command[2]
+	if !strings.Contains(grepScript, "|| true") {
+		t.Errorf("grep script should contain '|| true' to tolerate missing files, got: %s", grepScript)
+	}
+
+	// Verify append creates .ssh directory on fresh VMs.
+	appendCall := remote.calls[1]
+	appendScript := appendCall.command[2]
+	if !strings.Contains(appendScript, "mkdir -p") {
+		t.Errorf("append script should mkdir -p for fresh VMs, got: %s", appendScript)
+	}
+
+	// Output should indicate key was added.
+	output := buf.String()
+	if !strings.Contains(output, "Added") {
+		t.Errorf("output should say key was added, got: %s", output)
+	}
+}
+
+func TestKeyAddGrepNoMatchProceedsToAppend(t *testing.T) {
+	// When grep finds no matching key (exit code 1 in real execution),
+	// the sh -c wrapper with "|| true" returns empty output and no error.
+	// The command should proceed to append the key.
+	remote := &keyMockRemote{output: []byte{}} // empty output = no match
+	deps := &keyAddDeps{
+		describe:       &mockDescribeForSSH{output: makeRunningInstanceWithAZ("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a")},
+		sendKey:        &mockSendSSHPublicKey{output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true}},
+		owner:          "alice",
+		remoteRunner:   remote.run,
+		hostKeyStore:   sshconfig.NewHostKeyStore(t.TempDir()),
+		hostKeyScanner: mockHostKeyScanner("SHA256:testfp", "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest", nil),
+		fingerprintFn:  func(key string) (string, error) { return "SHA256:nomatch", nil },
+	}
+
+	cmd := newKeyAddCommandWithDeps(deps)
+	root := newTestRootForKey()
+	root.AddCommand(newKeyCommandWithChild(cmd))
+
+	buf := new(bytes.Buffer)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"key", "add", testEd25519Key})
+
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Should proceed to append (2 calls: grep + append).
+	if len(remote.calls) != 2 {
+		t.Fatalf("expected 2 remote calls (grep + append), got %d", len(remote.calls))
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "Added") {
+		t.Errorf("output should say key was added, got: %s", output)
 	}
 }
 

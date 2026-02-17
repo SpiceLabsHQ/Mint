@@ -15,15 +15,19 @@ import (
 
 	mintaws "github.com/nicholasgasior/mint/internal/aws"
 	"github.com/nicholasgasior/mint/internal/cli"
+	"github.com/nicholasgasior/mint/internal/config"
+	"github.com/nicholasgasior/mint/internal/sshconfig"
 	"github.com/nicholasgasior/mint/internal/vm"
 )
 
 // projectAddDeps holds the injectable dependencies for the project add command.
 type projectAddDeps struct {
-	describe mintaws.DescribeInstancesAPI
-	sendKey  mintaws.SendSSHPublicKeyAPI
-	owner    string
-	remote   RemoteCommandRunner
+	describe       mintaws.DescribeInstancesAPI
+	sendKey        mintaws.SendSSHPublicKeyAPI
+	owner          string
+	remote         RemoteCommandRunner
+	hostKeyStore   *sshconfig.HostKeyStore
+	hostKeyScanner HostKeyScanner
 }
 
 // projectListDeps holds the injectable dependencies for the project list command.
@@ -36,11 +40,13 @@ type projectListDeps struct {
 
 // projectRebuildDeps holds the injectable dependencies for the project rebuild command.
 type projectRebuildDeps struct {
-	describe mintaws.DescribeInstancesAPI
-	sendKey  mintaws.SendSSHPublicKeyAPI
-	owner    string
-	remote   RemoteCommandRunner
-	stdin    io.Reader
+	describe       mintaws.DescribeInstancesAPI
+	sendKey        mintaws.SendSSHPublicKeyAPI
+	owner          string
+	remote         RemoteCommandRunner
+	stdin          io.Reader
+	hostKeyStore   *sshconfig.HostKeyStore
+	hostKeyScanner HostKeyScanner
 }
 
 // projectInfo represents a project on the VM with its container status.
@@ -125,11 +131,14 @@ func newProjectAddCommandWithDeps(deps *projectAddDeps) *cobra.Command {
 			if clients == nil {
 				return fmt.Errorf("AWS clients not configured")
 			}
+			configDir := config.DefaultConfigDir()
 			return runProjectAdd(cmd, &projectAddDeps{
-				describe: clients.ec2Client,
-				sendKey:  clients.icClient,
-				owner:    clients.owner,
-				remote:   defaultRemoteRunner,
+				describe:       clients.ec2Client,
+				sendKey:        clients.icClient,
+				owner:          clients.owner,
+				remote:         defaultRemoteRunner,
+				hostKeyStore:   sshconfig.NewHostKeyStore(configDir),
+				hostKeyScanner: defaultHostKeyScanner,
 			}, args[0])
 		},
 	}
@@ -186,15 +195,25 @@ func runProjectAdd(cmd *cobra.Command, deps *projectAddDeps, gitURL string) erro
 			vmName, found.ID, found.State)
 	}
 
+	// Build a TOFU-verified remote runner for write commands (ADR-0019).
+	remote := deps.remote
+	if deps.hostKeyStore != nil && deps.hostKeyScanner != nil {
+		tofu := NewTOFURemoteRunner(deps.remote, deps.hostKeyStore, deps.hostKeyScanner, vmName)
+		remote = tofu.Run
+	}
+
 	w := cmd.OutOrStdout()
 	projectPath := fmt.Sprintf("/mint/projects/%s", projectName)
 
 	// Step 1: Clone repository.
 	fmt.Fprintf(w, "Cloning %s...\n", gitURL)
 	cloneCmd := buildCloneCommand(gitURL, projectPath, branch)
-	_, err = deps.remote(ctx, deps.sendKey, found.ID, found.AvailabilityZone,
+	_, err = remote(ctx, deps.sendKey, found.ID, found.AvailabilityZone,
 		found.PublicIP, defaultSSHPort, defaultSSHUser, cloneCmd)
 	if err != nil {
+		if isTOFUError(err) {
+			return err
+		}
 		if strings.Contains(err.Error(), "already exists") {
 			return fmt.Errorf("project directory already exists at %s on the VM", projectPath)
 		}
@@ -204,7 +223,7 @@ func runProjectAdd(cmd *cobra.Command, deps *projectAddDeps, gitURL string) erro
 	// Step 2: Build devcontainer.
 	fmt.Fprintf(w, "Building devcontainer...\n")
 	buildCmd := []string{"devcontainer", "up", "--workspace-folder", projectPath}
-	_, err = deps.remote(ctx, deps.sendKey, found.ID, found.AvailabilityZone,
+	_, err = remote(ctx, deps.sendKey, found.ID, found.AvailabilityZone,
 		found.PublicIP, defaultSSHPort, defaultSSHUser, buildCmd)
 	if err != nil {
 		return fmt.Errorf("building devcontainer: %w", err)
@@ -213,7 +232,7 @@ func runProjectAdd(cmd *cobra.Command, deps *projectAddDeps, gitURL string) erro
 	// Step 3: Create tmux session.
 	fmt.Fprintf(w, "Creating tmux session...\n")
 	tmuxCmd := []string{"tmux", "new-session", "-d", "-s", projectName}
-	_, err = deps.remote(ctx, deps.sendKey, found.ID, found.AvailabilityZone,
+	_, err = remote(ctx, deps.sendKey, found.ID, found.AvailabilityZone,
 		found.PublicIP, defaultSSHPort, defaultSSHUser, tmuxCmd)
 	if err != nil {
 		return fmt.Errorf("creating tmux session: %w", err)
@@ -518,12 +537,15 @@ func newProjectRebuildCommandWithDeps(deps *projectRebuildDeps) *cobra.Command {
 			if clients == nil {
 				return fmt.Errorf("AWS clients not configured")
 			}
+			configDir := config.DefaultConfigDir()
 			return runProjectRebuild(cmd, &projectRebuildDeps{
-				describe: clients.ec2Client,
-				sendKey:  clients.icClient,
-				owner:    clients.owner,
-				remote:   defaultRemoteRunner,
-				stdin:    cmd.InOrStdin(),
+				describe:       clients.ec2Client,
+				sendKey:        clients.icClient,
+				owner:          clients.owner,
+				remote:         defaultRemoteRunner,
+				stdin:          cmd.InOrStdin(),
+				hostKeyStore:   sshconfig.NewHostKeyStore(configDir),
+				hostKeyScanner: defaultHostKeyScanner,
 			}, args[0])
 		},
 	}
@@ -564,15 +586,27 @@ func runProjectRebuild(cmd *cobra.Command, deps *projectRebuildDeps, projectName
 			vmName, found.ID, found.State)
 	}
 
+	// Build a TOFU-verified remote runner for write commands (ADR-0019).
+	remote := deps.remote
+	if deps.hostKeyStore != nil && deps.hostKeyScanner != nil {
+		tofu := NewTOFURemoteRunner(deps.remote, deps.hostKeyStore, deps.hostKeyScanner, vmName)
+		remote = tofu.Run
+	}
+
 	w := cmd.OutOrStdout()
 	projectPath := fmt.Sprintf("/mint/projects/%s", projectName)
 
 	// Step 1: Verify project exists.
 	fmt.Fprintf(w, "Verifying project %q exists...\n", projectName)
 	testCmd := []string{"test", "-d", projectPath}
-	_, err = deps.remote(ctx, deps.sendKey, found.ID, found.AvailabilityZone,
+	_, err = remote(ctx, deps.sendKey, found.ID, found.AvailabilityZone,
 		found.PublicIP, defaultSSHPort, defaultSSHUser, testCmd)
 	if err != nil {
+		// Propagate TOFU host key errors directly instead of masking them
+		// as "project not found".
+		if isTOFUError(err) {
+			return err
+		}
 		return fmt.Errorf("project %q not found — run mint project list to see available projects", projectName)
 	}
 
@@ -602,7 +636,7 @@ func runProjectRebuild(cmd *cobra.Command, deps *projectRebuildDeps, projectName
 		"sh", "-c",
 		fmt.Sprintf("docker stop $(docker ps -q --filter label=devcontainer.local_folder=%s) 2>/dev/null || true", projectPath),
 	}
-	_, err = deps.remote(ctx, deps.sendKey, found.ID, found.AvailabilityZone,
+	_, err = remote(ctx, deps.sendKey, found.ID, found.AvailabilityZone,
 		found.PublicIP, defaultSSHPort, defaultSSHUser, stopCmd)
 	if err != nil {
 		return fmt.Errorf("stopping container: %w", err)
@@ -614,7 +648,7 @@ func runProjectRebuild(cmd *cobra.Command, deps *projectRebuildDeps, projectName
 		"sh", "-c",
 		fmt.Sprintf("docker rm $(docker ps -aq --filter label=devcontainer.local_folder=%s) 2>/dev/null || true", projectPath),
 	}
-	_, err = deps.remote(ctx, deps.sendKey, found.ID, found.AvailabilityZone,
+	_, err = remote(ctx, deps.sendKey, found.ID, found.AvailabilityZone,
 		found.PublicIP, defaultSSHPort, defaultSSHUser, rmCmd)
 	if err != nil {
 		return fmt.Errorf("removing container: %w", err)
@@ -623,7 +657,7 @@ func runProjectRebuild(cmd *cobra.Command, deps *projectRebuildDeps, projectName
 	// Step 5: Rebuild devcontainer.
 	fmt.Fprintf(w, "Rebuilding devcontainer...\n")
 	buildCmd := []string{"devcontainer", "up", "--workspace-folder", projectPath}
-	_, err = deps.remote(ctx, deps.sendKey, found.ID, found.AvailabilityZone,
+	_, err = remote(ctx, deps.sendKey, found.ID, found.AvailabilityZone,
 		found.PublicIP, defaultSSHPort, defaultSSHUser, buildCmd)
 	if err != nil {
 		return fmt.Errorf("rebuilding devcontainer: %w", err)

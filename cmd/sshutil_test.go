@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2instanceconnect"
 
 	mintaws "github.com/nicholasgasior/mint/internal/aws"
+	"github.com/nicholasgasior/mint/internal/sshconfig"
 )
 
 // mockSendKeyForRemote implements mintaws.SendSSHPublicKeyAPI for remote runner tests.
@@ -213,5 +214,191 @@ func TestLookupInstanceAZNoPlacement(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "no placement info") {
 		t.Errorf("error %q does not mention missing placement", err.Error())
+	}
+}
+
+// --- TOFURemoteRunner tests ---
+
+// tofuMockInner is a mock RemoteCommandRunner that records calls for TOFU tests.
+type tofuMockInner struct {
+	calls  int
+	output []byte
+	err    error
+}
+
+func (m *tofuMockInner) run(
+	ctx context.Context,
+	sendKey mintaws.SendSSHPublicKeyAPI,
+	instanceID, az, host string,
+	port int,
+	user string,
+	command []string,
+) ([]byte, error) {
+	m.calls++
+	return m.output, m.err
+}
+
+func TestTOFURemoteRunnerFirstCallTriggersKeyscan(t *testing.T) {
+	store := sshconfig.NewHostKeyStore(t.TempDir())
+	scanCalls := 0
+	scanner := func(host string, port int) (string, string, error) {
+		scanCalls++
+		return "SHA256:testfp", "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest", nil
+	}
+
+	inner := &tofuMockInner{output: []byte("ok")}
+	runner := NewTOFURemoteRunner(inner.run, store, scanner, "default")
+
+	ctx := context.Background()
+	mock := &mockSendKeyForRemote{
+		output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
+	}
+
+	// First call should trigger keyscan.
+	out, err := runner.Run(ctx, mock, "i-test", "us-east-1a", "1.2.3.4", 41122, "ubuntu", []string{"whoami"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(out) != "ok" {
+		t.Errorf("output = %q, want %q", string(out), "ok")
+	}
+	if scanCalls != 1 {
+		t.Errorf("keyscan calls = %d, want 1", scanCalls)
+	}
+	if inner.calls != 1 {
+		t.Errorf("inner calls = %d, want 1", inner.calls)
+	}
+
+	// Verify key was recorded.
+	matched, _, checkErr := store.CheckKey("default", "SHA256:testfp")
+	if checkErr != nil {
+		t.Fatalf("CheckKey: %v", checkErr)
+	}
+	if !matched {
+		t.Error("host key should have been recorded via TOFU")
+	}
+}
+
+func TestTOFURemoteRunnerSecondCallSkipsKeyscan(t *testing.T) {
+	store := sshconfig.NewHostKeyStore(t.TempDir())
+	scanCalls := 0
+	scanner := func(host string, port int) (string, string, error) {
+		scanCalls++
+		return "SHA256:testfp", "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest", nil
+	}
+
+	inner := &tofuMockInner{output: []byte("ok")}
+	runner := NewTOFURemoteRunner(inner.run, store, scanner, "default")
+
+	ctx := context.Background()
+	mock := &mockSendKeyForRemote{
+		output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
+	}
+
+	// First call.
+	_, err := runner.Run(ctx, mock, "i-test", "us-east-1a", "1.2.3.4", 41122, "ubuntu", []string{"cmd1"})
+	if err != nil {
+		t.Fatalf("first call error: %v", err)
+	}
+
+	// Second call should skip keyscan.
+	_, err = runner.Run(ctx, mock, "i-test", "us-east-1a", "1.2.3.4", 41122, "ubuntu", []string{"cmd2"})
+	if err != nil {
+		t.Fatalf("second call error: %v", err)
+	}
+
+	if scanCalls != 1 {
+		t.Errorf("keyscan calls = %d, want 1 (second call should be cached)", scanCalls)
+	}
+	if inner.calls != 2 {
+		t.Errorf("inner calls = %d, want 2", inner.calls)
+	}
+}
+
+func TestTOFURemoteRunnerKeyMismatchRejects(t *testing.T) {
+	store := sshconfig.NewHostKeyStore(t.TempDir())
+	// Pre-record a different key.
+	if err := store.RecordKey("default", "SHA256:oldfp"); err != nil {
+		t.Fatalf("RecordKey: %v", err)
+	}
+
+	scanner := func(host string, port int) (string, string, error) {
+		return "SHA256:newfp", "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINew", nil
+	}
+
+	inner := &tofuMockInner{output: []byte("should not run")}
+	runner := NewTOFURemoteRunner(inner.run, store, scanner, "default")
+
+	ctx := context.Background()
+	mock := &mockSendKeyForRemote{
+		output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
+	}
+
+	_, err := runner.Run(ctx, mock, "i-test", "us-east-1a", "1.2.3.4", 41122, "ubuntu", []string{"whoami"})
+	if err == nil {
+		t.Fatal("expected error for host key mismatch, got nil")
+	}
+	if !strings.Contains(err.Error(), "HOST KEY CHANGED") {
+		t.Errorf("error should mention HOST KEY CHANGED, got: %s", err.Error())
+	}
+	if inner.calls != 0 {
+		t.Errorf("inner should not be called on key mismatch, got %d calls", inner.calls)
+	}
+}
+
+func TestTOFURemoteRunnerKeyscanError(t *testing.T) {
+	store := sshconfig.NewHostKeyStore(t.TempDir())
+	scanner := func(host string, port int) (string, string, error) {
+		return "", "", fmt.Errorf("connection refused")
+	}
+
+	inner := &tofuMockInner{output: []byte("should not run")}
+	runner := NewTOFURemoteRunner(inner.run, store, scanner, "default")
+
+	ctx := context.Background()
+	mock := &mockSendKeyForRemote{
+		output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
+	}
+
+	_, err := runner.Run(ctx, mock, "i-test", "us-east-1a", "1.2.3.4", 41122, "ubuntu", []string{"whoami"})
+	if err == nil {
+		t.Fatal("expected error for keyscan failure, got nil")
+	}
+	if !strings.Contains(err.Error(), "scanning host key") {
+		t.Errorf("error should mention scanning host key, got: %s", err.Error())
+	}
+	if inner.calls != 0 {
+		t.Errorf("inner should not be called on keyscan error, got %d calls", inner.calls)
+	}
+}
+
+func TestTOFURemoteRunnerMatchingKeyProceeds(t *testing.T) {
+	store := sshconfig.NewHostKeyStore(t.TempDir())
+	// Pre-record matching key.
+	if err := store.RecordKey("default", "SHA256:matchfp"); err != nil {
+		t.Fatalf("RecordKey: %v", err)
+	}
+
+	scanner := func(host string, port int) (string, string, error) {
+		return "SHA256:matchfp", "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest", nil
+	}
+
+	inner := &tofuMockInner{output: []byte("matched")}
+	runner := NewTOFURemoteRunner(inner.run, store, scanner, "default")
+
+	ctx := context.Background()
+	mock := &mockSendKeyForRemote{
+		output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
+	}
+
+	out, err := runner.Run(ctx, mock, "i-test", "us-east-1a", "1.2.3.4", 41122, "ubuntu", []string{"whoami"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if string(out) != "matched" {
+		t.Errorf("output = %q, want %q", string(out), "matched")
+	}
+	if inner.calls != 1 {
+		t.Errorf("inner calls = %d, want 1", inner.calls)
 	}
 }

@@ -49,6 +49,26 @@ func makeRunningInstanceForConnect(id, vmName, owner, ip, az string) *ec2.Descri
 	}
 }
 
+// makeRunningInstanceForConnectNoAZ creates a running instance without AZ for connect tests.
+func makeRunningInstanceForConnectNoAZ(id, vmName, owner, ip string) *ec2.DescribeInstancesOutput {
+	return &ec2.DescribeInstancesOutput{
+		Reservations: []ec2types.Reservation{{
+			Instances: []ec2types.Instance{{
+				InstanceId:      aws.String(id),
+				InstanceType:    ec2types.InstanceTypeT3Medium,
+				PublicIpAddress: aws.String(ip),
+				State: &ec2types.InstanceState{
+					Name: ec2types.InstanceStateNameRunning,
+				},
+				Tags: []ec2types.Tag{
+					{Key: aws.String("mint:vm"), Value: aws.String(vmName)},
+					{Key: aws.String("mint:owner"), Value: aws.String(owner)},
+				},
+			}},
+		}},
+	}
+}
+
 // newTestRootForConnect creates a minimal root command for connect tests.
 func newTestRootForConnect() *cobra.Command {
 	root := &cobra.Command{
@@ -539,6 +559,49 @@ func TestConnectCommandPickerNonNumericSelection(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "invalid selection") {
 		t.Errorf("error %q does not contain 'invalid selection'", err.Error())
+	}
+}
+
+func TestConnectCommandEmptyAvailabilityZone(t *testing.T) {
+	describe := &mockDescribeForConnect{
+		output: makeRunningInstanceForConnectNoAZ("i-abc123", "default", "alice", "1.2.3.4"),
+	}
+	sendKey := &mockSendSSHPublicKey{}
+
+	var captured capturedCommand
+	deps := &connectDeps{
+		describe:   describe,
+		sendKey:    sendKey,
+		owner:      "alice",
+		runner: func(name string, args ...string) error {
+			captured.name = name
+			captured.args = args
+			return nil
+		},
+		lookupPath: func(string) (string, error) { return "/usr/bin/mosh", nil },
+	}
+
+	cmd := newConnectCommandWithDeps(deps)
+	root := newTestRootForConnect()
+	root.AddCommand(cmd)
+	root.SetOut(new(bytes.Buffer))
+	root.SetErr(new(bytes.Buffer))
+	root.SetArgs([]string{"connect", "myproject"})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error for empty availability zone, got nil")
+	}
+	if !strings.Contains(err.Error(), "no availability zone") {
+		t.Errorf("error %q does not contain 'no availability zone'", err.Error())
+	}
+	// Mosh should NOT have been executed.
+	if captured.name != "" {
+		t.Errorf("mosh should not have been executed, got: %s %v", captured.name, captured.args)
+	}
+	// SendSSHPublicKey should NOT have been called.
+	if sendKey.called {
+		t.Error("SendSSHPublicKey should not have been called when AZ is empty")
 	}
 }
 

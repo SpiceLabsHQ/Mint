@@ -129,37 +129,21 @@ func runKeyAdd(cmd *cobra.Command, deps *keyAddDeps, arg string) error {
 			vmName, found.ID, found.State)
 	}
 
-	// TOFU host key verification (ADR-0019).
+	// Build a TOFU-verified remote runner for write commands (ADR-0019).
+	// The runner verifies the host key on the first remote call and caches
+	// the result for subsequent calls in this invocation.
+	remote := deps.remoteRunner
 	if deps.hostKeyStore != nil && deps.hostKeyScanner != nil {
-		fingerprint, _, scanErr := deps.hostKeyScanner(found.PublicIP, defaultSSHPort)
-		if scanErr != nil {
-			return fmt.Errorf("scanning host key: %w", scanErr)
-		}
-
-		matched, existing, checkErr := deps.hostKeyStore.CheckKey(vmName, fingerprint)
-		if checkErr != nil {
-			return fmt.Errorf("checking host key: %w", checkErr)
-		}
-
-		if existing == "" {
-			// First connection — trust on first use.
-			if err := deps.hostKeyStore.RecordKey(vmName, fingerprint); err != nil {
-				return fmt.Errorf("recording host key: %w", err)
-			}
-		} else if !matched {
-			return fmt.Errorf(
-				"HOST KEY CHANGED for VM %q!\n\n"+
-					"  Stored fingerprint: %s\n"+
-					"  Current fingerprint: %s\n\n"+
-					"This could indicate a man-in-the-middle attack, or the VM was rebuilt.\n"+
-					"If this is expected (VM was rebuilt), run: mint destroy && mint up",
-				vmName, existing, fingerprint,
-			)
-		}
+		tofu := NewTOFURemoteRunner(deps.remoteRunner, deps.hostKeyStore, deps.hostKeyScanner, vmName)
+		remote = tofu.Run
 	}
 
-	// Check if key already exists on the VM.
-	grepOutput, grepErr := deps.remoteRunner(
+	// Check if key already exists on the VM. The grep is wrapped in sh -c
+	// so that a missing authorized_keys file (exit code 2) or no match
+	// (exit code 1) both produce empty output instead of an error.
+	authKeysDir := fmt.Sprintf("/home/%s/.ssh", defaultSSHUser)
+	authKeysPath := fmt.Sprintf("%s/authorized_keys", authKeysDir)
+	grepOutput, grepErr := remote(
 		ctx,
 		deps.sendKey,
 		found.ID,
@@ -167,7 +151,7 @@ func runKeyAdd(cmd *cobra.Command, deps *keyAddDeps, arg string) error {
 		found.PublicIP,
 		defaultSSHPort,
 		defaultSSHUser,
-		[]string{"grep", "-F", pubKey, "/home/" + defaultSSHUser + "/.ssh/authorized_keys"},
+		[]string{"sh", "-c", fmt.Sprintf(`grep -F "$1" %s 2>/dev/null || true`, authKeysPath), "--", pubKey},
 	)
 	if grepErr != nil {
 		return fmt.Errorf("checking existing keys: %w", grepErr)
@@ -187,8 +171,8 @@ func runKeyAdd(cmd *cobra.Command, deps *keyAddDeps, arg string) error {
 
 	// Append the key to authorized_keys. The key is passed as a positional
 	// parameter ($1) to avoid interpolating user input into the shell string.
-	authKeysPath := fmt.Sprintf("/home/%s/.ssh/authorized_keys", defaultSSHUser)
-	_, appendErr := deps.remoteRunner(
+	// mkdir -p ensures the .ssh directory exists on fresh VMs.
+	_, appendErr := remote(
 		ctx,
 		deps.sendKey,
 		found.ID,
@@ -196,7 +180,7 @@ func runKeyAdd(cmd *cobra.Command, deps *keyAddDeps, arg string) error {
 		found.PublicIP,
 		defaultSSHPort,
 		defaultSSHUser,
-		[]string{"sh", "-c", fmt.Sprintf(`printf '%%s\n' "$1" >> %s`, authKeysPath), "--", pubKey},
+		[]string{"sh", "-c", fmt.Sprintf(`mkdir -p %s && printf '%%s\n' "$1" >> %s`, authKeysDir, authKeysPath), "--", pubKey},
 	)
 	if appendErr != nil {
 		return fmt.Errorf("adding key to authorized_keys: %w", appendErr)

@@ -251,6 +251,42 @@ func TestMoshCommand(t *testing.T) {
 	}
 }
 
+func TestMoshCommandEmptyAvailabilityZone(t *testing.T) {
+	describe := &mockDescribeForSSH{
+		output: makeRunningInstanceNoAZ("i-abc123", "default", "alice", "1.2.3.4"),
+	}
+	sendKey := &mockSendSSHPublicKey{}
+
+	var captured capturedCommand
+	deps := &moshDeps{
+		describe:   describe,
+		sendKey:    sendKey,
+		owner:      "alice",
+		runner: func(name string, args ...string) error {
+			captured.name = name
+			captured.args = args
+			return nil
+		},
+		lookupPath: func(string) (string, error) { return "/usr/bin/mosh", nil },
+	}
+
+	err := runMoshWithDeps(t, deps, "default")
+	if err == nil {
+		t.Fatal("expected error for empty availability zone, got nil")
+	}
+	if !strings.Contains(err.Error(), "no availability zone") {
+		t.Errorf("error %q does not contain 'no availability zone'", err.Error())
+	}
+	// Mosh should NOT have been executed.
+	if captured.name != "" {
+		t.Errorf("mosh should not have been executed, got: %s %v", captured.name, captured.args)
+	}
+	// SendSSHPublicKey should NOT have been called.
+	if sendKey.called {
+		t.Error("SendSSHPublicKey should not have been called when AZ is empty")
+	}
+}
+
 func TestMoshCommandTOFUFirstConnection(t *testing.T) {
 	describe := &mockDescribeForSSH{
 		output: makeRunningInstanceWithAZ("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
