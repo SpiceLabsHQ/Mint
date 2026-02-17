@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bufio"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -19,8 +20,15 @@ import (
 
 	mintaws "github.com/nicholasgasior/mint/internal/aws"
 	"github.com/nicholasgasior/mint/internal/cli"
+	"github.com/nicholasgasior/mint/internal/config"
+	"github.com/nicholasgasior/mint/internal/sshconfig"
 	"github.com/nicholasgasior/mint/internal/vm"
 )
+
+// HostKeyScanner is a function type that scans a remote host for its SSH
+// host key and returns the SHA256 fingerprint. Production implementation
+// uses ssh-keyscan; tests inject a mock.
+type HostKeyScanner func(host string, port int) (fingerprint string, hostKeyLine string, err error)
 
 // CommandRunner is a function type that executes an external command.
 // It enables testing without actually exec'ing ssh/code binaries.
@@ -38,10 +46,12 @@ func defaultRunner(name string, args ...string) error {
 
 // sshDeps holds the injectable dependencies for the ssh command.
 type sshDeps struct {
-	describe mintaws.DescribeInstancesAPI
-	sendKey  mintaws.SendSSHPublicKeyAPI
-	owner    string
-	runner   CommandRunner
+	describe       mintaws.DescribeInstancesAPI
+	sendKey        mintaws.SendSSHPublicKeyAPI
+	owner          string
+	runner         CommandRunner
+	hostKeyStore   *sshconfig.HostKeyStore
+	hostKeyScanner HostKeyScanner
 }
 
 // newSSHCommand creates the production ssh command.
@@ -66,10 +76,13 @@ func newSSHCommandWithDeps(deps *sshDeps) *cobra.Command {
 			if clients == nil {
 				return fmt.Errorf("AWS clients not configured")
 			}
+			configDir := config.DefaultConfigDir()
 			return runSSH(cmd, &sshDeps{
-				describe: clients.ec2Client,
-				sendKey:  clients.icClient,
-				owner:    clients.owner,
+				describe:       clients.ec2Client,
+				sendKey:        clients.icClient,
+				owner:          clients.owner,
+				hostKeyStore:   sshconfig.NewHostKeyStore(configDir),
+				hostKeyScanner: defaultHostKeyScanner,
 			}, args)
 		},
 	}
@@ -130,14 +143,71 @@ func runSSH(cmd *cobra.Command, deps *sshDeps, extraArgs []string) error {
 		return fmt.Errorf("pushing SSH key via Instance Connect: %w", err)
 	}
 
+	// TOFU host key verification (ADR-0019).
+	var knownHostsPath string
+	if deps.hostKeyStore != nil && deps.hostKeyScanner != nil {
+		fingerprint, hostKeyLine, scanErr := deps.hostKeyScanner(found.PublicIP, defaultSSHPort)
+		if scanErr != nil {
+			return fmt.Errorf("scanning host key: %w", scanErr)
+		}
+
+		matched, existing, checkErr := deps.hostKeyStore.CheckKey(vmName, fingerprint)
+		if checkErr != nil {
+			return fmt.Errorf("checking host key: %w", checkErr)
+		}
+
+		if existing == "" {
+			// First connection — trust on first use.
+			if err := deps.hostKeyStore.RecordKey(vmName, fingerprint); err != nil {
+				return fmt.Errorf("recording host key: %w", err)
+			}
+		} else if !matched {
+			return fmt.Errorf(
+				"HOST KEY CHANGED for VM %q!\n\n"+
+					"  Stored fingerprint: %s\n"+
+					"  Current fingerprint: %s\n\n"+
+					"This could indicate a man-in-the-middle attack, or the VM was rebuilt.\n"+
+					"If this is expected (VM was rebuilt), run: mint destroy && mint up",
+				vmName, existing, fingerprint,
+			)
+		}
+
+		// Write a temporary known_hosts file with the host's actual key
+		// so OpenSSH can verify the connection.
+		tmpKH, khErr := os.CreateTemp("", "mint-known-hosts-*")
+		if khErr != nil {
+			return fmt.Errorf("creating temp known_hosts: %w", khErr)
+		}
+		knownHostsPath = tmpKH.Name()
+		defer os.Remove(knownHostsPath)
+
+		// Write the host key line in OpenSSH known_hosts format.
+		hostEntry := fmt.Sprintf("[%s]:%d %s\n", found.PublicIP, defaultSSHPort, hostKeyLine)
+		if _, err := tmpKH.WriteString(hostEntry); err != nil {
+			tmpKH.Close()
+			return fmt.Errorf("writing temp known_hosts: %w", err)
+		}
+		tmpKH.Close()
+	}
+
 	// Build ssh command arguments.
 	sshArgs := []string{
 		"-i", privKeyPath,
 		"-p", fmt.Sprintf("%d", defaultSSHPort),
-		"-o", "StrictHostKeyChecking=no",
-		"-o", "UserKnownHostsFile=/dev/null",
-		fmt.Sprintf("%s@%s", defaultSSHUser, found.PublicIP),
 	}
+	if knownHostsPath != "" {
+		sshArgs = append(sshArgs,
+			"-o", "StrictHostKeyChecking=yes",
+			"-o", fmt.Sprintf("UserKnownHostsFile=%s", knownHostsPath),
+		)
+	} else {
+		// Fallback when no TOFU store configured (backward compat).
+		sshArgs = append(sshArgs,
+			"-o", "StrictHostKeyChecking=no",
+			"-o", "UserKnownHostsFile=/dev/null",
+		)
+	}
+	sshArgs = append(sshArgs, fmt.Sprintf("%s@%s", defaultSSHUser, found.PublicIP))
 	sshArgs = append(sshArgs, extraArgs...)
 
 	runner := deps.runner
@@ -211,4 +281,48 @@ func generateEphemeralKeyPair() (pubKeyStr string, privKeyPath string, cleanup f
 	cleanup = func() { os.Remove(privKeyPath) }
 
 	return pubKeyStr, privKeyPath, cleanup, nil
+}
+
+// defaultHostKeyScanner runs ssh-keyscan to fetch a host's SSH public key
+// and returns its SHA256 fingerprint and the raw key line (type + base64 data).
+func defaultHostKeyScanner(host string, port int) (fingerprint string, hostKeyLine string, err error) {
+	cmd := exec.Command("ssh-keyscan", "-p", fmt.Sprintf("%d", port), "-T", "5", host)
+	var stdout, stderr strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return "", "", fmt.Errorf("ssh-keyscan failed: %w", err)
+	}
+
+	output := stdout.String()
+	if output == "" {
+		return "", "", fmt.Errorf("ssh-keyscan returned no keys for %s:%d", host, port)
+	}
+
+	// Parse the first valid key line. Format: "host key-type base64-data"
+	scanner := bufio.NewScanner(strings.NewReader(output))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		// Split into: host, key-type, base64-data
+		parts := strings.SplitN(line, " ", 3)
+		if len(parts) < 3 {
+			continue
+		}
+		keyLine := parts[1] + " " + parts[2] // "key-type base64-data"
+
+		// Parse the public key to compute its fingerprint.
+		pubKey, _, _, _, parseErr := ssh.ParseAuthorizedKey([]byte(line))
+		if parseErr != nil {
+			continue
+		}
+
+		fp := ssh.FingerprintSHA256(pubKey)
+		return fp, keyLine, nil
+	}
+
+	return "", "", fmt.Errorf("ssh-keyscan returned no parseable keys for %s:%d", host, port)
 }
