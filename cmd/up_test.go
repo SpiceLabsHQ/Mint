@@ -12,6 +12,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/aws/aws-sdk-go-v2/service/efs"
+	efstypes "github.com/aws/aws-sdk-go-v2/service/efs/types"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 
 	"github.com/nicholasgasior/mint/internal/cli"
@@ -142,6 +144,15 @@ func (s *stubUpGetParameter) GetParameter(ctx context.Context, params *ssm.GetPa
 	return s.output, s.err
 }
 
+type stubUpDescribeFileSystems struct {
+	output *efs.DescribeFileSystemsOutput
+	err    error
+}
+
+func (s *stubUpDescribeFileSystems) DescribeFileSystems(ctx context.Context, params *efs.DescribeFileSystemsInput, optFns ...func(*efs.Options)) (*efs.DescribeFileSystemsOutput, error) {
+	return s.output, s.err
+}
+
 // ---------------------------------------------------------------------------
 // Helper: build a test Provisioner with happy-path stubs
 // ---------------------------------------------------------------------------
@@ -190,14 +201,31 @@ func newTestProvisioner() *provision.Provisioner {
 	return p
 }
 
+func defaultEFSStub() *stubUpDescribeFileSystems {
+	return &stubUpDescribeFileSystems{
+		output: &efs.DescribeFileSystemsOutput{
+			FileSystems: []efstypes.FileSystemDescription{
+				{
+					FileSystemId: aws.String("fs-test123"),
+					Tags: []efstypes.Tag{
+						{Key: aws.String("mint"), Value: aws.String("true")},
+						{Key: aws.String("mint:component"), Value: aws.String("admin")},
+					},
+				},
+			},
+		},
+	}
+}
+
 func newTestUpDeps() *upDeps {
 	return &upDeps{
-		provisioner:     newTestProvisioner(),
-		owner:           "testuser",
-		ownerARN:        "arn:aws:iam::123:user/testuser",
-		bootstrapScript: []byte("#!/bin/bash\necho test"),
-		instanceType:    "m6i.xlarge",
-		volumeSize:      50,
+		provisioner:         newTestProvisioner(),
+		owner:               "testuser",
+		ownerARN:            "arn:aws:iam::123:user/testuser",
+		bootstrapScript:     []byte("#!/bin/bash\necho test"),
+		instanceType:        "m6i.xlarge",
+		volumeSize:          50,
+		describeFileSystems: defaultEFSStub(),
 	}
 }
 
@@ -711,5 +739,158 @@ func TestUpCommandSSHConfigWriteFailureIsWarning(t *testing.T) {
 	output := buf.String()
 	if !strings.Contains(output, "Warning") && !strings.Contains(output, "warning") && !strings.Contains(output, "ssh config") {
 		t.Errorf("output should contain a warning about SSH config failure, got:\n%s", output)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests: EFS discovery in mint up
+// ---------------------------------------------------------------------------
+
+func TestDiscoverEFS_Found(t *testing.T) {
+	stub := &stubUpDescribeFileSystems{
+		output: &efs.DescribeFileSystemsOutput{
+			FileSystems: []efstypes.FileSystemDescription{
+				{
+					FileSystemId: aws.String("fs-abc123"),
+					Tags: []efstypes.Tag{
+						{Key: aws.String("mint"), Value: aws.String("true")},
+						{Key: aws.String("mint:component"), Value: aws.String("admin")},
+					},
+				},
+			},
+		},
+	}
+
+	efsID, err := discoverEFS(context.Background(), stub)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if efsID != "fs-abc123" {
+		t.Errorf("efsID = %q, want %q", efsID, "fs-abc123")
+	}
+}
+
+func TestDiscoverEFS_NotFound(t *testing.T) {
+	stub := &stubUpDescribeFileSystems{
+		output: &efs.DescribeFileSystemsOutput{
+			FileSystems: []efstypes.FileSystemDescription{},
+		},
+	}
+
+	_, err := discoverEFS(context.Background(), stub)
+	if err == nil {
+		t.Fatal("expected error when no admin EFS found")
+	}
+	if !strings.Contains(err.Error(), "no admin EFS") {
+		t.Errorf("error = %q, want substring %q", err.Error(), "no admin EFS")
+	}
+}
+
+func TestDiscoverEFS_APIError(t *testing.T) {
+	stub := &stubUpDescribeFileSystems{
+		err: fmt.Errorf("access denied"),
+	}
+
+	_, err := discoverEFS(context.Background(), stub)
+	if err == nil {
+		t.Fatal("expected error when API fails")
+	}
+	if !strings.Contains(err.Error(), "access denied") {
+		t.Errorf("error = %q, want substring %q", err.Error(), "access denied")
+	}
+}
+
+func TestDiscoverEFS_SkipsNonAdminEFS(t *testing.T) {
+	stub := &stubUpDescribeFileSystems{
+		output: &efs.DescribeFileSystemsOutput{
+			FileSystems: []efstypes.FileSystemDescription{
+				{
+					FileSystemId: aws.String("fs-user1"),
+					Tags: []efstypes.Tag{
+						{Key: aws.String("mint"), Value: aws.String("true")},
+						{Key: aws.String("mint:component"), Value: aws.String("user")},
+					},
+				},
+				{
+					FileSystemId: aws.String("fs-admin1"),
+					Tags: []efstypes.Tag{
+						{Key: aws.String("mint"), Value: aws.String("true")},
+						{Key: aws.String("mint:component"), Value: aws.String("admin")},
+					},
+				},
+			},
+		},
+	}
+
+	efsID, err := discoverEFS(context.Background(), stub)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if efsID != "fs-admin1" {
+		t.Errorf("efsID = %q, want %q (should skip non-admin)", efsID, "fs-admin1")
+	}
+}
+
+func TestUpCommandPopulatesEFSID(t *testing.T) {
+	buf := new(bytes.Buffer)
+	cmd := &cobra.Command{}
+	cmd.SetOut(buf)
+
+	cliCtx := &cli.CLIContext{VM: "default"}
+	ctx := cli.WithContext(context.Background(), cliCtx)
+	cmd.SetContext(ctx)
+
+	efsStub := &stubUpDescribeFileSystems{
+		output: &efs.DescribeFileSystemsOutput{
+			FileSystems: []efstypes.FileSystemDescription{
+				{
+					FileSystemId: aws.String("fs-wire123"),
+					Tags: []efstypes.Tag{
+						{Key: aws.String("mint"), Value: aws.String("true")},
+						{Key: aws.String("mint:component"), Value: aws.String("admin")},
+					},
+				},
+			},
+		},
+	}
+
+	deps := newTestUpDeps()
+	deps.describeFileSystems = efsStub
+
+	err := runUp(cmd, deps)
+	if err != nil {
+		t.Fatalf("runUp error: %v", err)
+	}
+
+	// The command should succeed. The EFSID is passed to ProvisionConfig internally.
+	// We verify no error occurred (the provisioner ran successfully with EFSID wired).
+	output := buf.String()
+	if !strings.Contains(output, "i-test123") {
+		t.Errorf("output should contain instance ID, got:\n%s", output)
+	}
+}
+
+func TestUpCommandEFSDiscoveryFailure(t *testing.T) {
+	buf := new(bytes.Buffer)
+	cmd := &cobra.Command{}
+	cmd.SetOut(buf)
+
+	cliCtx := &cli.CLIContext{VM: "default"}
+	ctx := cli.WithContext(context.Background(), cliCtx)
+	cmd.SetContext(ctx)
+
+	efsStub := &stubUpDescribeFileSystems{
+		err: fmt.Errorf("EFS service unavailable"),
+	}
+
+	deps := newTestUpDeps()
+	deps.describeFileSystems = efsStub
+
+	err := runUp(cmd, deps)
+	if err == nil {
+		t.Fatal("expected error when EFS discovery fails")
+	}
+	if !strings.Contains(err.Error(), "discovering EFS") {
+		t.Errorf("error = %q, want substring %q", err.Error(), "discovering EFS")
 	}
 }

@@ -69,6 +69,20 @@ func TestAWSClientsFromContext_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestAWSClientsHasEFSClient(t *testing.T) {
+	// Verify the awsClients struct has an efsClient field.
+	// We can't create a real efs.Client without AWS config, but we can
+	// verify the field exists and is typed correctly by setting it to nil.
+	clients := &awsClients{
+		owner:     "test-user",
+		ownerARN:  "arn:aws:iam::123456789012:user/test-user",
+		efsClient: nil,
+	}
+	if clients.efsClient != nil {
+		t.Error("efsClient should be nil when not initialized")
+	}
+}
+
 func TestInitAWSClientsDebugMode(t *testing.T) {
 	// Verify that initAWSClients does not panic or error when the debug
 	// flag is set on the CLIContext. We cannot easily inspect the resulting

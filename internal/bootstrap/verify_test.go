@@ -116,6 +116,17 @@ func TestScriptContent(t *testing.T) {
 		{"reconciliation script", "/usr/local/bin/mint-reconcile"},
 		{"reconciliation after network", "network-online.target"},
 		{"reconciliation oneshot", "Type=oneshot"},
+		// Drift detection and health tagging in reconcile script
+		{"drift detection array", "DRIFT_ISSUES"},
+		{"health status variable", "HEALTH_STATUS"},
+		{"health tag", "mint:health"},
+		{"reconcile IMDSv2 token", "X-aws-ec2-metadata-token-ttl-seconds"},
+		{"docker drift check", "docker_missing"},
+		{"ssh port drift check", "ssh_port_drift"},
+		{"mosh drift check", "mosh_missing"},
+		{"tmux drift check", "tmux_missing"},
+		{"nodejs drift check", "nodejs_missing"},
+		{"reconcile health logging", "reconciliation complete: health="},
 	}
 
 	for _, elem := range requiredElements {

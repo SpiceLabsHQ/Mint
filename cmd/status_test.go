@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -307,6 +308,104 @@ func TestStatusShowsVersionNotice(t *testing.T) {
 	// Default version in tests is "dev" (set in cmd/version.go)
 	if !strings.Contains(output, "mint dev") {
 		t.Errorf("output missing version notice, got:\n%s", output)
+	}
+}
+
+func TestStatusAppendsVersionNoticeInHumanMode(t *testing.T) {
+	// Seed a version cache file with a newer version so appendVersionNotice
+	// will produce output. This test verifies that runStatus calls
+	// appendVersionNotice after writeStatusHuman in human output mode.
+	//
+	// appendVersionNotice uses isUpdateAvailable which returns false for the
+	// "dev" build-time default. Set version to a real semver for this test
+	// so the update banner is triggered, then restore the original value.
+	origVersion := version
+	version = "v1.0.0"
+	t.Cleanup(func() { version = origVersion })
+
+	tmpDir := t.TempDir()
+	cacheJSON := `{"latest_version":"v99.0.0","checked_at":"` +
+		time.Now().UTC().Format(time.RFC3339) + `"}`
+	if err := os.WriteFile(
+		tmpDir+"/version-cache.json",
+		[]byte(cacheJSON),
+		0o644,
+	); err != nil {
+		t.Fatalf("writing version cache: %v", err)
+	}
+	t.Setenv("MINT_CONFIG_DIR", tmpDir)
+
+	recentLaunch := time.Now().Add(-30 * time.Minute)
+	buf := new(bytes.Buffer)
+
+	deps := &statusDeps{
+		describe: &mockDescribeInstances{
+			output: makeInstanceWithTime("i-vn1", "default", "alice", "running", "1.2.3.4", "m6i.xlarge", "complete", recentLaunch),
+		},
+		owner: "alice",
+	}
+
+	cmd := newStatusCommandWithDeps(deps)
+	root := newTestRoot()
+	root.AddCommand(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"status"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "v99.0.0") {
+		t.Errorf("version notice missing from human output; got:\n%s", output)
+	}
+}
+
+func TestStatusDoesNotAppendVersionNoticeInJSONMode(t *testing.T) {
+	// Seed a version cache file with a newer version. In JSON mode,
+	// appendVersionNotice must NOT be called, so the output stays valid JSON.
+	tmpDir := t.TempDir()
+	cacheJSON := `{"latest_version":"v99.0.0","checked_at":"` +
+		time.Now().UTC().Format(time.RFC3339) + `"}`
+	if err := os.WriteFile(
+		tmpDir+"/version-cache.json",
+		[]byte(cacheJSON),
+		0o644,
+	); err != nil {
+		t.Fatalf("writing version cache: %v", err)
+	}
+	t.Setenv("MINT_CONFIG_DIR", tmpDir)
+
+	recentLaunch := time.Now().Add(-30 * time.Minute)
+	buf := new(bytes.Buffer)
+
+	deps := &statusDeps{
+		describe: &mockDescribeInstances{
+			output: makeInstanceWithTime("i-vn2", "default", "alice", "running", "1.2.3.4", "m6i.xlarge", "complete", recentLaunch),
+		},
+		owner: "alice",
+	}
+
+	cmd := newStatusCommandWithDeps(deps)
+	root := newTestRoot()
+	root.AddCommand(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"status", "--json"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := buf.String()
+	// JSON output must remain a valid object — no version banner appended.
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &result); err != nil {
+		t.Errorf("JSON output is not valid (version notice may have been appended): %v\nOutput: %s", err, output)
+	}
+	if strings.Contains(output, "v99.0.0") {
+		t.Errorf("version notice must NOT appear in JSON output; got:\n%s", output)
 	}
 }
 

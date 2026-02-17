@@ -5,25 +5,31 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/efs"
+	efstypes "github.com/aws/aws-sdk-go-v2/service/efs/types"
+
 	mintaws "github.com/nicholasgasior/mint/internal/aws"
 	"github.com/nicholasgasior/mint/internal/cli"
 	"github.com/nicholasgasior/mint/internal/provision"
 	"github.com/nicholasgasior/mint/internal/sshconfig"
+	"github.com/nicholasgasior/mint/internal/tags"
 	"github.com/nicholasgasior/mint/internal/vm"
 	"github.com/spf13/cobra"
 )
 
 // upDeps holds the injectable dependencies for the up command.
 type upDeps struct {
-	provisioner       *provision.Provisioner
-	owner             string
-	ownerARN          string
-	bootstrapScript   []byte
-	instanceType      string
-	volumeSize        int32
-	sshConfigApproved bool
-	sshConfigPath     string
-	describe          mintaws.DescribeInstancesAPI
+	provisioner         *provision.Provisioner
+	owner               string
+	ownerARN            string
+	bootstrapScript     []byte
+	instanceType        string
+	volumeSize          int32
+	sshConfigApproved   bool
+	sshConfigPath       string
+	describe            mintaws.DescribeInstancesAPI
+	describeFileSystems mintaws.DescribeFileSystemsAPI
 }
 
 // newUpCommand creates the production up command.
@@ -75,13 +81,14 @@ func newUpCommandWithDeps(deps *upDeps) *cobra.Command {
 					clients.ec2Client, // CreateTagsAPI
 					clients.ssmClient, // GetParameterAPI
 				).WithBootstrapPoller(poller),
-				owner:             clients.owner,
-				ownerARN:          clients.ownerARN,
-				bootstrapScript:   GetBootstrapScript(),
-				instanceType:      clients.mintConfig.InstanceType,
-				volumeSize:        int32(clients.mintConfig.VolumeSizeGB),
-				sshConfigApproved: sshApproved,
-				describe:          clients.ec2Client,
+				owner:               clients.owner,
+				ownerARN:            clients.ownerARN,
+				bootstrapScript:     GetBootstrapScript(),
+				instanceType:        clients.mintConfig.InstanceType,
+				volumeSize:          int32(clients.mintConfig.VolumeSizeGB),
+				sshConfigApproved:   sshApproved,
+				describe:            clients.ec2Client,
+				describeFileSystems: clients.efsClient,
 			})
 		},
 	}
@@ -110,10 +117,17 @@ func runUp(cmd *cobra.Command, deps *upDeps) error {
 		fmt.Fprintf(w, "Provisioning VM %q for owner %q...\n", vmName, deps.owner)
 	}
 
+	// Discover admin EFS filesystem (same pattern as mint init).
+	efsID, err := discoverEFS(ctx, deps.describeFileSystems)
+	if err != nil {
+		return fmt.Errorf("discovering EFS: %w", err)
+	}
+
 	cfg := provision.ProvisionConfig{
 		InstanceType:    deps.instanceType,
 		VolumeSize:      deps.volumeSize,
 		BootstrapScript: deps.bootstrapScript,
+		EFSID:           efsID,
 	}
 
 	result, err := deps.provisioner.Run(ctx, deps.owner, deps.ownerARN, vmName, cfg)
@@ -212,6 +226,34 @@ func writeSSHConfigAfterUp(ctx context.Context, cmd *cobra.Command, deps *upDeps
 	if err := sshconfig.WriteManagedBlock(configPath, vmName, block); err != nil {
 		fmt.Fprintf(w, "Warning: could not update ssh config: %v\n", err)
 	}
+}
+
+// discoverEFS finds the admin EFS filesystem by tags (mint=true, mint:component=admin).
+// This mirrors the discovery logic in internal/provision/init.go but lives in cmd/
+// because it is command-level wiring, not provisioning logic.
+func discoverEFS(ctx context.Context, client mintaws.DescribeFileSystemsAPI) (string, error) {
+	out, err := client.DescribeFileSystems(ctx, &efs.DescribeFileSystemsInput{})
+	if err != nil {
+		return "", fmt.Errorf("describe EFS: %w", err)
+	}
+
+	for _, fs := range out.FileSystems {
+		tagMap := efsTagsToMap(fs.Tags)
+		if tagMap[tags.TagMint] == "true" && tagMap[tags.TagComponent] == "admin" {
+			return aws.ToString(fs.FileSystemId), nil
+		}
+	}
+
+	return "", fmt.Errorf("no admin EFS found — run 'mint init' first")
+}
+
+// efsTagsToMap converts EFS tags to a map for convenient lookup.
+func efsTagsToMap(efsTags []efstypes.Tag) map[string]string {
+	m := make(map[string]string, len(efsTags))
+	for _, tag := range efsTags {
+		m[aws.ToString(tag.Key)] = aws.ToString(tag.Value)
+	}
+	return m
 }
 
 // upWithProvisioner runs up with a pre-built Provisioner (for testing).

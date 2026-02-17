@@ -248,6 +248,64 @@ if mountpoint -q /mint/user 2>/dev/null; then
     log "EFS symlinks restored"
 fi
 
+# --- Version drift detection ---
+DRIFT_ISSUES=()
+
+# Check Docker
+if ! command -v docker &> /dev/null; then
+    DRIFT_ISSUES+=("docker_missing")
+elif ! systemctl is-active --quiet docker; then
+    DRIFT_ISSUES+=("docker_not_running")
+fi
+
+# Check Node.js
+if ! command -v node &> /dev/null; then
+    DRIFT_ISSUES+=("nodejs_missing")
+fi
+
+# Check SSH port configuration
+if ! grep -q "^Port 41122" /etc/ssh/sshd_config.d/mint.conf 2>/dev/null; then
+    DRIFT_ISSUES+=("ssh_port_drift")
+fi
+
+# Check mosh
+if ! command -v mosh-server &> /dev/null; then
+    DRIFT_ISSUES+=("mosh_missing")
+fi
+
+# Check tmux
+if ! command -v tmux &> /dev/null; then
+    DRIFT_ISSUES+=("tmux_missing")
+fi
+
+# --- Determine health status ---
+if [ ${#DRIFT_ISSUES[@]} -eq 0 ]; then
+    HEALTH_STATUS="healthy"
+else
+    HEALTH_STATUS="degraded"
+fi
+
+# --- Tag instance with health status ---
+TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" \
+    -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" 2>/dev/null) || true
+if [ -n "$TOKEN" ]; then
+    INSTANCE_ID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
+        http://169.254.169.254/latest/meta-data/instance-id 2>/dev/null) || true
+    REGION=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
+        http://169.254.169.254/latest/meta-data/placement/region 2>/dev/null) || true
+
+    if [ -n "$INSTANCE_ID" ] && [ -n "$REGION" ]; then
+        aws ec2 create-tags \
+            --resources "$INSTANCE_ID" \
+            --tags "Key=mint:health,Value=${HEALTH_STATUS}" \
+            --region "$REGION" 2>/dev/null || log "Failed to update health tag"
+    fi
+fi
+
+# --- Log reconciliation results ---
+DRIFT_JSON=$(printf '%s\n' "${DRIFT_ISSUES[@]:-}" | jq -R . 2>/dev/null | jq -s . 2>/dev/null || echo "[]")
+log "reconciliation complete: health=${HEALTH_STATUS} drift_issues=${DRIFT_JSON}"
+
 log "Boot reconciliation complete"
 RECONCILE_SCRIPT
 

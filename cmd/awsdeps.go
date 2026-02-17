@@ -13,6 +13,7 @@ import (
 	awscfg "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ec2instanceconnect"
+	"github.com/aws/aws-sdk-go-v2/service/efs"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 
@@ -27,6 +28,7 @@ type awsClients struct {
 	ec2Client *ec2.Client
 	ssmClient *ssm.Client
 	icClient  *ec2instanceconnect.Client
+	efsClient *efs.Client
 	owner     string // resolved owner name (mint:owner tag value)
 	ownerARN  string // resolved owner ARN (mint:owner-arn tag value)
 
@@ -98,6 +100,7 @@ func initAWSClients(ctx context.Context) (*awsClients, error) {
 		ec2Client:  ec2.NewFromConfig(cfg),
 		ssmClient:  ssm.NewFromConfig(cfg),
 		icClient:   ec2instanceconnect.NewFromConfig(cfg),
+		efsClient:  efs.NewFromConfig(cfg),
 		owner:      owner.Name,
 		ownerARN:   owner.ARN,
 		mintConfig: mintCfg,

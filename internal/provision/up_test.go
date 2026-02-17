@@ -857,13 +857,15 @@ func TestProvisionerInstanceTags(t *testing.T) {
 	}
 
 	assertions := map[string]string{
-		tags.TagMint:      "true",
-		tags.TagOwner:     "alice",
-		tags.TagOwnerARN:  "arn:aws:iam::123:user/alice",
-		tags.TagVM:        "default",
-		tags.TagComponent: tags.ComponentInstance,
-		tags.TagBootstrap: tags.BootstrapPending,
-		tags.TagName:      "mint/alice/default",
+		tags.TagMint:           "true",
+		tags.TagOwner:          "alice",
+		tags.TagOwnerARN:       "arn:aws:iam::123:user/alice",
+		tags.TagVM:             "default",
+		tags.TagComponent:      tags.ComponentInstance,
+		tags.TagBootstrap:      tags.BootstrapPending,
+		tags.TagName:           "mint/alice/default",
+		tags.TagRootVolumeGB:   "200",
+		tags.TagProjectVolumeGB: "50",
 	}
 
 	for key, want := range assertions {
@@ -1272,6 +1274,80 @@ func TestProvisionerNoPollOnRestart(t *testing.T) {
 	}
 	if !result.Restarted {
 		t.Error("result.Restarted should be true")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests: Volume size tags on instance (ADR-0004)
+// ---------------------------------------------------------------------------
+
+func TestLaunchInstanceIncludesVolumeTagsDefault(t *testing.T) {
+	m := newUpHappyMocks()
+	p := m.build()
+
+	cfg := defaultConfig()
+	cfg.VolumeSize = 0 // should default to 50
+
+	_, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	input := m.runInstances.input
+	if len(input.TagSpecifications) == 0 {
+		t.Fatal("no TagSpecifications on RunInstances")
+	}
+
+	tagMap := make(map[string]string)
+	for _, tag := range input.TagSpecifications[0].Tags {
+		tagMap[aws.ToString(tag.Key)] = aws.ToString(tag.Value)
+	}
+
+	if got, ok := tagMap[tags.TagRootVolumeGB]; !ok {
+		t.Errorf("missing tag %q on instance", tags.TagRootVolumeGB)
+	} else if got != "200" {
+		t.Errorf("tag %q = %q, want %q", tags.TagRootVolumeGB, got, "200")
+	}
+
+	if got, ok := tagMap[tags.TagProjectVolumeGB]; !ok {
+		t.Errorf("missing tag %q on instance", tags.TagProjectVolumeGB)
+	} else if got != "50" {
+		t.Errorf("tag %q = %q, want %q (default)", tags.TagProjectVolumeGB, got, "50")
+	}
+}
+
+func TestLaunchInstanceIncludesVolumeTagsCustom(t *testing.T) {
+	m := newUpHappyMocks()
+	p := m.build()
+
+	cfg := defaultConfig()
+	cfg.VolumeSize = 100
+
+	_, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	input := m.runInstances.input
+	if len(input.TagSpecifications) == 0 {
+		t.Fatal("no TagSpecifications on RunInstances")
+	}
+
+	tagMap := make(map[string]string)
+	for _, tag := range input.TagSpecifications[0].Tags {
+		tagMap[aws.ToString(tag.Key)] = aws.ToString(tag.Value)
+	}
+
+	if got, ok := tagMap[tags.TagRootVolumeGB]; !ok {
+		t.Errorf("missing tag %q on instance", tags.TagRootVolumeGB)
+	} else if got != "200" {
+		t.Errorf("tag %q = %q, want %q", tags.TagRootVolumeGB, got, "200")
+	}
+
+	if got, ok := tagMap[tags.TagProjectVolumeGB]; !ok {
+		t.Errorf("missing tag %q on instance", tags.TagProjectVolumeGB)
+	} else if got != "100" {
+		t.Errorf("tag %q = %q, want %q", tags.TagProjectVolumeGB, got, "100")
 	}
 }
 

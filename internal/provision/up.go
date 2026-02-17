@@ -404,6 +404,16 @@ func (p *Provisioner) launchInstance(
 		WithBootstrap(tags.BootstrapPending).
 		Build()
 
+	// Add volume size tags for mint status to read back (ADR-0004).
+	projectVolSize := cfg.VolumeSize
+	if projectVolSize == 0 {
+		projectVolSize = 50
+	}
+	instanceTags = append(instanceTags,
+		ec2types.Tag{Key: aws.String(tags.TagRootVolumeGB), Value: aws.String("200")},
+		ec2types.Tag{Key: aws.String(tags.TagProjectVolumeGB), Value: aws.String(strconv.Itoa(int(projectVolSize)))},
+	)
+
 	instanceType := ec2types.InstanceType(cfg.InstanceType)
 
 	input := &ec2.RunInstancesInput{

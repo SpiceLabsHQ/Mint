@@ -96,6 +96,7 @@ func runStatus(cmd *cobra.Command, deps *statusDeps) error {
 	}
 
 	writeStatusHuman(w, found)
+	appendVersionNotice(w)
 	return nil
 }
 
