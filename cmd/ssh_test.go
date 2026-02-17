@@ -64,6 +64,27 @@ func makeRunningInstanceWithAZ(id, vmName, owner, ip, az string) *ec2.DescribeIn
 	}
 }
 
+// makeRunningInstanceNoAZ returns a DescribeInstancesOutput with a running instance
+// that has no Placement/AvailabilityZone set — simulates a malformed response.
+func makeRunningInstanceNoAZ(id, vmName, owner, ip string) *ec2.DescribeInstancesOutput {
+	return &ec2.DescribeInstancesOutput{
+		Reservations: []ec2types.Reservation{{
+			Instances: []ec2types.Instance{{
+				InstanceId:      aws.String(id),
+				InstanceType:    ec2types.InstanceTypeT3Medium,
+				PublicIpAddress: aws.String(ip),
+				State: &ec2types.InstanceState{
+					Name: ec2types.InstanceStateNameRunning,
+				},
+				Tags: []ec2types.Tag{
+					{Key: aws.String("mint:vm"), Value: aws.String(vmName)},
+					{Key: aws.String("mint:owner"), Value: aws.String(owner)},
+				},
+			}},
+		}},
+	}
+}
+
 // makeStoppedInstanceForSSH returns a DescribeInstancesOutput with a stopped instance.
 func makeStoppedInstanceForSSH(id, vmName, owner string) *ec2.DescribeInstancesOutput {
 	return &ec2.DescribeInstancesOutput{
@@ -350,6 +371,41 @@ func TestSSHCommand(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestSSHCommandEmptyAvailabilityZone(t *testing.T) {
+	describe := &mockDescribeForSSH{
+		output: makeRunningInstanceNoAZ("i-abc123", "default", "alice", "1.2.3.4"),
+	}
+	sendKey := &mockSendSSHPublicKey{}
+
+	var captured capturedCommand
+	deps := &sshDeps{
+		describe: describe,
+		sendKey:  sendKey,
+		owner:    "alice",
+		runner: func(name string, args ...string) error {
+			captured.name = name
+			captured.args = args
+			return nil
+		},
+	}
+
+	err := runSSHWithDeps(t, deps, "default")
+	if err == nil {
+		t.Fatal("expected error for empty availability zone, got nil")
+	}
+	if !strings.Contains(err.Error(), "no availability zone") {
+		t.Errorf("error %q does not contain 'no availability zone'", err.Error())
+	}
+	// SSH should NOT have been executed.
+	if captured.name != "" {
+		t.Errorf("ssh should not have been executed, got: %s %v", captured.name, captured.args)
+	}
+	// SendSSHPublicKey should NOT have been called.
+	if sendKey.called {
+		t.Error("SendSSHPublicKey should not have been called when AZ is empty")
 	}
 }
 

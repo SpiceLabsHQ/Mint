@@ -12,9 +12,9 @@ import (
 // persistent flags registered. Subcommands are attached here.
 func NewRootCommand() *cobra.Command {
 	rootCmd := &cobra.Command{
-		Use:   "mint",
-		Short: "Provision and manage EC2-based development environments",
-		Long:  "Provision and manage EC2-based development environments for running Claude Code.",
+		Use:           "mint",
+		Short:         "Provision and manage EC2-based development environments",
+		Long:          "Provision and manage EC2-based development environments for running Claude Code.",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
@@ -56,6 +56,14 @@ func NewRootCommand() *cobra.Command {
 	rootCmd.AddCommand(newStatusCommand())
 	rootCmd.AddCommand(newSSHCommand())
 	rootCmd.AddCommand(newCodeCommand())
+
+	// Phase 2: Connectivity & session commands
+	rootCmd.AddCommand(newMoshCommand())
+	rootCmd.AddCommand(newConnectCommand())
+	rootCmd.AddCommand(newSessionsCommand())
+	rootCmd.AddCommand(newKeyCommand())
+	rootCmd.AddCommand(newProjectCommand())
+	rootCmd.AddCommand(newExtendCommand())
 
 	return rootCmd
 }
