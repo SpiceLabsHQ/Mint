@@ -3,6 +3,7 @@ package provision
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -10,6 +11,8 @@ import (
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/efs"
 	efstypes "github.com/aws/aws-sdk-go-v2/service/efs/types"
+	"github.com/aws/aws-sdk-go-v2/service/iam"
+	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 )
 
 // ---------------------------------------------------------------------------
@@ -97,20 +100,30 @@ func (m *mockCreateAccessPoint) CreateAccessPoint(ctx context.Context, params *e
 	return m.output, m.err
 }
 
+type mockGetInstanceProfile struct {
+	output *iam.GetInstanceProfileOutput
+	err    error
+}
+
+func (m *mockGetInstanceProfile) GetInstanceProfile(ctx context.Context, params *iam.GetInstanceProfileInput, optFns ...func(*iam.Options)) (*iam.GetInstanceProfileOutput, error) {
+	return m.output, m.err
+}
+
 // ---------------------------------------------------------------------------
 // Helper: build an Initializer with all mocks wired up
 // ---------------------------------------------------------------------------
 
 type initMocks struct {
-	vpcs          *mockDescribeVpcs
-	subnets       *mockDescribeSubnets
-	fileSystems   *mockDescribeFileSystems
-	describeSGs   *mockDescribeSecurityGroups
-	createSG      *mockCreateSecurityGroup
-	authorizeIn   *mockAuthorizeIngress
-	createTags    *mockCreateTags
-	describeAPs   *mockDescribeAccessPoints
-	createAP      *mockCreateAccessPoint
+	vpcs            *mockDescribeVpcs
+	subnets         *mockDescribeSubnets
+	fileSystems     *mockDescribeFileSystems
+	instanceProfile *mockGetInstanceProfile
+	describeSGs     *mockDescribeSecurityGroups
+	createSG        *mockCreateSecurityGroup
+	authorizeIn     *mockAuthorizeIngress
+	createTags      *mockCreateTags
+	describeAPs     *mockDescribeAccessPoints
+	createAP        *mockCreateAccessPoint
 }
 
 func newHappyMocks() *initMocks {
@@ -140,6 +153,13 @@ func newHappyMocks() *initMocks {
 							{Key: aws.String("mint:component"), Value: aws.String("admin")},
 						},
 					},
+				},
+			},
+		},
+		instanceProfile: &mockGetInstanceProfile{
+			output: &iam.GetInstanceProfileOutput{
+				InstanceProfile: &iamtypes.InstanceProfile{
+					InstanceProfileName: aws.String("mint-vm"),
 				},
 			},
 		},
@@ -177,6 +197,7 @@ func (m *initMocks) build() *Initializer {
 		m.vpcs,
 		m.subnets,
 		m.fileSystems,
+		m.instanceProfile,
 		m.describeSGs,
 		m.createSG,
 		m.authorizeIn,
@@ -281,7 +302,7 @@ func TestValidateVPC(t *testing.T) {
 				if err == nil {
 					t.Fatalf("expected error containing %q, got nil", tt.wantErr)
 				}
-				if !containsStr(err.Error(), tt.wantErr) {
+				if !strings.Contains(err.Error(), tt.wantErr) {
 					t.Errorf("error = %q, want substring %q", err.Error(), tt.wantErr)
 				}
 				return
@@ -351,7 +372,7 @@ func TestDiscoverEFS(t *testing.T) {
 				if err == nil {
 					t.Fatalf("expected error containing %q, got nil", tt.wantErr)
 				}
-				if !containsStr(err.Error(), tt.wantErr) {
+				if !strings.Contains(err.Error(), tt.wantErr) {
 					t.Errorf("error = %q, want substring %q", err.Error(), tt.wantErr)
 				}
 				return
@@ -465,7 +486,7 @@ func TestEnsureSecurityGroup(t *testing.T) {
 				if err == nil {
 					t.Fatalf("expected error containing %q, got nil", tt.wantErr)
 				}
-				if !containsStr(err.Error(), tt.wantErr) {
+				if !strings.Contains(err.Error(), tt.wantErr) {
 					t.Errorf("error = %q, want substring %q", err.Error(), tt.wantErr)
 				}
 				return
@@ -550,13 +571,75 @@ func TestEnsureAccessPoint(t *testing.T) {
 			}
 			init := m.build()
 
-			err := init.ensureAccessPoint(context.Background(), "fs-12345", "testowner", "arn:aws:iam::123456789012:user/testowner", "default")
+			_, err := init.ensureAccessPointResult(context.Background(), "fs-12345", "testowner", "arn:aws:iam::123456789012:user/testowner", "default")
 
 			if tt.wantErr != "" {
 				if err == nil {
 					t.Fatalf("expected error containing %q, got nil", tt.wantErr)
 				}
-				if !containsStr(err.Error(), tt.wantErr) {
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Errorf("error = %q, want substring %q", err.Error(), tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests: Instance profile validation
+// ---------------------------------------------------------------------------
+
+func TestValidateInstanceProfile(t *testing.T) {
+	tests := []struct {
+		name    string
+		mock    *mockGetInstanceProfile
+		wantErr string
+	}{
+		{
+			name: "instance profile exists",
+			mock: &mockGetInstanceProfile{
+				output: &iam.GetInstanceProfileOutput{
+					InstanceProfile: &iamtypes.InstanceProfile{
+						InstanceProfileName: aws.String("mint-vm"),
+					},
+				},
+			},
+		},
+		{
+			name: "instance profile missing (NoSuchEntity)",
+			mock: &mockGetInstanceProfile{
+				err: &iamtypes.NoSuchEntityException{
+					Message: aws.String("Instance Profile mint-vm cannot be found"),
+				},
+			},
+			wantErr: "instance profile \"mint-vm\" not found",
+		},
+		{
+			name: "IAM API error propagated",
+			mock: &mockGetInstanceProfile{
+				err: errors.New("access denied"),
+			},
+			wantErr: "get instance profile",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newHappyMocks()
+			m.instanceProfile = tt.mock
+			init := m.build()
+
+			err := init.validateInstanceProfile(context.Background())
+
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", tt.wantErr)
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
 					t.Errorf("error = %q, want substring %q", err.Error(), tt.wantErr)
 				}
 				return
@@ -621,6 +704,16 @@ func TestRunFullFlow(t *testing.T) {
 			wantErr: "no admin EFS filesystem found",
 		},
 		{
+			name: "fails on instance profile validation",
+			setup: func(m *initMocks) {
+				m.instanceProfile.err = &iamtypes.NoSuchEntityException{
+					Message: aws.String("not found"),
+				}
+				m.instanceProfile.output = nil
+			},
+			wantErr: "instance profile",
+		},
+		{
 			name: "fails on SG creation",
 			setup: func(m *initMocks) {
 				m.createSG.err = errors.New("sg boom")
@@ -648,7 +741,7 @@ func TestRunFullFlow(t *testing.T) {
 				if err == nil {
 					t.Fatalf("expected error containing %q, got nil", tt.wantErr)
 				}
-				if !containsStr(err.Error(), tt.wantErr) {
+				if !strings.Contains(err.Error(), tt.wantErr) {
 					t.Errorf("error = %q, want substring %q", err.Error(), tt.wantErr)
 				}
 				return
@@ -669,19 +762,3 @@ func TestRunFullFlow(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Helper
-// ---------------------------------------------------------------------------
-
-func containsStr(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsSubstring(s, substr))
-}
-
-func containsSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
-}

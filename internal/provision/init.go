@@ -7,6 +7,7 @@ package provision
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -14,10 +15,17 @@ import (
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/efs"
 	efstypes "github.com/aws/aws-sdk-go-v2/service/efs/types"
+	"github.com/aws/aws-sdk-go-v2/service/iam"
+	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 
 	mintaws "github.com/nicholasgasior/mint/internal/aws"
 	"github.com/nicholasgasior/mint/internal/tags"
 )
+
+// defaultInstanceProfileName is the IAM instance profile created by the admin
+// CloudFormation stack. EC2 instances launched by mint up require this profile
+// for Instance Connect, EFS mount, self-stop, and bootstrap tag updates.
+const defaultInstanceProfileName = "mint-vm"
 
 // InitResult holds the outcome of a successful init run.
 type InitResult struct {
@@ -32,15 +40,16 @@ type InitResult struct {
 // Initializer validates prerequisites and creates per-user resources.
 // All AWS dependencies are injected via narrow interfaces for testability.
 type Initializer struct {
-	vpcs        mintaws.DescribeVpcsAPI
-	subnets     mintaws.DescribeSubnetsAPI
-	fileSystems mintaws.DescribeFileSystemsAPI
-	describeSGs mintaws.DescribeSecurityGroupsAPI
-	createSG    mintaws.CreateSecurityGroupAPI
-	authorizeIn mintaws.AuthorizeSecurityGroupIngressAPI
-	createTags  mintaws.CreateTagsAPI
-	describeAPs mintaws.DescribeAccessPointsAPI
-	createAP    mintaws.CreateAccessPointAPI
+	vpcs            mintaws.DescribeVpcsAPI
+	subnets         mintaws.DescribeSubnetsAPI
+	fileSystems     mintaws.DescribeFileSystemsAPI
+	instanceProfile mintaws.GetInstanceProfileAPI
+	describeSGs     mintaws.DescribeSecurityGroupsAPI
+	createSG        mintaws.CreateSecurityGroupAPI
+	authorizeIn     mintaws.AuthorizeSecurityGroupIngressAPI
+	createTags      mintaws.CreateTagsAPI
+	describeAPs     mintaws.DescribeAccessPointsAPI
+	createAP        mintaws.CreateAccessPointAPI
 }
 
 // NewInitializer creates an Initializer with all required AWS interfaces.
@@ -48,6 +57,7 @@ func NewInitializer(
 	vpcs mintaws.DescribeVpcsAPI,
 	subnets mintaws.DescribeSubnetsAPI,
 	fileSystems mintaws.DescribeFileSystemsAPI,
+	instanceProfile mintaws.GetInstanceProfileAPI,
 	describeSGs mintaws.DescribeSecurityGroupsAPI,
 	createSG mintaws.CreateSecurityGroupAPI,
 	authorizeIn mintaws.AuthorizeSecurityGroupIngressAPI,
@@ -56,15 +66,16 @@ func NewInitializer(
 	createAP mintaws.CreateAccessPointAPI,
 ) *Initializer {
 	return &Initializer{
-		vpcs:        vpcs,
-		subnets:     subnets,
-		fileSystems: fileSystems,
-		describeSGs: describeSGs,
-		createSG:    createSG,
-		authorizeIn: authorizeIn,
-		createTags:  createTags,
-		describeAPs: describeAPs,
-		createAP:    createAP,
+		vpcs:            vpcs,
+		subnets:         subnets,
+		fileSystems:     fileSystems,
+		instanceProfile: instanceProfile,
+		describeSGs:     describeSGs,
+		createSG:        createSG,
+		authorizeIn:     authorizeIn,
+		createTags:      createTags,
+		describeAPs:     describeAPs,
+		createAP:        createAP,
 	}
 }
 
@@ -75,6 +86,11 @@ func (i *Initializer) Run(ctx context.Context, owner, ownerARN, vmName string) (
 	vpcID, err := i.validateVPC(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("vpc validation: %w", err)
+	}
+
+	// Step 1.5: Validate admin-created IAM instance profile exists.
+	if err := i.validateInstanceProfile(ctx); err != nil {
+		return nil, fmt.Errorf("instance profile: %w", err)
 	}
 
 	// Step 2: Discover admin EFS filesystem.
@@ -150,6 +166,28 @@ func (i *Initializer) validateVPC(ctx context.Context) (string, error) {
 	}
 
 	return vpcID, nil
+}
+
+// ---------------------------------------------------------------------------
+// Instance profile validation
+// ---------------------------------------------------------------------------
+
+// validateInstanceProfile checks that the admin-created IAM instance profile
+// exists. Without this profile, EC2 instances cannot use Instance Connect,
+// mount EFS, perform self-stop, or update bootstrap tags.
+func (i *Initializer) validateInstanceProfile(ctx context.Context) error {
+	_, err := i.instanceProfile.GetInstanceProfile(ctx, &iam.GetInstanceProfileInput{
+		InstanceProfileName: aws.String(defaultInstanceProfileName),
+	})
+	if err != nil {
+		var noSuchEntity *iamtypes.NoSuchEntityException
+		if errors.As(err, &noSuchEntity) {
+			return fmt.Errorf("instance profile %q not found; run the admin setup "+
+				"CloudFormation stack first (see docs/admin-setup.md)", defaultInstanceProfileName)
+		}
+		return fmt.Errorf("get instance profile %q: %w", defaultInstanceProfileName, err)
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------
@@ -268,13 +306,6 @@ func (i *Initializer) ensureSecurityGroup(ctx context.Context, vpcID, owner, own
 type apResult struct {
 	accessPointID string
 	created       bool
-}
-
-// ensureAccessPoint creates the per-user EFS access point if it does not already
-// exist. Discovery is by EFS access point tags.
-func (i *Initializer) ensureAccessPoint(ctx context.Context, fsID, owner, ownerARN, vmName string) error {
-	_, err := i.ensureAccessPointResult(ctx, fsID, owner, ownerARN, vmName)
-	return err
 }
 
 func (i *Initializer) ensureAccessPointResult(ctx context.Context, fsID, owner, ownerARN, vmName string) (*apResult, error) {

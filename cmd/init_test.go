@@ -12,6 +12,8 @@ import (
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/efs"
 	efstypes "github.com/aws/aws-sdk-go-v2/service/efs/types"
+	"github.com/aws/aws-sdk-go-v2/service/iam"
+	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 
 	"github.com/nicholasgasior/mint/internal/cli"
 	"github.com/nicholasgasior/mint/internal/provision"
@@ -103,6 +105,15 @@ func (s *stubCreateAccessPoint) CreateAccessPoint(ctx context.Context, params *e
 	return s.output, s.err
 }
 
+type stubGetInstanceProfile struct {
+	output *iam.GetInstanceProfileOutput
+	err    error
+}
+
+func (s *stubGetInstanceProfile) GetInstanceProfile(ctx context.Context, params *iam.GetInstanceProfileInput, optFns ...func(*iam.Options)) (*iam.GetInstanceProfileOutput, error) {
+	return s.output, s.err
+}
+
 // newTestInitializer builds an Initializer with happy-path stubs.
 func newTestInitializer() *provision.Initializer {
 	return provision.NewInitializer(
@@ -120,6 +131,11 @@ func newTestInitializer() *provision.Initializer {
 					{Key: aws.String("mint:component"), Value: aws.String("admin")},
 				},
 			}},
+		}},
+		&stubGetInstanceProfile{output: &iam.GetInstanceProfileOutput{
+			InstanceProfile: &iamtypes.InstanceProfile{
+				InstanceProfileName: aws.String("mint-vm"),
+			},
 		}},
 		&stubDescribeSecurityGroups{output: &ec2.DescribeSecurityGroupsOutput{
 			SecurityGroups: []ec2types.SecurityGroup{},
@@ -224,6 +240,11 @@ func TestInitCommandError(t *testing.T) {
 		&stubDescribeVpcs{output: &ec2.DescribeVpcsOutput{Vpcs: []ec2types.Vpc{}}},
 		&stubDescribeSubnets{output: &ec2.DescribeSubnetsOutput{}},
 		&stubDescribeFileSystems{output: &efs.DescribeFileSystemsOutput{}},
+		&stubGetInstanceProfile{output: &iam.GetInstanceProfileOutput{
+			InstanceProfile: &iamtypes.InstanceProfile{
+				InstanceProfileName: aws.String("mint-vm"),
+			},
+		}},
 		&stubDescribeSecurityGroups{output: &ec2.DescribeSecurityGroupsOutput{}},
 		&stubCreateSecurityGroup{output: &ec2.CreateSecurityGroupOutput{}},
 		&stubAuthorizeIngress{output: &ec2.AuthorizeSecurityGroupIngressOutput{}},
@@ -266,6 +287,11 @@ func TestInitCommandIdempotentOutput(t *testing.T) {
 					{Key: aws.String("mint:component"), Value: aws.String("admin")},
 				},
 			}},
+		}},
+		&stubGetInstanceProfile{output: &iam.GetInstanceProfileOutput{
+			InstanceProfile: &iamtypes.InstanceProfile{
+				InstanceProfileName: aws.String("mint-vm"),
+			},
 		}},
 		&stubDescribeSecurityGroups{output: &ec2.DescribeSecurityGroupsOutput{
 			SecurityGroups: []ec2types.SecurityGroup{

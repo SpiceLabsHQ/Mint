@@ -8,6 +8,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/efs"
+	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 
 	"github.com/nicholasgasior/mint/internal/cli"
@@ -54,11 +55,13 @@ func runInit(cmd *cobra.Command, args []string) error {
 	// Wire up AWS clients and run init.
 	ec2Client := ec2.NewFromConfig(cfg)
 	efsClient := efs.NewFromConfig(cfg)
+	iamClient := iam.NewFromConfig(cfg)
 
 	initializer := provision.NewInitializer(
 		ec2Client, // DescribeVpcsAPI
 		ec2Client, // DescribeSubnetsAPI
 		efsClient, // DescribeFileSystemsAPI
+		iamClient, // GetInstanceProfileAPI
 		ec2Client, // DescribeSecurityGroupsAPI
 		ec2Client, // CreateSecurityGroupAPI
 		ec2Client, // AuthorizeSecurityGroupIngressAPI
