@@ -1,0 +1,143 @@
+package logging
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"time"
+)
+
+// Auditor defines the interface for command invocation audit logging.
+// Each command execution is recorded with its context for traceability.
+type Auditor interface {
+	LogCommand(command, vmName, callerARN string) error
+	LogResourceCreate(resourceType, resourceID, vmName, callerARN string) error
+	LogResourceDestroy(resourceType, resourceID, vmName, callerARN string) error
+	LogError(command, vmName, callerARN string, err error) error
+	Close() error
+}
+
+// AuditEntry represents a single audit record that can represent any event type.
+type AuditEntry struct {
+	Timestamp    string `json:"timestamp"`
+	Type         string `json:"type"`
+	Command      string `json:"command,omitempty"`
+	VMName       string `json:"vm_name"`
+	CallerARN    string `json:"caller_arn"`
+	ResourceType string `json:"resource_type,omitempty"`
+	ResourceID   string `json:"resource_id,omitempty"`
+	Error        string `json:"error,omitempty"`
+}
+
+// AuditLogEntry represents a single command invocation audit record.
+// Retained for backward compatibility with existing LogCommand callers.
+type AuditLogEntry struct {
+	Timestamp string `json:"timestamp"`
+	Command   string `json:"command"`
+	VMName    string `json:"vm_name"`
+	CallerARN string `json:"caller_arn"`
+}
+
+// auditLogger appends JSON Lines entries to a single audit log file.
+type auditLogger struct {
+	file *os.File
+}
+
+// NewAuditLogger creates an Auditor that appends entries to the file at path.
+// The parent directory and file are created automatically if they do not exist.
+func NewAuditLogger(path string) (Auditor, error) {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, fmt.Errorf("create audit log dir: %w", err)
+	}
+
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open audit log: %w", err)
+	}
+
+	return &auditLogger{file: f}, nil
+}
+
+// LogCommand records a single command invocation as a JSON Lines entry.
+func (a *auditLogger) LogCommand(command, vmName, callerARN string) error {
+	entry := AuditLogEntry{
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Command:   command,
+		VMName:    vmName,
+		CallerARN: callerARN,
+	}
+
+	data, err := json.Marshal(entry)
+	if err != nil {
+		return fmt.Errorf("marshal audit entry: %w", err)
+	}
+
+	data = append(data, '\n')
+	if _, err := a.file.Write(data); err != nil {
+		return fmt.Errorf("write audit entry: %w", err)
+	}
+
+	return nil
+}
+
+// LogResourceCreate records a resource creation event as a JSON Lines entry.
+func (a *auditLogger) LogResourceCreate(resourceType, resourceID, vmName, callerARN string) error {
+	return a.writeEntry(AuditEntry{
+		Timestamp:    time.Now().UTC().Format(time.RFC3339),
+		Type:         "resource_create",
+		VMName:       vmName,
+		CallerARN:    callerARN,
+		ResourceType: resourceType,
+		ResourceID:   resourceID,
+	})
+}
+
+// LogResourceDestroy records a resource destruction event as a JSON Lines entry.
+func (a *auditLogger) LogResourceDestroy(resourceType, resourceID, vmName, callerARN string) error {
+	return a.writeEntry(AuditEntry{
+		Timestamp:    time.Now().UTC().Format(time.RFC3339),
+		Type:         "resource_destroy",
+		VMName:       vmName,
+		CallerARN:    callerARN,
+		ResourceType: resourceType,
+		ResourceID:   resourceID,
+	})
+}
+
+// LogError records a command error event as a JSON Lines entry.
+func (a *auditLogger) LogError(command, vmName, callerARN string, err error) error {
+	var errMsg string
+	if err != nil {
+		errMsg = err.Error()
+	}
+	return a.writeEntry(AuditEntry{
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Type:      "error",
+		Command:   command,
+		VMName:    vmName,
+		CallerARN: callerARN,
+		Error:     errMsg,
+	})
+}
+
+// writeEntry marshals and appends an AuditEntry as a JSON Lines entry.
+func (a *auditLogger) writeEntry(entry AuditEntry) error {
+	data, err := json.Marshal(entry)
+	if err != nil {
+		return fmt.Errorf("marshal audit entry: %w", err)
+	}
+
+	data = append(data, '\n')
+	if _, err := a.file.Write(data); err != nil {
+		return fmt.Errorf("write audit entry: %w", err)
+	}
+
+	return nil
+}
+
+// Close closes the underlying audit log file.
+func (a *auditLogger) Close() error {
+	return a.file.Close()
+}
