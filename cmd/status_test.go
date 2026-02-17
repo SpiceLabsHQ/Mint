@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -12,6 +13,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/aws/aws-sdk-go-v2/service/ec2instanceconnect"
+	mintaws "github.com/nicholasgasior/mint/internal/aws"
 )
 
 func TestStatusCommand(t *testing.T) {
@@ -440,5 +443,306 @@ func TestStatusJSONIncludesVersion(t *testing.T) {
 		t.Error("JSON output missing mint_version field")
 	} else if v.(string) != "dev" {
 		t.Errorf("mint_version = %q, want %q", v, "dev")
+	}
+}
+
+func TestStatusShowsDiskUsage(t *testing.T) {
+	buf := new(bytes.Buffer)
+
+	deps := &statusDeps{
+		describe: &mockDescribeInstances{
+			output: makeRunningInstanceWithAZ("i-disk1", "default", "alice", "1.2.3.4", "us-east-1a"),
+		},
+		sendKey:   &mockSendSSHPublicKey{output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true}},
+		owner:     "alice",
+		remoteRun: mockRemoteCommandRunner([]byte("Use%\n 42%\n"), nil),
+	}
+
+	cmd := newStatusCommandWithDeps(deps)
+	root := newTestRoot()
+	root.AddCommand(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"status"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "Disk:      42%") {
+		t.Errorf("output missing disk usage, got:\n%s", output)
+	}
+	if strings.Contains(output, "[WARN]") {
+		t.Errorf("output should NOT contain [WARN] for 42%%, got:\n%s", output)
+	}
+}
+
+func TestStatusDiskUsageWarning(t *testing.T) {
+	buf := new(bytes.Buffer)
+
+	deps := &statusDeps{
+		describe: &mockDescribeInstances{
+			output: makeRunningInstanceWithAZ("i-disk2", "default", "alice", "1.2.3.4", "us-east-1a"),
+		},
+		sendKey:   &mockSendSSHPublicKey{output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true}},
+		owner:     "alice",
+		remoteRun: mockRemoteCommandRunner([]byte("Use%\n 85%\n"), nil),
+	}
+
+	cmd := newStatusCommandWithDeps(deps)
+	root := newTestRoot()
+	root.AddCommand(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"status"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "Disk:      85% [WARN]") {
+		t.Errorf("output missing disk usage warning, got:\n%s", output)
+	}
+}
+
+func TestStatusDiskUsageWarningAt80(t *testing.T) {
+	buf := new(bytes.Buffer)
+
+	deps := &statusDeps{
+		describe: &mockDescribeInstances{
+			output: makeRunningInstanceWithAZ("i-disk80", "default", "alice", "1.2.3.4", "us-east-1a"),
+		},
+		sendKey:   &mockSendSSHPublicKey{output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true}},
+		owner:     "alice",
+		remoteRun: mockRemoteCommandRunner([]byte("Use%\n 80%\n"), nil),
+	}
+
+	cmd := newStatusCommandWithDeps(deps)
+	root := newTestRoot()
+	root.AddCommand(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"status"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "80% [WARN]") {
+		t.Errorf("expected [WARN] at exactly 80%%, got:\n%s", output)
+	}
+}
+
+func TestStatusDiskUsageSSHFailure(t *testing.T) {
+	buf := new(bytes.Buffer)
+
+	deps := &statusDeps{
+		describe: &mockDescribeInstances{
+			output: makeRunningInstanceWithAZ("i-disk3", "default", "alice", "1.2.3.4", "us-east-1a"),
+		},
+		sendKey:   &mockSendSSHPublicKey{output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true}},
+		owner:     "alice",
+		remoteRun: mockRemoteCommandRunner(nil, fmt.Errorf("connection refused")),
+	}
+
+	cmd := newStatusCommandWithDeps(deps)
+	root := newTestRoot()
+	root.AddCommand(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"status"})
+
+	// Should NOT return an error — graceful fallback.
+	if err := root.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "Disk:      unknown") {
+		t.Errorf("expected 'unknown' disk usage on SSH failure, got:\n%s", output)
+	}
+}
+
+func TestStatusDiskUsageJSON(t *testing.T) {
+	buf := new(bytes.Buffer)
+
+	deps := &statusDeps{
+		describe: &mockDescribeInstances{
+			output: makeRunningInstanceWithAZ("i-disk4", "default", "alice", "1.2.3.4", "us-east-1a"),
+		},
+		sendKey:   &mockSendSSHPublicKey{output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true}},
+		owner:     "alice",
+		remoteRun: mockRemoteCommandRunner([]byte("Use%\n 42%\n"), nil),
+	}
+
+	cmd := newStatusCommandWithDeps(deps)
+	root := newTestRoot()
+	root.AddCommand(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"status", "--json"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+
+	v, ok := result["disk_usage_pct"]
+	if !ok {
+		t.Fatal("JSON output missing disk_usage_pct field")
+	}
+	if v.(float64) != 42 {
+		t.Errorf("disk_usage_pct = %v, want 42", v)
+	}
+}
+
+func TestStatusDiskUsageJSONSSHFailure(t *testing.T) {
+	buf := new(bytes.Buffer)
+
+	deps := &statusDeps{
+		describe: &mockDescribeInstances{
+			output: makeRunningInstanceWithAZ("i-disk5", "default", "alice", "1.2.3.4", "us-east-1a"),
+		},
+		sendKey:   &mockSendSSHPublicKey{output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true}},
+		owner:     "alice",
+		remoteRun: mockRemoteCommandRunner(nil, fmt.Errorf("connection refused")),
+	}
+
+	cmd := newStatusCommandWithDeps(deps)
+	root := newTestRoot()
+	root.AddCommand(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"status", "--json"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+
+	// disk_usage_pct should be omitted when SSH fails.
+	if _, ok := result["disk_usage_pct"]; ok {
+		t.Error("disk_usage_pct should be omitted in JSON when SSH fails")
+	}
+}
+
+func TestStatusNoDiskCheckWhenStopped(t *testing.T) {
+	recentLaunch := time.Now().Add(-30 * time.Minute)
+	buf := new(bytes.Buffer)
+
+	remoteCallCount := 0
+	trackingRunner := func(
+		ctx context.Context,
+		sendKey mintaws.SendSSHPublicKeyAPI,
+		instanceID, az, host string,
+		port int,
+		user string,
+		command []string,
+	) ([]byte, error) {
+		remoteCallCount++
+		return []byte("Use%\n 50%\n"), nil
+	}
+
+	deps := &statusDeps{
+		describe: &mockDescribeInstances{
+			output: makeInstanceWithTime("i-stopped2", "default", "alice", "stopped", "", "m6i.xlarge", "complete", recentLaunch),
+		},
+		sendKey:   &mockSendSSHPublicKey{output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true}},
+		owner:     "alice",
+		remoteRun: trackingRunner,
+	}
+
+	cmd := newStatusCommandWithDeps(deps)
+	root := newTestRoot()
+	root.AddCommand(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"status"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if remoteCallCount != 0 {
+		t.Errorf("remote command runner was called %d times for stopped VM, expected 0", remoteCallCount)
+	}
+
+	output := buf.String()
+	if strings.Contains(output, "Disk:") {
+		t.Errorf("stopped VM should NOT show Disk line, got:\n%s", output)
+	}
+}
+
+func TestParseDiskUsagePct(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    int
+		wantErr bool
+	}{
+		{
+			name:  "normal output",
+			input: "Use%\n 42%\n",
+			want:  42,
+		},
+		{
+			name:  "high usage",
+			input: "Use%\n 95%\n",
+			want:  95,
+		},
+		{
+			name:  "zero usage",
+			input: "Use%\n  0%\n",
+			want:  0,
+		},
+		{
+			name:  "100 percent",
+			input: "Use%\n100%\n",
+			want:  100,
+		},
+		{
+			name:    "empty output",
+			input:   "",
+			wantErr: true,
+		},
+		{
+			name:    "single line only",
+			input:   "Use%",
+			wantErr: true,
+		},
+		{
+			name:    "garbage data",
+			input:   "Use%\n abc\n",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseDiskUsagePct(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("parseDiskUsagePct() = %d, want %d", got, tt.want)
+			}
+		})
 	}
 }
