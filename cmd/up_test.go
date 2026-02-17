@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 
@@ -562,5 +563,153 @@ func TestUpCommandBootstrapSuccessJSONNoError(t *testing.T) {
 
 	if _, ok := result["bootstrap_error"]; ok {
 		t.Error("JSON output should NOT contain bootstrap_error key when bootstrap succeeds")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests: SSH config auto-generation after mint up
+// ---------------------------------------------------------------------------
+
+func TestUpCommandWritesSSHConfigOnSuccess(t *testing.T) {
+	buf := new(bytes.Buffer)
+	cmd := &cobra.Command{}
+	cmd.SetOut(buf)
+
+	cliCtx := &cli.CLIContext{VM: "default"}
+	ctx := cli.WithContext(context.Background(), cliCtx)
+	cmd.SetContext(ctx)
+
+	// Use a temp file for SSH config.
+	tmpDir := t.TempDir()
+	sshConfigPath := tmpDir + "/config"
+	os.WriteFile(sshConfigPath, []byte(""), 0644)
+
+	// Stub DescribeInstances to return the VM with AZ info for SSH config generation.
+	describeStub := &stubUpDescribeInstances{output: &ec2.DescribeInstancesOutput{
+		Reservations: []ec2types.Reservation{{
+			Instances: []ec2types.Instance{{
+				InstanceId:      aws.String("i-test123"),
+				PublicIpAddress: aws.String("54.10.20.30"),
+				InstanceType:    ec2types.InstanceTypeM6iXlarge,
+				State: &ec2types.InstanceState{
+					Name: ec2types.InstanceStateNameRunning,
+				},
+				Placement: &ec2types.Placement{
+					AvailabilityZone: aws.String("us-east-1a"),
+				},
+				Tags: []ec2types.Tag{
+					{Key: aws.String("mint:vm"), Value: aws.String("default")},
+					{Key: aws.String("mint:owner"), Value: aws.String("testuser")},
+				},
+			}},
+		}},
+	}}
+
+	deps := newTestUpDeps()
+	deps.sshConfigApproved = true
+	deps.sshConfigPath = sshConfigPath
+	deps.describe = describeStub
+	deps.owner = "testuser"
+
+	err := runUp(cmd, deps)
+	if err != nil {
+		t.Fatalf("runUp error: %v", err)
+	}
+
+	// Verify SSH config was written.
+	data, readErr := os.ReadFile(sshConfigPath)
+	if readErr != nil {
+		t.Fatalf("reading ssh config: %v", readErr)
+	}
+	content := string(data)
+
+	if !strings.Contains(content, "Host mint-default") {
+		t.Errorf("SSH config should contain 'Host mint-default', got:\n%s", content)
+	}
+	if !strings.Contains(content, "54.10.20.30") {
+		t.Errorf("SSH config should contain the public IP, got:\n%s", content)
+	}
+}
+
+func TestUpCommandSkipsSSHConfigWhenNotApproved(t *testing.T) {
+	buf := new(bytes.Buffer)
+	cmd := &cobra.Command{}
+	cmd.SetOut(buf)
+
+	cliCtx := &cli.CLIContext{VM: "default"}
+	ctx := cli.WithContext(context.Background(), cliCtx)
+	cmd.SetContext(ctx)
+
+	tmpDir := t.TempDir()
+	sshConfigPath := tmpDir + "/config"
+	os.WriteFile(sshConfigPath, []byte(""), 0644)
+
+	deps := newTestUpDeps()
+	deps.sshConfigApproved = false
+	deps.sshConfigPath = sshConfigPath
+
+	err := runUp(cmd, deps)
+	if err != nil {
+		t.Fatalf("runUp error: %v", err)
+	}
+
+	// SSH config file should remain empty.
+	data, readErr := os.ReadFile(sshConfigPath)
+	if readErr != nil {
+		t.Fatalf("reading ssh config: %v", readErr)
+	}
+	if len(data) > 0 {
+		t.Errorf("SSH config should be empty when not approved, got:\n%s", string(data))
+	}
+}
+
+func TestUpCommandSSHConfigWriteFailureIsWarning(t *testing.T) {
+	buf := new(bytes.Buffer)
+	cmd := &cobra.Command{}
+	cmd.SetOut(buf)
+
+	cliCtx := &cli.CLIContext{VM: "default"}
+	ctx := cli.WithContext(context.Background(), cliCtx)
+	cmd.SetContext(ctx)
+
+	// Use a non-existent directory to force write failure.
+	sshConfigPath := "/nonexistent/dir/config"
+
+	describeStub := &stubUpDescribeInstances{output: &ec2.DescribeInstancesOutput{
+		Reservations: []ec2types.Reservation{{
+			Instances: []ec2types.Instance{{
+				InstanceId:      aws.String("i-test123"),
+				PublicIpAddress: aws.String("54.10.20.30"),
+				InstanceType:    ec2types.InstanceTypeM6iXlarge,
+				State: &ec2types.InstanceState{
+					Name: ec2types.InstanceStateNameRunning,
+				},
+				Placement: &ec2types.Placement{
+					AvailabilityZone: aws.String("us-east-1a"),
+				},
+				Tags: []ec2types.Tag{
+					{Key: aws.String("mint:vm"), Value: aws.String("default")},
+					{Key: aws.String("mint:owner"), Value: aws.String("testuser")},
+				},
+			}},
+		}},
+	}}
+
+	deps := newTestUpDeps()
+	deps.sshConfigApproved = true
+	deps.sshConfigPath = sshConfigPath
+	deps.describe = describeStub
+	deps.owner = "testuser"
+
+	// Should succeed despite SSH config write failure.
+	err := runUp(cmd, deps)
+	if err != nil {
+		t.Fatalf("runUp should not fail when SSH config write fails, got: %v", err)
+	}
+
+	// Should print a warning about the failure.
+	output := buf.String()
+	if !strings.Contains(output, "Warning") && !strings.Contains(output, "warning") && !strings.Contains(output, "ssh config") {
+		t.Errorf("output should contain a warning about SSH config failure, got:\n%s", output)
 	}
 }

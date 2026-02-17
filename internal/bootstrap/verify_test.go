@@ -109,6 +109,13 @@ func TestScriptContent(t *testing.T) {
 		{"Node.js GPG keyring", "nodesource.gpg"},
 		{"Node.js signed-by apt repo", "signed-by=${NODESOURCE_KEYRING}"},
 		{"efs-utils version pinned", "--branch v2.0.4 --depth 1"},
+		{"EFS symlinks .ssh", "ln -sfn /mint/user/.ssh /home/ubuntu/.ssh"},
+		{"EFS symlinks .config", "ln -sfn /mint/user/.config /home/ubuntu/.config"},
+		{"EFS symlinks projects", "ln -sfn /mint/user/projects /home/ubuntu/projects"},
+		{"reconciliation service", "mint-reconcile.service"},
+		{"reconciliation script", "/usr/local/bin/mint-reconcile"},
+		{"reconciliation after network", "network-online.target"},
+		{"reconciliation oneshot", "Type=oneshot"},
 	}
 
 	for _, elem := range requiredElements {

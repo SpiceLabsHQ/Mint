@@ -161,6 +161,17 @@ if [ -n "${MINT_EFS_ID:-}" ]; then
         echo "${MINT_EFS_ID}:/ /mint/user efs _netdev,tls 0 0" >> /etc/fstab
     fi
     chown ubuntu:ubuntu /mint/user
+
+    # --- EFS symlinks (persistent home directories) ---
+    log "Creating EFS-backed home directory symlinks"
+    mkdir -p /mint/user/.ssh /mint/user/.config /mint/user/projects
+    chown -R ubuntu:ubuntu /mint/user/.ssh /mint/user/.config /mint/user/projects
+    chmod 700 /mint/user/.ssh
+
+    ln -sfn /mint/user/.ssh /home/ubuntu/.ssh
+    ln -sfn /mint/user/.config /home/ubuntu/.config
+    ln -sfn /mint/user/projects /home/ubuntu/projects
+    chown -h ubuntu:ubuntu /home/ubuntu/.ssh /home/ubuntu/.config /home/ubuntu/projects
 fi
 
 # Format and mount project EBS at /mint/projects
@@ -178,6 +189,72 @@ if [ -n "${MINT_PROJECT_DEV:-}" ]; then
     fi
     chown ubuntu:ubuntu /mint/projects
 fi
+
+# --- Boot reconciliation service ---
+
+log "Installing boot reconciliation systemd service"
+
+cat > /etc/systemd/system/mint-reconcile.service << 'RECONCILE_SERVICE'
+[Unit]
+Description=Mint boot reconciliation — remounts storage and restores symlinks
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=no
+ExecStart=/usr/local/bin/mint-reconcile
+
+[Install]
+WantedBy=multi-user.target
+RECONCILE_SERVICE
+
+cat > /usr/local/bin/mint-reconcile << 'RECONCILE_SCRIPT'
+#!/bin/bash
+# Mint boot reconciliation script
+# Runs on every boot to ensure EFS/EBS mounts and home symlinks are intact.
+
+set -euo pipefail
+
+log() {
+    logger -t mint-reconcile "$*"
+}
+
+log "Starting boot reconciliation"
+
+# --- Ensure EFS is mounted at /mint/user ---
+if grep -q '/mint/user' /etc/fstab && ! mountpoint -q /mint/user 2>/dev/null; then
+    log "EFS not mounted at /mint/user — mounting from fstab"
+    mount /mint/user || log "WARNING: Failed to mount /mint/user"
+fi
+
+# --- Ensure project EBS is mounted at /mint/projects ---
+if grep -q '/mint/projects' /etc/fstab && ! mountpoint -q /mint/projects 2>/dev/null; then
+    log "Project volume not mounted at /mint/projects — mounting from fstab"
+    mount /mint/projects || log "WARNING: Failed to mount /mint/projects"
+fi
+
+# --- Restore EFS-backed home directory symlinks ---
+if mountpoint -q /mint/user 2>/dev/null; then
+    mkdir -p /mint/user/.ssh /mint/user/.config /mint/user/projects
+    chown -R ubuntu:ubuntu /mint/user/.ssh /mint/user/.config /mint/user/projects
+    chmod 700 /mint/user/.ssh
+
+    ln -sfn /mint/user/.ssh /home/ubuntu/.ssh
+    ln -sfn /mint/user/.config /home/ubuntu/.config
+    ln -sfn /mint/user/projects /home/ubuntu/projects
+    chown -h ubuntu:ubuntu /home/ubuntu/.ssh /home/ubuntu/.config /home/ubuntu/projects
+
+    log "EFS symlinks restored"
+fi
+
+log "Boot reconciliation complete"
+RECONCILE_SCRIPT
+
+chmod +x /usr/local/bin/mint-reconcile
+
+systemctl daemon-reload
+systemctl enable mint-reconcile.service
 
 # --- Idle detection (ADR-0018) ---
 

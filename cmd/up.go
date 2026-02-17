@@ -5,19 +5,25 @@ import (
 	"encoding/json"
 	"fmt"
 
+	mintaws "github.com/nicholasgasior/mint/internal/aws"
 	"github.com/nicholasgasior/mint/internal/cli"
 	"github.com/nicholasgasior/mint/internal/provision"
+	"github.com/nicholasgasior/mint/internal/sshconfig"
+	"github.com/nicholasgasior/mint/internal/vm"
 	"github.com/spf13/cobra"
 )
 
 // upDeps holds the injectable dependencies for the up command.
 type upDeps struct {
-	provisioner     *provision.Provisioner
-	owner           string
-	ownerARN        string
-	bootstrapScript []byte
-	instanceType    string
-	volumeSize      int32
+	provisioner       *provision.Provisioner
+	owner             string
+	ownerARN          string
+	bootstrapScript   []byte
+	instanceType      string
+	volumeSize        int32
+	sshConfigApproved bool
+	sshConfigPath     string
+	describe          mintaws.DescribeInstancesAPI
 }
 
 // newUpCommand creates the production up command.
@@ -50,6 +56,10 @@ func newUpCommandWithDeps(deps *upDeps) *cobra.Command {
 				cmd.OutOrStdout(),
 				cmd.InOrStdin(),
 			)
+			sshApproved := false
+			if clients.mintConfig != nil {
+				sshApproved = clients.mintConfig.SSHConfigApproved
+			}
 			return runUp(cmd, &upDeps{
 				provisioner: provision.NewProvisioner(
 					clients.ec2Client, // DescribeInstancesAPI
@@ -65,11 +75,13 @@ func newUpCommandWithDeps(deps *upDeps) *cobra.Command {
 					clients.ec2Client, // CreateTagsAPI
 					clients.ssmClient, // GetParameterAPI
 				).WithBootstrapPoller(poller),
-				owner:           clients.owner,
-				ownerARN:        clients.ownerARN,
-				bootstrapScript: GetBootstrapScript(),
-				instanceType:    clients.mintConfig.InstanceType,
-				volumeSize:      int32(clients.mintConfig.VolumeSizeGB),
+				owner:             clients.owner,
+				ownerARN:          clients.ownerARN,
+				bootstrapScript:   GetBootstrapScript(),
+				instanceType:      clients.mintConfig.InstanceType,
+				volumeSize:        int32(clients.mintConfig.VolumeSizeGB),
+				sshConfigApproved: sshApproved,
+				describe:          clients.ec2Client,
 			})
 		},
 	}
@@ -107,6 +119,11 @@ func runUp(cmd *cobra.Command, deps *upDeps) error {
 	result, err := deps.provisioner.Run(ctx, deps.owner, deps.ownerARN, vmName, cfg)
 	if err != nil {
 		return err
+	}
+
+	// Auto-generate SSH config entry if approved (ADR-0015).
+	if deps.sshConfigApproved && result.PublicIP != "" {
+		writeSSHConfigAfterUp(ctx, cmd, deps, vmName, result)
 	}
 
 	return printUpResult(cmd, cliCtx, result, jsonOutput, verbose)
@@ -166,6 +183,35 @@ func printUpHuman(cmd *cobra.Command, result *provision.ProvisionResult, verbose
 		fmt.Fprintln(w, "\nBootstrap complete. VM is ready.")
 	}
 	return nil
+}
+
+// writeSSHConfigAfterUp generates and writes the SSH config block for the VM.
+// Failures are non-fatal: a warning is printed but the command still succeeds.
+func writeSSHConfigAfterUp(ctx context.Context, cmd *cobra.Command, deps *upDeps, vmName string, result *provision.ProvisionResult) {
+	w := cmd.OutOrStdout()
+
+	// Look up the VM to get AvailabilityZone (not in ProvisionResult).
+	az := ""
+	if deps.describe != nil {
+		found, err := vm.FindVM(ctx, deps.describe, deps.owner, vmName)
+		if err != nil {
+			fmt.Fprintf(w, "Warning: could not look up VM for ssh config: %v\n", err)
+			return
+		}
+		if found != nil {
+			az = found.AvailabilityZone
+		}
+	}
+
+	configPath := deps.sshConfigPath
+	if configPath == "" {
+		configPath = defaultSSHConfigPath()
+	}
+
+	block := sshconfig.GenerateBlock(vmName, result.PublicIP, defaultSSHUser, defaultSSHPort, result.InstanceID, az)
+	if err := sshconfig.WriteManagedBlock(configPath, vmName, block); err != nil {
+		fmt.Fprintf(w, "Warning: could not update ssh config: %v\n", err)
+	}
 }
 
 // upWithProvisioner runs up with a pre-built Provisioner (for testing).
