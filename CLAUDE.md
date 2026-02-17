@@ -9,7 +9,7 @@ Mint is a CLI tool that provisions and manages EC2-based development environment
 **Primary workflow**: MacBook → VS Code Remote-SSH → EC2 host → (user opens devcontainer via VS Code)
 **Secondary workflow**: iPad (Termius) → mosh → EC2 host → tmux → (user connects to container manually)
 
-**Current state**: Specification and architecture phase. `OVERVIEW.md` is the authoritative specification. `docs/adr/` contains Architecture Decision Records that are binding design constraints.
+**Current state**: Specification and architecture phase. `docs/SPEC.md` is the authoritative specification. `docs/adr/` contains Architecture Decision Records that are binding design constraints.
 
 ## The Five Keys
 
@@ -53,5 +53,5 @@ These are non-negotiable constraints from the ADRs. Do not deviate without updat
 
 | Document | Purpose |
 |----------|---------|
-| `OVERVIEW.md` | Complete specification — the authoritative source |
+| `docs/SPEC.md` | Complete specification — the authoritative source |
 | `docs/adr/0001-*.md` through `docs/adr/0016-*.md` | Architecture Decision Records — binding constraints |
