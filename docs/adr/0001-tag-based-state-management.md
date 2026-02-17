@@ -14,7 +14,7 @@ Mint discovers all resources exclusively via AWS resource tags. There is no loca
 | Tag | Purpose |
 |-----|---------|
 | `mint=true` | Primary filter for all Mint-managed resources |
-| `mint:component` | Resource type (instance, volume, security-group, elastic-ip) |
+| `mint:component` | Resource type (instance, volume, security-group, elastic-ip, project-volume, efs-access-point) |
 | `mint:vm` | VM name this resource belongs to |
 | `mint:owner` | Friendly name derived from AWS identity ARN (see ADR-0013) |
 | `mint:owner-arn` | Full caller ARN for auditability (see ADR-0013) |
