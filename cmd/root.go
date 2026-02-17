@@ -68,6 +68,7 @@ func NewRootCommand() *cobra.Command {
 	// Phase 3: Lifecycle & health commands
 	rootCmd.AddCommand(newResizeCommand())
 	rootCmd.AddCommand(newRecreateCommand())
+	rootCmd.AddCommand(newDoctorCommand())
 
 	return rootCmd
 }
