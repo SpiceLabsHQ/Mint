@@ -1,0 +1,280 @@
+package cmd
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/efs"
+	efstypes "github.com/aws/aws-sdk-go-v2/service/efs/types"
+
+	mintaws "github.com/nicholasgasior/mint/internal/aws"
+	"github.com/nicholasgasior/mint/internal/cli"
+	"github.com/nicholasgasior/mint/internal/provision"
+	"github.com/nicholasgasior/mint/internal/sshconfig"
+	"github.com/nicholasgasior/mint/internal/tags"
+	"github.com/nicholasgasior/mint/internal/vm"
+	"github.com/spf13/cobra"
+)
+
+// upDeps holds the injectable dependencies for the up command.
+type upDeps struct {
+	provisioner         *provision.Provisioner
+	owner               string
+	ownerARN            string
+	bootstrapScript     []byte
+	instanceType        string
+	volumeSize          int32
+	sshConfigApproved   bool
+	sshConfigPath       string
+	describe            mintaws.DescribeInstancesAPI
+	describeFileSystems mintaws.DescribeFileSystemsAPI
+}
+
+// newUpCommand creates the production up command.
+func newUpCommand() *cobra.Command {
+	return newUpCommandWithDeps(nil)
+}
+
+// newUpCommandWithDeps creates the up command with explicit dependencies for testing.
+func newUpCommandWithDeps(deps *upDeps) *cobra.Command {
+	return &cobra.Command{
+		Use:   "up",
+		Short: "Provision or start the VM",
+		Long: "Provision a new VM or start a stopped one. Creates EC2 instance, " +
+			"project EBS volume, and Elastic IP. If a VM already exists and is " +
+			"stopped, it will be started.",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if deps != nil {
+				return runUp(cmd, deps)
+			}
+			clients := awsClientsFromContext(cmd.Context())
+			if clients == nil {
+				return fmt.Errorf("AWS clients not configured")
+			}
+			poller := provision.NewBootstrapPoller(
+				clients.ec2Client, // DescribeInstancesAPI
+				clients.ec2Client, // StopInstancesAPI
+				clients.ec2Client, // TerminateInstancesAPI
+				clients.ec2Client, // CreateTagsAPI
+				cmd.OutOrStdout(),
+				cmd.InOrStdin(),
+			)
+			sshApproved := false
+			if clients.mintConfig != nil {
+				sshApproved = clients.mintConfig.SSHConfigApproved
+			}
+			return runUp(cmd, &upDeps{
+				provisioner: provision.NewProvisioner(
+					clients.ec2Client, // DescribeInstancesAPI
+					clients.ec2Client, // StartInstancesAPI
+					clients.ec2Client, // RunInstancesAPI
+					clients.ec2Client, // DescribeSecurityGroupsAPI
+					clients.ec2Client, // DescribeSubnetsAPI
+					clients.ec2Client, // CreateVolumeAPI
+					clients.ec2Client, // AttachVolumeAPI
+					clients.ec2Client, // AllocateAddressAPI
+					clients.ec2Client, // AssociateAddressAPI
+					clients.ec2Client, // DescribeAddressesAPI
+					clients.ec2Client, // CreateTagsAPI
+					clients.ssmClient, // GetParameterAPI
+				).WithBootstrapPoller(poller),
+				owner:               clients.owner,
+				ownerARN:            clients.ownerARN,
+				bootstrapScript:     GetBootstrapScript(),
+				instanceType:        clients.mintConfig.InstanceType,
+				volumeSize:          int32(clients.mintConfig.VolumeSizeGB),
+				sshConfigApproved:   sshApproved,
+				describe:            clients.ec2Client,
+				describeFileSystems: clients.efsClient,
+			})
+		},
+	}
+}
+
+// runUp executes the up command logic.
+func runUp(cmd *cobra.Command, deps *upDeps) error {
+	ctx := cmd.Context()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	cliCtx := cli.FromCommand(cmd)
+	vmName := "default"
+	verbose := false
+	jsonOutput := false
+	if cliCtx != nil {
+		vmName = cliCtx.VM
+		verbose = cliCtx.Verbose
+		jsonOutput = cliCtx.JSON
+	}
+
+	w := cmd.OutOrStdout()
+
+	if verbose {
+		fmt.Fprintf(w, "Provisioning VM %q for owner %q...\n", vmName, deps.owner)
+	}
+
+	// Discover admin EFS filesystem (same pattern as mint init).
+	efsID, err := discoverEFS(ctx, deps.describeFileSystems)
+	if err != nil {
+		return fmt.Errorf("discovering EFS: %w", err)
+	}
+
+	cfg := provision.ProvisionConfig{
+		InstanceType:    deps.instanceType,
+		VolumeSize:      deps.volumeSize,
+		BootstrapScript: deps.bootstrapScript,
+		EFSID:           efsID,
+	}
+
+	result, err := deps.provisioner.Run(ctx, deps.owner, deps.ownerARN, vmName, cfg)
+	if err != nil {
+		return err
+	}
+
+	// Auto-generate SSH config entry if approved (ADR-0015).
+	if deps.sshConfigApproved && result.PublicIP != "" {
+		writeSSHConfigAfterUp(ctx, cmd, deps, vmName, result)
+	}
+
+	return printUpResult(cmd, cliCtx, result, jsonOutput, verbose)
+}
+
+func printUpResult(cmd *cobra.Command, cliCtx *cli.CLIContext, result *provision.ProvisionResult, jsonOutput, verbose bool) error {
+	if jsonOutput {
+		return printUpJSON(cmd, result)
+	}
+	return printUpHuman(cmd, result, verbose)
+}
+
+func printUpJSON(cmd *cobra.Command, result *provision.ProvisionResult) error {
+	data := map[string]any{
+		"instance_id":   result.InstanceID,
+		"public_ip":     result.PublicIP,
+		"volume_id":     result.VolumeID,
+		"allocation_id": result.AllocationID,
+		"restarted":     result.Restarted,
+	}
+
+	if result.BootstrapError != nil {
+		data["bootstrap_error"] = result.BootstrapError.Error()
+	}
+
+	enc := json.NewEncoder(cmd.OutOrStdout())
+	enc.SetIndent("", "  ")
+	return enc.Encode(data)
+}
+
+func printUpHuman(cmd *cobra.Command, result *provision.ProvisionResult, verbose bool) error {
+	w := cmd.OutOrStdout()
+
+	if result.Restarted {
+		fmt.Fprintf(w, "VM %s restarted.\n", result.InstanceID)
+		if result.PublicIP != "" {
+			fmt.Fprintf(w, "IP            %s\n", result.PublicIP)
+		}
+		return nil
+	}
+
+	// Fresh provision.
+	fmt.Fprintf(w, "Instance      %s\n", result.InstanceID)
+	if result.PublicIP != "" {
+		fmt.Fprintf(w, "IP            %s\n", result.PublicIP)
+	}
+	if result.VolumeID != "" {
+		fmt.Fprintf(w, "Volume        %s\n", result.VolumeID)
+	}
+	if result.AllocationID != "" {
+		fmt.Fprintf(w, "EIP           %s\n", result.AllocationID)
+	}
+
+	if result.BootstrapError != nil {
+		fmt.Fprintf(w, "\nBootstrap warning: %v\n", result.BootstrapError)
+	} else {
+		fmt.Fprintln(w, "\nBootstrap complete. VM is ready.")
+	}
+	return nil
+}
+
+// writeSSHConfigAfterUp generates and writes the SSH config block for the VM.
+// Failures are non-fatal: a warning is printed but the command still succeeds.
+func writeSSHConfigAfterUp(ctx context.Context, cmd *cobra.Command, deps *upDeps, vmName string, result *provision.ProvisionResult) {
+	w := cmd.OutOrStdout()
+
+	// Look up the VM to get AvailabilityZone (not in ProvisionResult).
+	az := ""
+	if deps.describe != nil {
+		found, err := vm.FindVM(ctx, deps.describe, deps.owner, vmName)
+		if err != nil {
+			fmt.Fprintf(w, "Warning: could not look up VM for ssh config: %v\n", err)
+			return
+		}
+		if found != nil {
+			az = found.AvailabilityZone
+		}
+	}
+
+	configPath := deps.sshConfigPath
+	if configPath == "" {
+		configPath = defaultSSHConfigPath()
+	}
+
+	block := sshconfig.GenerateBlock(vmName, result.PublicIP, defaultSSHUser, defaultSSHPort, result.InstanceID, az)
+	if err := sshconfig.WriteManagedBlock(configPath, vmName, block); err != nil {
+		fmt.Fprintf(w, "Warning: could not update ssh config: %v\n", err)
+	}
+}
+
+// discoverEFS finds the admin EFS filesystem by tags (mint=true, mint:component=admin).
+// This mirrors the discovery logic in internal/provision/init.go but lives in cmd/
+// because it is command-level wiring, not provisioning logic.
+func discoverEFS(ctx context.Context, client mintaws.DescribeFileSystemsAPI) (string, error) {
+	out, err := client.DescribeFileSystems(ctx, &efs.DescribeFileSystemsInput{})
+	if err != nil {
+		return "", fmt.Errorf("describe EFS: %w", err)
+	}
+
+	for _, fs := range out.FileSystems {
+		tagMap := efsTagsToMap(fs.Tags)
+		if tagMap[tags.TagMint] == "true" && tagMap[tags.TagComponent] == "admin" {
+			return aws.ToString(fs.FileSystemId), nil
+		}
+	}
+
+	return "", fmt.Errorf("no admin EFS found — run 'mint init' first")
+}
+
+// efsTagsToMap converts EFS tags to a map for convenient lookup.
+func efsTagsToMap(efsTags []efstypes.Tag) map[string]string {
+	m := make(map[string]string, len(efsTags))
+	for _, tag := range efsTags {
+		m[aws.ToString(tag.Key)] = aws.ToString(tag.Value)
+	}
+	return m
+}
+
+// upWithProvisioner runs up with a pre-built Provisioner (for testing).
+func upWithProvisioner(ctx context.Context, cmd *cobra.Command, cliCtx *cli.CLIContext, deps *upDeps, vmName string) error {
+	cfg := provision.ProvisionConfig{
+		InstanceType:    deps.instanceType,
+		VolumeSize:      deps.volumeSize,
+		BootstrapScript: deps.bootstrapScript,
+	}
+
+	verbose := false
+	jsonOutput := false
+	if cliCtx != nil {
+		verbose = cliCtx.Verbose
+		jsonOutput = cliCtx.JSON
+	}
+
+	result, err := deps.provisioner.Run(ctx, deps.owner, deps.ownerARN, vmName, cfg)
+	if err != nil {
+		return err
+	}
+
+	return printUpResult(cmd, cliCtx, result, jsonOutput, verbose)
+}
