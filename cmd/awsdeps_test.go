@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nicholasgasior/mint/internal/cli"
 	"github.com/nicholasgasior/mint/internal/config"
 )
 
@@ -66,6 +67,48 @@ func TestAWSClientsFromContext_RoundTrip(t *testing.T) {
 	if got.ownerARN != "arn:aws:iam::123456789012:user/test-user" {
 		t.Errorf("ownerARN = %q, want %q", got.ownerARN, "arn:aws:iam::123456789012:user/test-user")
 	}
+}
+
+func TestInitAWSClientsDebugMode(t *testing.T) {
+	// Verify that initAWSClients does not panic or error when the debug
+	// flag is set on the CLIContext. We cannot easily inspect the resulting
+	// aws.Config's ClientLogMode without calling real AWS APIs, but we can
+	// verify the code path compiles and executes without error when debug
+	// is enabled. The function will fail on credential resolution (expected
+	// in a test environment without AWS creds), but it should get past the
+	// config loading step.
+	t.Run("debug flag does not cause config load panic", func(t *testing.T) {
+		cliCtx := &cli.CLIContext{Debug: true}
+		ctx := cli.WithContext(context.Background(), cliCtx)
+
+		// initAWSClients will likely fail on STS/identity resolution
+		// in a test environment, but the important thing is that it
+		// does not panic on the debug log mode option.
+		_, err := initAWSClients(ctx)
+		// We expect an error (no real AWS creds), but not a panic.
+		// If we get here without panic, the debug wiring compiled and ran.
+		if err == nil {
+			t.Log("initAWSClients succeeded (unexpected in test env, but not a failure)")
+		}
+	})
+
+	t.Run("non-debug flag also works", func(t *testing.T) {
+		cliCtx := &cli.CLIContext{Debug: false}
+		ctx := cli.WithContext(context.Background(), cliCtx)
+
+		_, err := initAWSClients(ctx)
+		if err == nil {
+			t.Log("initAWSClients succeeded (unexpected in test env, but not a failure)")
+		}
+	})
+
+	t.Run("nil cli context does not panic", func(t *testing.T) {
+		ctx := context.Background()
+		_, err := initAWSClients(ctx)
+		if err == nil {
+			t.Log("initAWSClients succeeded (unexpected in test env, but not a failure)")
+		}
+	})
 }
 
 func TestAWSClients_IdleTimeout(t *testing.T) {

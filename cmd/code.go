@@ -15,10 +15,11 @@ import (
 
 // codeDeps holds the injectable dependencies for the code command.
 type codeDeps struct {
-	describe      mintaws.DescribeInstancesAPI
-	owner         string
-	runner        CommandRunner
-	sshConfigPath string
+	describe           mintaws.DescribeInstancesAPI
+	owner              string
+	runner             CommandRunner
+	sshConfigPath      string
+	sshConfigApproved  bool
 }
 
 // newCodeCommand creates the production code command.
@@ -43,9 +44,14 @@ func newCodeCommandWithDeps(deps *codeDeps) *cobra.Command {
 			if clients == nil {
 				return fmt.Errorf("AWS clients not configured")
 			}
+			sshApproved := false
+			if clients.mintConfig != nil {
+				sshApproved = clients.mintConfig.SSHConfigApproved
+			}
 			return runCode(cmd, &codeDeps{
-				describe: clients.ec2Client,
-				owner:    clients.owner,
+				describe:          clients.ec2Client,
+				owner:             clients.owner,
+				sshConfigApproved: sshApproved,
 			})
 		},
 	}
@@ -87,6 +93,14 @@ func runCode(cmd *cobra.Command, deps *codeDeps) error {
 	if found.State != string(ec2types.InstanceStateNameRunning) {
 		return fmt.Errorf("VM %q (%s) is not running (state: %s) — run mint up to start it",
 			vmName, found.ID, found.State)
+	}
+
+	// ADR-0015: Check permission before writing to ~/.ssh/config.
+	if !deps.sshConfigApproved {
+		return fmt.Errorf(
+			"mint needs to update ~/.ssh/config to connect VS Code.\n"+
+				"Run: mint config set ssh_config_approved true",
+		)
 	}
 
 	// Ensure SSH config entry exists.

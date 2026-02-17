@@ -9,12 +9,14 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	awscfg "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ec2instanceconnect"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 
+	"github.com/nicholasgasior/mint/internal/cli"
 	"github.com/nicholasgasior/mint/internal/config"
 	"github.com/nicholasgasior/mint/internal/identity"
 )
@@ -64,7 +66,16 @@ func commandNeedsAWS(cmdName string) bool {
 // resolves the caller identity, and loads the mint config. Returns
 // an awsClients struct ready to be stored on the command context.
 func initAWSClients(ctx context.Context) (*awsClients, error) {
-	cfg, err := awscfg.LoadDefaultConfig(ctx)
+	var opts []func(*awscfg.LoadOptions) error
+
+	// ADR-0012: Wire --debug flag to AWS SDK request/response logging.
+	if cliCtx := cli.FromContext(ctx); cliCtx != nil && cliCtx.Debug {
+		opts = append(opts, awscfg.WithClientLogMode(
+			aws.LogRequest|aws.LogResponse,
+		))
+	}
+
+	cfg, err := awscfg.LoadDefaultConfig(ctx, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("load AWS config: %w", err)
 	}
