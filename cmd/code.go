@@ -95,7 +95,7 @@ func runCode(cmd *cobra.Command, deps *codeDeps) error {
 		sshConfigPath = defaultSSHConfigPath()
 	}
 
-	block := sshconfig.GenerateBlock(vmName, found.PublicIP, defaultSSHUser, defaultSSHPort)
+	block := sshconfig.GenerateBlock(vmName, found.PublicIP, defaultSSHUser, defaultSSHPort, found.ID, found.AvailabilityZone)
 	if err := sshconfig.WriteManagedBlock(sshConfigPath, vmName, block); err != nil {
 		return fmt.Errorf("write ssh config: %w", err)
 	}

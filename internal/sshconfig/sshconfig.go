@@ -31,16 +31,35 @@ func computeChecksum(innerContent string) string {
 	return fmt.Sprintf("%x", h)
 }
 
-// GenerateBlock creates an SSH config Host block with mint managed markers
-// and a SHA256 checksum for hand-edit detection (ADR-0008).
-func GenerateBlock(vmName, hostname, user string, port int) string {
+// GenerateBlock creates an SSH config Host block with mint managed markers,
+// ProxyCommand for EC2 Instance Connect ephemeral-key auth (ADR-0007/ADR-0008),
+// and a SHA256 checksum for hand-edit detection.
+//
+// The ProxyCommand generates an ephemeral SSH key, pushes it via
+// aws ec2-instance-connect send-ssh-public-key, and uses nc to establish
+// the TCP tunnel. The IdentityFile points to the same ephemeral key so
+// the SSH client authenticates with it.
+func GenerateBlock(vmName, hostname, user string, port int, instanceID, az string) string {
+	keyPath := fmt.Sprintf("~/.config/mint/ssh_key_%s", vmName)
+
+	proxyCmd := fmt.Sprintf(
+		"sh -c 'ssh-keygen -t ed25519 -f %s -N \"\" -q 2>/dev/null; "+
+			"aws ec2-instance-connect send-ssh-public-key "+
+			"--instance-id %s "+
+			"--instance-os-user %s "+
+			"--ssh-public-key file://%s.pub "+
+			"--availability-zone %s "+
+			"--no-cli-pager >/dev/null 2>&1 && nc %%h %%p'",
+		keyPath, instanceID, user, keyPath, az)
+
 	inner := fmt.Sprintf("Host mint-%s\n"+
 		"    HostName %s\n"+
 		"    User %s\n"+
 		"    Port %d\n"+
-		"    StrictHostKeyChecking no\n"+
-		"    UserKnownHostsFile /dev/null\n",
-		vmName, hostname, user, port)
+		"    IdentityFile %s\n"+
+		"    IdentitiesOnly yes\n"+
+		"    ProxyCommand %s\n",
+		vmName, hostname, user, port, keyPath, proxyCmd)
 
 	begin := beginMarker(vmName)
 	end := endMarker(vmName)

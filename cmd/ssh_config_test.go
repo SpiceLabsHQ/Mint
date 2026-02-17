@@ -24,6 +24,8 @@ func TestSSHConfigCommand_WritesBlock(t *testing.T) {
 		"--yes",
 		"--ssh-config-path", sshConfigPath,
 		"--hostname", "1.2.3.4",
+		"--instance-id", "i-abc123",
+		"--az", "us-east-1a",
 	})
 
 	err := rootCmd.Execute()
@@ -44,6 +46,11 @@ func TestSSHConfigCommand_WritesBlock(t *testing.T) {
 		"HostName 1.2.3.4",
 		"User ubuntu",
 		"Port 41122",
+		"IdentityFile",
+		"IdentitiesOnly yes",
+		"ProxyCommand",
+		"i-abc123",
+		"us-east-1a",
 		"# mint:end default",
 		"# mint:checksum:",
 	}
@@ -51,6 +58,14 @@ func TestSSHConfigCommand_WritesBlock(t *testing.T) {
 		if !strings.Contains(content, exp) {
 			t.Errorf("ssh config missing %q, got:\n%s", exp, content)
 		}
+	}
+
+	// Must NOT contain old insecure settings.
+	if strings.Contains(content, "StrictHostKeyChecking no") {
+		t.Errorf("should not contain StrictHostKeyChecking no, got:\n%s", content)
+	}
+	if strings.Contains(content, "UserKnownHostsFile /dev/null") {
+		t.Errorf("should not contain UserKnownHostsFile /dev/null, got:\n%s", content)
 	}
 }
 
@@ -71,6 +86,8 @@ func TestSSHConfigCommand_CustomVM(t *testing.T) {
 		"--yes",
 		"--ssh-config-path", sshConfigPath,
 		"--hostname", "10.0.0.5",
+		"--instance-id", "i-xyz789",
+		"--az", "us-west-2b",
 	})
 
 	err := rootCmd.Execute()
@@ -96,6 +113,8 @@ func TestSSHConfigCommand_RequiresHostname(t *testing.T) {
 	rootCmd.SetArgs([]string{
 		"ssh-config",
 		"--yes",
+		"--instance-id", "i-abc123",
+		"--az", "us-east-1a",
 	})
 
 	err := rootCmd.Execute()
@@ -104,6 +123,54 @@ func TestSSHConfigCommand_RequiresHostname(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "hostname") {
 		t.Errorf("error should mention hostname: %v", err)
+	}
+}
+
+func TestSSHConfigCommand_RequiresInstanceID(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("MINT_CONFIG_DIR", configDir)
+
+	buf := new(bytes.Buffer)
+	rootCmd := NewRootCommand()
+	rootCmd.SetOut(buf)
+	rootCmd.SetErr(buf)
+	rootCmd.SetArgs([]string{
+		"ssh-config",
+		"--yes",
+		"--hostname", "1.2.3.4",
+		"--az", "us-east-1a",
+	})
+
+	err := rootCmd.Execute()
+	if err == nil {
+		t.Fatal("should fail without --instance-id")
+	}
+	if !strings.Contains(err.Error(), "instance-id") {
+		t.Errorf("error should mention instance-id: %v", err)
+	}
+}
+
+func TestSSHConfigCommand_RequiresAZ(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("MINT_CONFIG_DIR", configDir)
+
+	buf := new(bytes.Buffer)
+	rootCmd := NewRootCommand()
+	rootCmd.SetOut(buf)
+	rootCmd.SetErr(buf)
+	rootCmd.SetArgs([]string{
+		"ssh-config",
+		"--yes",
+		"--hostname", "1.2.3.4",
+		"--instance-id", "i-abc123",
+	})
+
+	err := rootCmd.Execute()
+	if err == nil {
+		t.Fatal("should fail without --az")
+	}
+	if !strings.Contains(err.Error(), "az") {
+		t.Errorf("error should mention az: %v", err)
 	}
 }
 
@@ -123,6 +190,8 @@ func TestSSHConfigCommand_StoresApproval(t *testing.T) {
 		"--yes",
 		"--ssh-config-path", sshConfigPath,
 		"--hostname", "1.2.3.4",
+		"--instance-id", "i-abc123",
+		"--az", "us-east-1a",
 	})
 
 	err := rootCmd.Execute()
@@ -148,8 +217,8 @@ func TestSSHConfigCommand_WarnsOnHandEdits(t *testing.T) {
 	sshDir := t.TempDir()
 	sshConfigPath := filepath.Join(sshDir, "config")
 
-	// Write a tampered block manually.
-	tampered := "# mint:begin default\nHost mint-default\n    HostName 1.2.3.4\n    User root\n    Port 41122\n    StrictHostKeyChecking no\n    UserKnownHostsFile /dev/null\n# mint:end default\n# mint:checksum:0000000000000000000000000000000000000000000000000000000000000000\n"
+	// Write a tampered block manually — inner content does not match the checksum.
+	tampered := "# mint:begin default\nHost mint-default\n    HostName 1.2.3.4\n    User root\n    Port 41122\n    IdentityFile ~/.config/mint/ssh_key_default\n    IdentitiesOnly yes\n    ProxyCommand echo tampered\n# mint:end default\n# mint:checksum:0000000000000000000000000000000000000000000000000000000000000000\n"
 	os.WriteFile(sshConfigPath, []byte(tampered), 0o600)
 
 	buf := new(bytes.Buffer)
@@ -161,6 +230,8 @@ func TestSSHConfigCommand_WarnsOnHandEdits(t *testing.T) {
 		"--yes",
 		"--ssh-config-path", sshConfigPath,
 		"--hostname", "5.6.7.8",
+		"--instance-id", "i-def456",
+		"--az", "us-west-2b",
 	})
 
 	err := rootCmd.Execute()
@@ -191,6 +262,8 @@ func TestSSHConfigCommand_RemoveFlag(t *testing.T) {
 		"--yes",
 		"--ssh-config-path", sshConfigPath,
 		"--hostname", "1.2.3.4",
+		"--instance-id", "i-abc123",
+		"--az", "us-east-1a",
 	})
 	rootCmd.Execute()
 
@@ -235,6 +308,8 @@ func TestSSHConfigCommand_PreservesExistingContent(t *testing.T) {
 		"--yes",
 		"--ssh-config-path", sshConfigPath,
 		"--hostname", "1.2.3.4",
+		"--instance-id", "i-abc123",
+		"--az", "us-east-1a",
 	})
 
 	err := rootCmd.Execute()

@@ -29,6 +29,8 @@ func newSSHConfigCommand() *cobra.Command {
 	}
 
 	cmd.Flags().String("hostname", "", "Public IP or hostname of the VM")
+	cmd.Flags().String("instance-id", "", "EC2 instance ID for ProxyCommand (required)")
+	cmd.Flags().String("az", "", "Availability zone for EC2 Instance Connect (required)")
 	cmd.Flags().String("ssh-config-path", "", "Path to SSH config file (default: ~/.ssh/config)")
 	cmd.Flags().Bool("remove", false, "Remove the managed block for the VM")
 
@@ -70,6 +72,16 @@ func runSSHConfig(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("--hostname is required (public IP or hostname of the VM)")
 	}
 
+	instanceID, _ := cmd.Flags().GetString("instance-id")
+	if instanceID == "" {
+		return fmt.Errorf("--instance-id is required (EC2 instance ID for ProxyCommand)")
+	}
+
+	az, _ := cmd.Flags().GetString("az")
+	if az == "" {
+		return fmt.Errorf("--az is required (availability zone for EC2 Instance Connect)")
+	}
+
 	// ADR-0015: Check permission before writing to ~/.ssh/config.
 	configDir := config.DefaultConfigDir()
 	cfg, err := config.Load(configDir)
@@ -102,7 +114,7 @@ func runSSHConfig(cmd *cobra.Command, args []string) error {
 	}
 
 	// Generate and write the managed block.
-	block := sshconfig.GenerateBlock(vmName, hostname, defaultSSHUser, defaultSSHPort)
+	block := sshconfig.GenerateBlock(vmName, hostname, defaultSSHUser, defaultSSHPort, instanceID, az)
 	if err := sshconfig.WriteManagedBlock(sshConfigPath, vmName, block); err != nil {
 		return fmt.Errorf("write ssh config: %w", err)
 	}

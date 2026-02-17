@@ -1,0 +1,1052 @@
+=== RUN   TestEmbeddedBootstrapScriptIsNonEmpty
+--- PASS: TestEmbeddedBootstrapScriptIsNonEmpty (0.00s)
+=== RUN   TestEmbeddedBootstrapScriptPassesVerify
+--- PASS: TestEmbeddedBootstrapScriptPassesVerify (0.00s)
+=== RUN   TestEmbeddedBootstrapScriptHasShebang
+--- PASS: TestEmbeddedBootstrapScriptHasShebang (0.00s)
+PASS
+coverage: 0.0% of statements
+ok  	github.com/nicholasgasior/mint	0.566s	coverage: 0.0% of statements
+=== RUN   TestCommandNeedsAWS
+=== RUN   TestCommandNeedsAWS/version_does_not_need_AWS
+=== RUN   TestCommandNeedsAWS/config_does_not_need_AWS
+=== RUN   TestCommandNeedsAWS/set_does_not_need_AWS
+=== RUN   TestCommandNeedsAWS/get_does_not_need_AWS
+=== RUN   TestCommandNeedsAWS/ssh-config_does_not_need_AWS
+=== RUN   TestCommandNeedsAWS/help_does_not_need_AWS
+=== RUN   TestCommandNeedsAWS/up_needs_AWS
+=== RUN   TestCommandNeedsAWS/down_needs_AWS
+=== RUN   TestCommandNeedsAWS/destroy_needs_AWS
+=== RUN   TestCommandNeedsAWS/ssh_needs_AWS
+=== RUN   TestCommandNeedsAWS/code_needs_AWS
+=== RUN   TestCommandNeedsAWS/list_needs_AWS
+=== RUN   TestCommandNeedsAWS/status_needs_AWS
+=== RUN   TestCommandNeedsAWS/init_needs_AWS
+--- PASS: TestCommandNeedsAWS (0.00s)
+    --- PASS: TestCommandNeedsAWS/version_does_not_need_AWS (0.00s)
+    --- PASS: TestCommandNeedsAWS/config_does_not_need_AWS (0.00s)
+    --- PASS: TestCommandNeedsAWS/set_does_not_need_AWS (0.00s)
+    --- PASS: TestCommandNeedsAWS/get_does_not_need_AWS (0.00s)
+    --- PASS: TestCommandNeedsAWS/ssh-config_does_not_need_AWS (0.00s)
+    --- PASS: TestCommandNeedsAWS/help_does_not_need_AWS (0.00s)
+    --- PASS: TestCommandNeedsAWS/up_needs_AWS (0.00s)
+    --- PASS: TestCommandNeedsAWS/down_needs_AWS (0.00s)
+    --- PASS: TestCommandNeedsAWS/destroy_needs_AWS (0.00s)
+    --- PASS: TestCommandNeedsAWS/ssh_needs_AWS (0.00s)
+    --- PASS: TestCommandNeedsAWS/code_needs_AWS (0.00s)
+    --- PASS: TestCommandNeedsAWS/list_needs_AWS (0.00s)
+    --- PASS: TestCommandNeedsAWS/status_needs_AWS (0.00s)
+    --- PASS: TestCommandNeedsAWS/init_needs_AWS (0.00s)
+=== RUN   TestAWSClientsFromContext_Nil
+--- PASS: TestAWSClientsFromContext_Nil (0.00s)
+=== RUN   TestAWSClientsFromContext_RoundTrip
+--- PASS: TestAWSClientsFromContext_RoundTrip (0.00s)
+=== RUN   TestAWSClients_IdleTimeout
+=== RUN   TestAWSClients_IdleTimeout/returns_config_value
+=== RUN   TestAWSClients_IdleTimeout/returns_default_when_config_is_nil
+--- PASS: TestAWSClients_IdleTimeout (0.00s)
+    --- PASS: TestAWSClients_IdleTimeout/returns_config_value (0.00s)
+    --- PASS: TestAWSClients_IdleTimeout/returns_default_when_config_is_nil (0.00s)
+=== RUN   TestCodeCommand
+=== RUN   TestCodeCommand/successful_code_open_with_default_path
+=== RUN   TestCodeCommand/custom_path_flag
+=== RUN   TestCodeCommand/non-default_vm_name_in_remote
+=== RUN   TestCodeCommand/vm_not_found_returns_actionable_error
+=== RUN   TestCodeCommand/stopped_vm_returns_actionable_error
+=== RUN   TestCodeCommand/describe_API_error_propagates
+=== RUN   TestCodeCommand/ssh_config_written_before_opening_code
+--- PASS: TestCodeCommand (0.03s)
+    --- PASS: TestCodeCommand/successful_code_open_with_default_path (0.00s)
+    --- PASS: TestCodeCommand/custom_path_flag (0.00s)
+    --- PASS: TestCodeCommand/non-default_vm_name_in_remote (0.01s)
+    --- PASS: TestCodeCommand/vm_not_found_returns_actionable_error (0.00s)
+    --- PASS: TestCodeCommand/stopped_vm_returns_actionable_error (0.00s)
+    --- PASS: TestCodeCommand/describe_API_error_propagates (0.01s)
+    --- PASS: TestCodeCommand/ssh_config_written_before_opening_code (0.00s)
+=== RUN   TestConfigCommandDisplaysValues
+--- PASS: TestConfigCommandDisplaysValues (0.00s)
+=== RUN   TestConfigCommandJSONOutput
+--- PASS: TestConfigCommandJSONOutput (0.00s)
+=== RUN   TestConfigSetCommand
+--- PASS: TestConfigSetCommand (0.01s)
+=== RUN   TestConfigSetRejectsInvalidVolume
+--- PASS: TestConfigSetRejectsInvalidVolume (0.00s)
+=== RUN   TestConfigSetRejectsInvalidIdleTimeout
+--- PASS: TestConfigSetRejectsInvalidIdleTimeout (0.00s)
+=== RUN   TestConfigSetRejectsUnknownKey
+--- PASS: TestConfigSetRejectsUnknownKey (0.00s)
+=== RUN   TestConfigCommandUsesContextForJSON
+--- PASS: TestConfigCommandUsesContextForJSON (0.00s)
+=== RUN   TestConfigSetRequiresArgs
+--- PASS: TestConfigSetRequiresArgs (0.00s)
+=== RUN   TestConfigFileCreatedOnSet
+--- PASS: TestConfigFileCreatedOnSet (0.01s)
+=== RUN   TestConfigGetReturnsSetValue
+--- PASS: TestConfigGetReturnsSetValue (0.01s)
+=== RUN   TestConfigGetDefaultValue
+--- PASS: TestConfigGetDefaultValue (0.00s)
+=== RUN   TestConfigGetEmptyRegion
+--- PASS: TestConfigGetEmptyRegion (0.00s)
+=== RUN   TestConfigGetUnknownKey
+--- PASS: TestConfigGetUnknownKey (0.00s)
+=== RUN   TestConfigGetRequiresArgs
+--- PASS: TestConfigGetRequiresArgs (0.00s)
+=== RUN   TestConfigGetJSONOutput
+--- PASS: TestConfigGetJSONOutput (0.01s)
+=== RUN   TestDestroyCommand
+=== RUN   TestDestroyCommand/successful_destroy_with_--yes
+=== RUN   TestDestroyCommand/successful_destroy_with_confirmation_prompt
+=== RUN   TestDestroyCommand/confirmation_prompt_rejects_wrong_name
+=== RUN   TestDestroyCommand/no_VM_found_returns_error
+=== RUN   TestDestroyCommand/verbose_shows_progress_phases
+=== RUN   TestDestroyCommand/shows_what_will_be_destroyed_before_confirming
+=== RUN   TestDestroyCommand/non-default_vm_name
+=== RUN   TestDestroyCommand/describe_error_propagates
+=== RUN   TestDestroyCommand/terminate_error_propagates
+--- PASS: TestDestroyCommand (0.00s)
+    --- PASS: TestDestroyCommand/successful_destroy_with_--yes (0.00s)
+    --- PASS: TestDestroyCommand/successful_destroy_with_confirmation_prompt (0.00s)
+    --- PASS: TestDestroyCommand/confirmation_prompt_rejects_wrong_name (0.00s)
+    --- PASS: TestDestroyCommand/no_VM_found_returns_error (0.00s)
+    --- PASS: TestDestroyCommand/verbose_shows_progress_phases (0.00s)
+    --- PASS: TestDestroyCommand/shows_what_will_be_destroyed_before_confirming (0.00s)
+    --- PASS: TestDestroyCommand/non-default_vm_name (0.00s)
+    --- PASS: TestDestroyCommand/describe_error_propagates (0.00s)
+    --- PASS: TestDestroyCommand/terminate_error_propagates (0.00s)
+=== RUN   TestDownCommand
+=== RUN   TestDownCommand/successful_stop_of_running_instance
+=== RUN   TestDownCommand/vm_not_found_suggests_mint_up
+=== RUN   TestDownCommand/already_stopped_vm_shows_informational_message
+=== RUN   TestDownCommand/describe_API_error_propagates
+=== RUN   TestDownCommand/stop_API_error_propagates
+=== RUN   TestDownCommand/verbose_shows_progress_steps
+=== RUN   TestDownCommand/stop_sends_correct_instance_ID_to_non-default_vm
+--- PASS: TestDownCommand (0.00s)
+    --- PASS: TestDownCommand/successful_stop_of_running_instance (0.00s)
+    --- PASS: TestDownCommand/vm_not_found_suggests_mint_up (0.00s)
+    --- PASS: TestDownCommand/already_stopped_vm_shows_informational_message (0.00s)
+    --- PASS: TestDownCommand/describe_API_error_propagates (0.00s)
+    --- PASS: TestDownCommand/stop_API_error_propagates (0.00s)
+    --- PASS: TestDownCommand/verbose_shows_progress_steps (0.00s)
+    --- PASS: TestDownCommand/stop_sends_correct_instance_ID_to_non-default_vm (0.00s)
+=== RUN   TestExecuteWithBootstrapScriptStoresScript
+--- PASS: TestExecuteWithBootstrapScriptStoresScript (0.00s)
+=== RUN   TestGetBootstrapScriptReturnsStoredScript
+--- PASS: TestGetBootstrapScriptReturnsStoredScript (0.00s)
+=== RUN   TestGetBootstrapScriptReturnsNilWhenUnset
+--- PASS: TestGetBootstrapScriptReturnsNilWhenUnset (0.00s)
+=== RUN   TestInitCommandHumanOutput
+--- PASS: TestInitCommandHumanOutput (0.00s)
+=== RUN   TestInitCommandJSONOutput
+--- PASS: TestInitCommandJSONOutput (0.00s)
+=== RUN   TestInitCommandError
+--- PASS: TestInitCommandError (0.00s)
+=== RUN   TestInitCommandIdempotentOutput
+--- PASS: TestInitCommandIdempotentOutput (0.00s)
+=== RUN   TestInitCommandRegistered
+--- PASS: TestInitCommandRegistered (0.00s)
+=== RUN   TestListCommand
+=== RUN   TestListCommand/single_running_VM_table_output
+=== RUN   TestListCommand/empty_list_shows_no_VMs_message
+=== RUN   TestListCommand/multiple_VMs_listed
+=== RUN   TestListCommand/idle_timeout_warning
+=== RUN   TestListCommand/no_idle_warning_when_under_threshold
+=== RUN   TestListCommand/no_idle_warning_for_stopped_VMs
+=== RUN   TestListCommand/bootstrap_failed_indicator
+=== RUN   TestListCommand/json_output_format
+=== RUN   TestListCommand/json_output_is_valid_JSON_array
+=== RUN   TestListCommand/json_empty_list
+=== RUN   TestListCommand/API_error_propagates
+--- PASS: TestListCommand (0.77s)
+    --- PASS: TestListCommand/single_running_VM_table_output (0.29s)
+    --- PASS: TestListCommand/empty_list_shows_no_VMs_message (0.08s)
+    --- PASS: TestListCommand/multiple_VMs_listed (0.08s)
+    --- PASS: TestListCommand/idle_timeout_warning (0.08s)
+    --- PASS: TestListCommand/no_idle_warning_when_under_threshold (0.08s)
+    --- PASS: TestListCommand/no_idle_warning_for_stopped_VMs (0.08s)
+    --- PASS: TestListCommand/bootstrap_failed_indicator (0.07s)
+    --- PASS: TestListCommand/json_output_format (0.00s)
+    --- PASS: TestListCommand/json_output_is_valid_JSON_array (0.00s)
+    --- PASS: TestListCommand/json_empty_list (0.00s)
+    --- PASS: TestListCommand/API_error_propagates (0.00s)
+=== RUN   TestSSHConfigCommand_WritesBlock
+--- PASS: TestSSHConfigCommand_WritesBlock (0.02s)
+=== RUN   TestSSHConfigCommand_CustomVM
+--- PASS: TestSSHConfigCommand_CustomVM (0.02s)
+=== RUN   TestSSHConfigCommand_RequiresHostname
+--- PASS: TestSSHConfigCommand_RequiresHostname (0.01s)
+=== RUN   TestSSHConfigCommand_RequiresInstanceID
+--- PASS: TestSSHConfigCommand_RequiresInstanceID (0.00s)
+=== RUN   TestSSHConfigCommand_RequiresAZ
+--- PASS: TestSSHConfigCommand_RequiresAZ (0.00s)
+=== RUN   TestSSHConfigCommand_StoresApproval
+--- PASS: TestSSHConfigCommand_StoresApproval (0.01s)
+=== RUN   TestSSHConfigCommand_WarnsOnHandEdits
+--- PASS: TestSSHConfigCommand_WarnsOnHandEdits (0.02s)
+=== RUN   TestSSHConfigCommand_RemoveFlag
+--- PASS: TestSSHConfigCommand_RemoveFlag (0.01s)
+=== RUN   TestSSHConfigCommand_PreservesExistingContent
+--- PASS: TestSSHConfigCommand_PreservesExistingContent (0.01s)
+=== RUN   TestSSHCommand
+=== RUN   TestSSHCommand/successful_ssh_to_running_instance
+=== RUN   TestSSHCommand/vm_not_found_returns_actionable_error
+=== RUN   TestSSHCommand/stopped_vm_returns_actionable_error
+=== RUN   TestSSHCommand/describe_API_error_propagates
+=== RUN   TestSSHCommand/send_public_key_error_propagates
+=== RUN   TestSSHCommand/extra_args_after_--_are_passed_through
+=== RUN   TestSSHCommand/send_key_called_with_correct_params
+=== RUN   TestSSHCommand/non-default_vm_name
+--- PASS: TestSSHCommand (0.00s)
+    --- PASS: TestSSHCommand/successful_ssh_to_running_instance (0.00s)
+    --- PASS: TestSSHCommand/vm_not_found_returns_actionable_error (0.00s)
+    --- PASS: TestSSHCommand/stopped_vm_returns_actionable_error (0.00s)
+    --- PASS: TestSSHCommand/describe_API_error_propagates (0.00s)
+    --- PASS: TestSSHCommand/send_public_key_error_propagates (0.00s)
+    --- PASS: TestSSHCommand/extra_args_after_--_are_passed_through (0.00s)
+    --- PASS: TestSSHCommand/send_key_called_with_correct_params (0.00s)
+    --- PASS: TestSSHCommand/non-default_vm_name (0.00s)
+=== RUN   TestSSHKeyGeneration
+--- PASS: TestSSHKeyGeneration (0.00s)
+=== RUN   TestStatusCommand
+=== RUN   TestStatusCommand/happy_path_shows_VM_details
+=== RUN   TestStatusCommand/VM_not_found_returns_error
+=== RUN   TestStatusCommand/json_output_format
+=== RUN   TestStatusCommand/json_output_is_valid_JSON_object
+=== RUN   TestStatusCommand/API_error_propagates
+=== RUN   TestStatusCommand/non-default_VM_name
+=== RUN   TestStatusCommand/stopped_VM_shows_no_IP
+=== RUN   TestStatusCommand/bootstrap_failed_shown
+--- PASS: TestStatusCommand (0.00s)
+    --- PASS: TestStatusCommand/happy_path_shows_VM_details (0.00s)
+    --- PASS: TestStatusCommand/VM_not_found_returns_error (0.00s)
+    --- PASS: TestStatusCommand/json_output_format (0.00s)
+    --- PASS: TestStatusCommand/json_output_is_valid_JSON_object (0.00s)
+    --- PASS: TestStatusCommand/API_error_propagates (0.00s)
+    --- PASS: TestStatusCommand/non-default_VM_name (0.00s)
+    --- PASS: TestStatusCommand/stopped_VM_shows_no_IP (0.00s)
+    --- PASS: TestStatusCommand/bootstrap_failed_shown (0.00s)
+=== RUN   TestUpCommandHumanOutput
+--- PASS: TestUpCommandHumanOutput (0.00s)
+=== RUN   TestUpCommandJSONOutput
+--- PASS: TestUpCommandJSONOutput (0.00s)
+=== RUN   TestUpCommandRestartedOutput
+--- PASS: TestUpCommandRestartedOutput (0.00s)
+=== RUN   TestUpCommandError
+--- PASS: TestUpCommandError (0.00s)
+=== RUN   TestUpCommandVerboseOutput
+--- PASS: TestUpCommandVerboseOutput (0.00s)
+=== RUN   TestUpCommandNilDeps
+--- PASS: TestUpCommandNilDeps (0.00s)
+=== RUN   TestUpCommandRegistered
+--- PASS: TestUpCommandRegistered (0.00s)
+=== RUN   TestUpCommandBootstrapCompleteOutput
+--- PASS: TestUpCommandBootstrapCompleteOutput (0.00s)
+=== RUN   TestUpCommandBootstrapErrorOutput
+--- PASS: TestUpCommandBootstrapErrorOutput (0.00s)
+=== RUN   TestUpCommandBootstrapErrorJSON
+--- PASS: TestUpCommandBootstrapErrorJSON (0.00s)
+=== RUN   TestUpCommandBootstrapSuccessJSONNoError
+--- PASS: TestUpCommandBootstrapSuccessJSONNoError (0.00s)
+=== RUN   TestVersionCommandOutput
+--- PASS: TestVersionCommandOutput (0.00s)
+=== RUN   TestVersionCommandDevDefaults
+--- PASS: TestVersionCommandDevDefaults (0.00s)
+=== RUN   TestRootCommandExecutesWithoutError
+--- PASS: TestRootCommandExecutesWithoutError (0.00s)
+=== RUN   TestRootCommandShowsHelp
+--- PASS: TestRootCommandShowsHelp (0.00s)
+=== RUN   TestGlobalFlagsExist
+--- PASS: TestGlobalFlagsExist (0.00s)
+PASS
+coverage: 79.6% of statements
+ok  	github.com/nicholasgasior/mint/cmd	1.501s	coverage: 79.6% of statements
+=== RUN   TestRunInstancesAPI
+=== RUN   TestRunInstancesAPI/successful_launch_returns_reservation
+=== RUN   TestRunInstancesAPI/API_error_propagated
+--- PASS: TestRunInstancesAPI (0.00s)
+    --- PASS: TestRunInstancesAPI/successful_launch_returns_reservation (0.00s)
+    --- PASS: TestRunInstancesAPI/API_error_propagated (0.00s)
+=== RUN   TestStartInstancesAPI
+=== RUN   TestStartInstancesAPI/successful_start
+=== RUN   TestStartInstancesAPI/API_error_propagated
+--- PASS: TestStartInstancesAPI (0.00s)
+    --- PASS: TestStartInstancesAPI/successful_start (0.00s)
+    --- PASS: TestStartInstancesAPI/API_error_propagated (0.00s)
+=== RUN   TestStopInstancesAPI
+=== RUN   TestStopInstancesAPI/successful_stop
+=== RUN   TestStopInstancesAPI/API_error_propagated
+--- PASS: TestStopInstancesAPI (0.00s)
+    --- PASS: TestStopInstancesAPI/successful_stop (0.00s)
+    --- PASS: TestStopInstancesAPI/API_error_propagated (0.00s)
+=== RUN   TestTerminateInstancesAPI
+=== RUN   TestTerminateInstancesAPI/successful_terminate
+=== RUN   TestTerminateInstancesAPI/API_error_propagated
+--- PASS: TestTerminateInstancesAPI (0.00s)
+    --- PASS: TestTerminateInstancesAPI/successful_terminate (0.00s)
+    --- PASS: TestTerminateInstancesAPI/API_error_propagated (0.00s)
+=== RUN   TestDescribeInstancesAPI
+=== RUN   TestDescribeInstancesAPI/successful_describe_returns_reservations
+=== RUN   TestDescribeInstancesAPI/empty_results
+=== RUN   TestDescribeInstancesAPI/API_error_propagated
+--- PASS: TestDescribeInstancesAPI (0.00s)
+    --- PASS: TestDescribeInstancesAPI/successful_describe_returns_reservations (0.00s)
+    --- PASS: TestDescribeInstancesAPI/empty_results (0.00s)
+    --- PASS: TestDescribeInstancesAPI/API_error_propagated (0.00s)
+=== RUN   TestCreateVolumeAPI
+=== RUN   TestCreateVolumeAPI/successful_create
+=== RUN   TestCreateVolumeAPI/API_error_propagated
+--- PASS: TestCreateVolumeAPI (0.00s)
+    --- PASS: TestCreateVolumeAPI/successful_create (0.00s)
+    --- PASS: TestCreateVolumeAPI/API_error_propagated (0.00s)
+=== RUN   TestAttachVolumeAPI
+=== RUN   TestAttachVolumeAPI/successful_attach
+=== RUN   TestAttachVolumeAPI/API_error_propagated
+--- PASS: TestAttachVolumeAPI (0.00s)
+    --- PASS: TestAttachVolumeAPI/successful_attach (0.00s)
+    --- PASS: TestAttachVolumeAPI/API_error_propagated (0.00s)
+=== RUN   TestDetachVolumeAPI
+=== RUN   TestDetachVolumeAPI/successful_detach
+=== RUN   TestDetachVolumeAPI/API_error_propagated
+--- PASS: TestDetachVolumeAPI (0.00s)
+    --- PASS: TestDetachVolumeAPI/successful_detach (0.00s)
+    --- PASS: TestDetachVolumeAPI/API_error_propagated (0.00s)
+=== RUN   TestDeleteVolumeAPI
+=== RUN   TestDeleteVolumeAPI/successful_delete
+=== RUN   TestDeleteVolumeAPI/API_error_propagated
+--- PASS: TestDeleteVolumeAPI (0.00s)
+    --- PASS: TestDeleteVolumeAPI/successful_delete (0.00s)
+    --- PASS: TestDeleteVolumeAPI/API_error_propagated (0.00s)
+=== RUN   TestDescribeVolumesAPI
+=== RUN   TestDescribeVolumesAPI/successful_describe
+=== RUN   TestDescribeVolumesAPI/API_error_propagated
+--- PASS: TestDescribeVolumesAPI (0.00s)
+    --- PASS: TestDescribeVolumesAPI/successful_describe (0.00s)
+    --- PASS: TestDescribeVolumesAPI/API_error_propagated (0.00s)
+=== RUN   TestAllocateAddressAPI
+=== RUN   TestAllocateAddressAPI/successful_allocate
+=== RUN   TestAllocateAddressAPI/API_error_propagated
+--- PASS: TestAllocateAddressAPI (0.00s)
+    --- PASS: TestAllocateAddressAPI/successful_allocate (0.00s)
+    --- PASS: TestAllocateAddressAPI/API_error_propagated (0.00s)
+=== RUN   TestAssociateAddressAPI
+=== RUN   TestAssociateAddressAPI/successful_associate
+=== RUN   TestAssociateAddressAPI/API_error_propagated
+--- PASS: TestAssociateAddressAPI (0.00s)
+    --- PASS: TestAssociateAddressAPI/successful_associate (0.00s)
+    --- PASS: TestAssociateAddressAPI/API_error_propagated (0.00s)
+=== RUN   TestReleaseAddressAPI
+=== RUN   TestReleaseAddressAPI/successful_release
+=== RUN   TestReleaseAddressAPI/API_error_propagated
+--- PASS: TestReleaseAddressAPI (0.00s)
+    --- PASS: TestReleaseAddressAPI/successful_release (0.00s)
+    --- PASS: TestReleaseAddressAPI/API_error_propagated (0.00s)
+=== RUN   TestDescribeAddressesAPI
+=== RUN   TestDescribeAddressesAPI/successful_describe
+=== RUN   TestDescribeAddressesAPI/API_error_propagated
+--- PASS: TestDescribeAddressesAPI (0.00s)
+    --- PASS: TestDescribeAddressesAPI/successful_describe (0.00s)
+    --- PASS: TestDescribeAddressesAPI/API_error_propagated (0.00s)
+=== RUN   TestCreateSecurityGroupAPI
+=== RUN   TestCreateSecurityGroupAPI/successful_create
+=== RUN   TestCreateSecurityGroupAPI/API_error_propagated
+--- PASS: TestCreateSecurityGroupAPI (0.00s)
+    --- PASS: TestCreateSecurityGroupAPI/successful_create (0.00s)
+    --- PASS: TestCreateSecurityGroupAPI/API_error_propagated (0.00s)
+=== RUN   TestAuthorizeSecurityGroupIngressAPI
+=== RUN   TestAuthorizeSecurityGroupIngressAPI/successful_authorize
+=== RUN   TestAuthorizeSecurityGroupIngressAPI/API_error_propagated
+--- PASS: TestAuthorizeSecurityGroupIngressAPI (0.00s)
+    --- PASS: TestAuthorizeSecurityGroupIngressAPI/successful_authorize (0.00s)
+    --- PASS: TestAuthorizeSecurityGroupIngressAPI/API_error_propagated (0.00s)
+=== RUN   TestDescribeSecurityGroupsAPI
+=== RUN   TestDescribeSecurityGroupsAPI/successful_describe
+=== RUN   TestDescribeSecurityGroupsAPI/API_error_propagated
+--- PASS: TestDescribeSecurityGroupsAPI (0.00s)
+    --- PASS: TestDescribeSecurityGroupsAPI/successful_describe (0.00s)
+    --- PASS: TestDescribeSecurityGroupsAPI/API_error_propagated (0.00s)
+=== RUN   TestCreateTagsAPI
+=== RUN   TestCreateTagsAPI/successful_create_tags
+=== RUN   TestCreateTagsAPI/API_error_propagated
+--- PASS: TestCreateTagsAPI (0.00s)
+    --- PASS: TestCreateTagsAPI/successful_create_tags (0.00s)
+    --- PASS: TestCreateTagsAPI/API_error_propagated (0.00s)
+=== RUN   TestDescribeSubnetsAPI
+=== RUN   TestDescribeSubnetsAPI/successful_describe
+=== RUN   TestDescribeSubnetsAPI/API_error_propagated
+--- PASS: TestDescribeSubnetsAPI (0.00s)
+    --- PASS: TestDescribeSubnetsAPI/successful_describe (0.00s)
+    --- PASS: TestDescribeSubnetsAPI/API_error_propagated (0.00s)
+=== RUN   TestDescribeVpcsAPI
+=== RUN   TestDescribeVpcsAPI/successful_describe
+=== RUN   TestDescribeVpcsAPI/API_error_propagated
+--- PASS: TestDescribeVpcsAPI (0.00s)
+    --- PASS: TestDescribeVpcsAPI/successful_describe (0.00s)
+    --- PASS: TestDescribeVpcsAPI/API_error_propagated (0.00s)
+=== RUN   TestValidateInstanceType
+=== RUN   TestValidateInstanceType/valid_instance_type
+=== RUN   TestValidateInstanceType/invalid_instance_type_returns_empty_results
+=== RUN   TestValidateInstanceType/error_message_includes_region
+=== RUN   TestValidateInstanceType/AWS_API_error_propagated
+--- PASS: TestValidateInstanceType (0.00s)
+    --- PASS: TestValidateInstanceType/valid_instance_type (0.00s)
+    --- PASS: TestValidateInstanceType/invalid_instance_type_returns_empty_results (0.00s)
+    --- PASS: TestValidateInstanceType/error_message_includes_region (0.00s)
+    --- PASS: TestValidateInstanceType/AWS_API_error_propagated (0.00s)
+=== RUN   TestDescribeFileSystemsAPI
+=== RUN   TestDescribeFileSystemsAPI/successful_describe_returns_file_systems
+=== RUN   TestDescribeFileSystemsAPI/empty_results
+=== RUN   TestDescribeFileSystemsAPI/API_error_propagated
+--- PASS: TestDescribeFileSystemsAPI (0.00s)
+    --- PASS: TestDescribeFileSystemsAPI/successful_describe_returns_file_systems (0.00s)
+    --- PASS: TestDescribeFileSystemsAPI/empty_results (0.00s)
+    --- PASS: TestDescribeFileSystemsAPI/API_error_propagated (0.00s)
+=== RUN   TestCreateAccessPointAPI
+=== RUN   TestCreateAccessPointAPI/successful_create
+=== RUN   TestCreateAccessPointAPI/API_error_propagated
+--- PASS: TestCreateAccessPointAPI (0.00s)
+    --- PASS: TestCreateAccessPointAPI/successful_create (0.00s)
+    --- PASS: TestCreateAccessPointAPI/API_error_propagated (0.00s)
+=== RUN   TestDescribeAccessPointsAPI
+=== RUN   TestDescribeAccessPointsAPI/successful_describe_returns_access_points
+=== RUN   TestDescribeAccessPointsAPI/empty_results
+=== RUN   TestDescribeAccessPointsAPI/API_error_propagated
+--- PASS: TestDescribeAccessPointsAPI (0.00s)
+    --- PASS: TestDescribeAccessPointsAPI/successful_describe_returns_access_points (0.00s)
+    --- PASS: TestDescribeAccessPointsAPI/empty_results (0.00s)
+    --- PASS: TestDescribeAccessPointsAPI/API_error_propagated (0.00s)
+=== RUN   TestSendSSHPublicKeyAPI
+=== RUN   TestSendSSHPublicKeyAPI/successful_key_push
+=== RUN   TestSendSSHPublicKeyAPI/API_error_propagated
+--- PASS: TestSendSSHPublicKeyAPI (0.00s)
+    --- PASS: TestSendSSHPublicKeyAPI/successful_key_push (0.00s)
+    --- PASS: TestSendSSHPublicKeyAPI/API_error_propagated (0.00s)
+=== RUN   TestResolveAMI
+=== RUN   TestResolveAMI/successful_resolution_returns_AMI_ID
+=== RUN   TestResolveAMI/API_error_propagated
+=== RUN   TestResolveAMI/nil_parameter_value
+=== RUN   TestResolveAMI/nil_parameter_in_response
+--- PASS: TestResolveAMI (0.00s)
+    --- PASS: TestResolveAMI/successful_resolution_returns_AMI_ID (0.00s)
+    --- PASS: TestResolveAMI/API_error_propagated (0.00s)
+    --- PASS: TestResolveAMI/nil_parameter_value (0.00s)
+    --- PASS: TestResolveAMI/nil_parameter_in_response (0.00s)
+PASS
+coverage: 100.0% of statements
+ok  	github.com/nicholasgasior/mint/internal/aws	0.777s	coverage: 100.0% of statements
+=== RUN   TestScriptHashMatchesEmbeddedConstant
+--- PASS: TestScriptHashMatchesEmbeddedConstant (0.00s)
+=== RUN   TestVerifyAcceptsValidScript
+--- PASS: TestVerifyAcceptsValidScript (0.00s)
+=== RUN   TestVerifyRejectsTamperedScript
+--- PASS: TestVerifyRejectsTamperedScript (0.00s)
+=== RUN   TestVerifyRejectsEmptyContent
+--- PASS: TestVerifyRejectsEmptyContent (0.00s)
+=== RUN   TestVerifyErrorContainsBothHashes
+--- PASS: TestVerifyErrorContainsBothHashes (0.00s)
+=== RUN   TestScriptContent
+--- PASS: TestScriptContent (0.00s)
+=== RUN   TestScriptHasCorrectPermissions
+--- PASS: TestScriptHasCorrectPermissions (0.00s)
+PASS
+coverage: 100.0% of statements
+ok  	github.com/nicholasgasior/mint/internal/bootstrap	0.908s	coverage: 100.0% of statements
+=== RUN   TestNewCLIContextDefaults
+--- PASS: TestNewCLIContextDefaults (0.00s)
+=== RUN   TestNewCLIContextCapturesFlags
+--- PASS: TestNewCLIContextCapturesFlags (0.00s)
+=== RUN   TestNewCLIContextPartialFlags
+--- PASS: TestNewCLIContextPartialFlags (0.00s)
+=== RUN   TestFromContextRoundTrip
+--- PASS: TestFromContextRoundTrip (0.00s)
+=== RUN   TestFromContextMissingReturnsNil
+--- PASS: TestFromContextMissingReturnsNil (0.00s)
+=== RUN   TestFromCommandIntegration
+--- PASS: TestFromCommandIntegration (0.00s)
+=== RUN   TestNewCLIContextFromChildCommand
+--- PASS: TestNewCLIContextFromChildCommand (0.00s)
+=== RUN   TestFromCommandWithoutContextReturnsNil
+--- PASS: TestFromCommandWithoutContextReturnsNil (0.00s)
+PASS
+coverage: 100.0% of statements
+ok  	github.com/nicholasgasior/mint/internal/cli	1.143s	coverage: 100.0% of statements
+=== RUN   TestLoadReturnsDefaults
+--- PASS: TestLoadReturnsDefaults (0.00s)
+=== RUN   TestSaveAndLoad
+--- PASS: TestSaveAndLoad (0.02s)
+=== RUN   TestSaveCreatesDirectory
+--- PASS: TestSaveCreatesDirectory (0.01s)
+=== RUN   TestSetValidatesRegionFormat
+=== RUN   TestSetValidatesRegionFormat/valid_us-west-2
+=== RUN   TestSetValidatesRegionFormat/valid_eu-central-1
+=== RUN   TestSetValidatesRegionFormat/valid_ap-southeast-1
+=== RUN   TestSetValidatesRegionFormat/empty_clears_region
+=== RUN   TestSetValidatesRegionFormat/invalid_no_number
+=== RUN   TestSetValidatesRegionFormat/invalid_uppercase
+=== RUN   TestSetValidatesRegionFormat/invalid_random
+--- PASS: TestSetValidatesRegionFormat (0.01s)
+    --- PASS: TestSetValidatesRegionFormat/valid_us-west-2 (0.00s)
+    --- PASS: TestSetValidatesRegionFormat/valid_eu-central-1 (0.00s)
+    --- PASS: TestSetValidatesRegionFormat/valid_ap-southeast-1 (0.00s)
+    --- PASS: TestSetValidatesRegionFormat/empty_clears_region (0.00s)
+    --- PASS: TestSetValidatesRegionFormat/invalid_no_number (0.00s)
+    --- PASS: TestSetValidatesRegionFormat/invalid_uppercase (0.00s)
+    --- PASS: TestSetValidatesRegionFormat/invalid_random (0.00s)
+=== RUN   TestSetValidatesVolumeSizeGB
+=== RUN   TestSetValidatesVolumeSizeGB/minimum_50
+=== RUN   TestSetValidatesVolumeSizeGB/above_minimum
+=== RUN   TestSetValidatesVolumeSizeGB/below_minimum_30
+=== RUN   TestSetValidatesVolumeSizeGB/below_minimum_49
+=== RUN   TestSetValidatesVolumeSizeGB/not_a_number
+--- PASS: TestSetValidatesVolumeSizeGB (0.00s)
+    --- PASS: TestSetValidatesVolumeSizeGB/minimum_50 (0.00s)
+    --- PASS: TestSetValidatesVolumeSizeGB/above_minimum (0.00s)
+    --- PASS: TestSetValidatesVolumeSizeGB/below_minimum_30 (0.00s)
+    --- PASS: TestSetValidatesVolumeSizeGB/below_minimum_49 (0.00s)
+    --- PASS: TestSetValidatesVolumeSizeGB/not_a_number (0.00s)
+=== RUN   TestSetValidatesIdleTimeoutMinutes
+=== RUN   TestSetValidatesIdleTimeoutMinutes/minimum_15
+=== RUN   TestSetValidatesIdleTimeoutMinutes/above_minimum
+=== RUN   TestSetValidatesIdleTimeoutMinutes/below_minimum_5
+=== RUN   TestSetValidatesIdleTimeoutMinutes/below_minimum_14
+=== RUN   TestSetValidatesIdleTimeoutMinutes/not_a_number
+--- PASS: TestSetValidatesIdleTimeoutMinutes (0.00s)
+    --- PASS: TestSetValidatesIdleTimeoutMinutes/minimum_15 (0.00s)
+    --- PASS: TestSetValidatesIdleTimeoutMinutes/above_minimum (0.00s)
+    --- PASS: TestSetValidatesIdleTimeoutMinutes/below_minimum_5 (0.00s)
+    --- PASS: TestSetValidatesIdleTimeoutMinutes/below_minimum_14 (0.00s)
+    --- PASS: TestSetValidatesIdleTimeoutMinutes/not_a_number (0.00s)
+=== RUN   TestSetValidatesInstanceType
+--- PASS: TestSetValidatesInstanceType (0.00s)
+=== RUN   TestSetValidatesSSHConfigApproved
+=== RUN   TestSetValidatesSSHConfigApproved/true
+=== RUN   TestSetValidatesSSHConfigApproved/false
+=== RUN   TestSetValidatesSSHConfigApproved/invalid
+--- PASS: TestSetValidatesSSHConfigApproved (0.00s)
+    --- PASS: TestSetValidatesSSHConfigApproved/true (0.00s)
+    --- PASS: TestSetValidatesSSHConfigApproved/false (0.00s)
+    --- PASS: TestSetValidatesSSHConfigApproved/invalid (0.00s)
+=== RUN   TestSetRejectsUnknownKey
+--- PASS: TestSetRejectsUnknownKey (0.00s)
+=== RUN   TestValidKeys
+--- PASS: TestValidKeys (0.00s)
+=== RUN   TestSaveFilePermissions
+--- PASS: TestSaveFilePermissions (0.01s)
+=== RUN   TestSetInstanceTypeWithValidator
+--- PASS: TestSetInstanceTypeWithValidator (0.00s)
+=== RUN   TestSetInstanceTypeWithoutValidator
+--- PASS: TestSetInstanceTypeWithoutValidator (0.00s)
+=== RUN   TestSetInstanceTypeWithoutRegion
+--- PASS: TestSetInstanceTypeWithoutRegion (0.00s)
+=== RUN   TestSetAndSaveRoundtrip
+--- PASS: TestSetAndSaveRoundtrip (0.01s)
+PASS
+coverage: 86.2% of statements
+ok  	github.com/nicholasgasior/mint/internal/config	1.440s	coverage: 86.2% of statements
+=== RUN   TestNormalizeARN
+=== RUN   TestNormalizeARN/IAM_user
+=== RUN   TestNormalizeARN/SSO_assumed_role_with_email
+=== RUN   TestNormalizeARN/generic_assumed_role_with_session_name
+=== RUN   TestNormalizeARN/special_characters_replaced_with_hyphens
+=== RUN   TestNormalizeARN/uppercase_lowered
+=== RUN   TestNormalizeARN/email_domain_stripped_from_IAM_user
+=== RUN   TestNormalizeARN/consecutive_special_chars_collapse_to_single_hyphen
+=== RUN   TestNormalizeARN/trailing_hyphens_stripped
+=== RUN   TestNormalizeARN/leading_hyphens_stripped
+=== RUN   TestNormalizeARN/root_user_ARN
+=== RUN   TestNormalizeARN/empty_ARN
+=== RUN   TestNormalizeARN/malformed_ARN_missing_colon-separated_fields
+=== RUN   TestNormalizeARN/federated_user
+--- PASS: TestNormalizeARN (0.00s)
+    --- PASS: TestNormalizeARN/IAM_user (0.00s)
+    --- PASS: TestNormalizeARN/SSO_assumed_role_with_email (0.00s)
+    --- PASS: TestNormalizeARN/generic_assumed_role_with_session_name (0.00s)
+    --- PASS: TestNormalizeARN/special_characters_replaced_with_hyphens (0.00s)
+    --- PASS: TestNormalizeARN/uppercase_lowered (0.00s)
+    --- PASS: TestNormalizeARN/email_domain_stripped_from_IAM_user (0.00s)
+    --- PASS: TestNormalizeARN/consecutive_special_chars_collapse_to_single_hyphen (0.00s)
+    --- PASS: TestNormalizeARN/trailing_hyphens_stripped (0.00s)
+    --- PASS: TestNormalizeARN/leading_hyphens_stripped (0.00s)
+    --- PASS: TestNormalizeARN/root_user_ARN (0.00s)
+    --- PASS: TestNormalizeARN/empty_ARN (0.00s)
+    --- PASS: TestNormalizeARN/malformed_ARN_missing_colon-separated_fields (0.00s)
+    --- PASS: TestNormalizeARN/federated_user (0.00s)
+=== RUN   TestResolveOwner
+=== RUN   TestResolveOwner/IAM_user_identity
+=== RUN   TestResolveOwner/SSO_identity
+=== RUN   TestResolveOwner/STS_API_error
+=== RUN   TestResolveOwner/nil_ARN_in_response
+--- PASS: TestResolveOwner (0.00s)
+    --- PASS: TestResolveOwner/IAM_user_identity (0.00s)
+    --- PASS: TestResolveOwner/SSO_identity (0.00s)
+    --- PASS: TestResolveOwner/STS_API_error (0.00s)
+    --- PASS: TestResolveOwner/nil_ARN_in_response (0.00s)
+PASS
+coverage: 86.7% of statements
+ok  	github.com/nicholasgasior/mint/internal/identity	1.593s	coverage: 86.7% of statements
+=== RUN   TestNewAuditLoggerCreatesFile
+--- PASS: TestNewAuditLoggerCreatesFile (0.00s)
+=== RUN   TestNewAuditLoggerCreatesParentDir
+--- PASS: TestNewAuditLoggerCreatesParentDir (0.01s)
+=== RUN   TestAuditLoggerWritesJSONLine
+--- PASS: TestAuditLoggerWritesJSONLine (0.00s)
+=== RUN   TestAuditLoggerAppendsEntries
+--- PASS: TestAuditLoggerAppendsEntries (0.00s)
+=== RUN   TestAuditLoggerAppendsToExistingFile
+--- PASS: TestAuditLoggerAppendsToExistingFile (0.01s)
+=== RUN   TestAuditLoggerLogResourceCreate
+--- PASS: TestAuditLoggerLogResourceCreate (0.00s)
+=== RUN   TestAuditLoggerLogResourceDestroy
+--- PASS: TestAuditLoggerLogResourceDestroy (0.00s)
+=== RUN   TestAuditLoggerLogError
+--- PASS: TestAuditLoggerLogError (0.00s)
+=== RUN   TestAuditLoggerImplementsInterface
+--- PASS: TestAuditLoggerImplementsInterface (0.00s)
+=== RUN   TestAuditLoggerCloses
+--- PASS: TestAuditLoggerCloses (0.00s)
+=== RUN   TestNewStructuredLoggerCreatesLogDir
+--- PASS: TestNewStructuredLoggerCreatesLogDir (0.00s)
+=== RUN   TestStructuredLoggerWritesJSONFile
+--- PASS: TestStructuredLoggerWritesJSONFile (0.00s)
+=== RUN   TestStructuredLoggerRecordsErrorResult
+--- PASS: TestStructuredLoggerRecordsErrorResult (0.01s)
+=== RUN   TestStructuredLoggerSuccessOmitsErrorField
+--- PASS: TestStructuredLoggerSuccessOmitsErrorField (0.00s)
+=== RUN   TestStructuredLoggerConcurrentAccess
+--- PASS: TestStructuredLoggerConcurrentAccess (0.02s)
+=== RUN   TestStructuredLoggerDebugWritesToStderr
+--- PASS: TestStructuredLoggerDebugWritesToStderr (0.00s)
+=== RUN   TestStructuredLoggerNoDebugSuppressesStderr
+--- PASS: TestStructuredLoggerNoDebugSuppressesStderr (0.00s)
+=== RUN   TestStructuredLoggerMultipleEntries
+--- PASS: TestStructuredLoggerMultipleEntries (0.00s)
+=== RUN   TestStructuredLoggerImplementsInterface
+--- PASS: TestStructuredLoggerImplementsInterface (0.00s)
+PASS
+coverage: 84.3% of statements
+ok  	github.com/nicholasgasior/mint/internal/logging	1.786s	coverage: 84.3% of statements
+=== RUN   TestBootstrapPoller
+=== RUN   TestBootstrapPoller/complete_on_first_check
+=== RUN   TestBootstrapPoller/complete_after_3_polls
+=== RUN   TestBootstrapPoller/timeout_triggers_prompt_-_option_1_stop
+=== RUN   TestBootstrapPoller/timeout_triggers_prompt_-_option_2_terminate_and_tag_failed
+=== RUN   TestBootstrapPoller/timeout_triggers_prompt_-_option_3_leave_running
+=== RUN   TestBootstrapPoller/timeout_stop_error
+=== RUN   TestBootstrapPoller/timeout_terminate_error
+=== RUN   TestBootstrapPoller/timeout_tag_error_after_terminate
+=== RUN   TestBootstrapPoller/context_cancellation
+=== RUN   TestBootstrapPoller/describe_error_during_poll
+=== RUN   TestBootstrapPoller/bootstrap_already_failed_tag_returns_immediately
+--- PASS: TestBootstrapPoller (0.04s)
+    --- PASS: TestBootstrapPoller/complete_on_first_check (0.00s)
+    --- PASS: TestBootstrapPoller/complete_after_3_polls (0.00s)
+    --- PASS: TestBootstrapPoller/timeout_triggers_prompt_-_option_1_stop (0.01s)
+    --- PASS: TestBootstrapPoller/timeout_triggers_prompt_-_option_2_terminate_and_tag_failed (0.01s)
+    --- PASS: TestBootstrapPoller/timeout_triggers_prompt_-_option_3_leave_running (0.01s)
+    --- PASS: TestBootstrapPoller/timeout_stop_error (0.01s)
+    --- PASS: TestBootstrapPoller/timeout_terminate_error (0.01s)
+    --- PASS: TestBootstrapPoller/timeout_tag_error_after_terminate (0.01s)
+    --- PASS: TestBootstrapPoller/context_cancellation (0.00s)
+    --- PASS: TestBootstrapPoller/describe_error_during_poll (0.01s)
+    --- PASS: TestBootstrapPoller/bootstrap_already_failed_tag_returns_immediately (0.00s)
+=== RUN   TestBootstrapPollerDefaultConfig
+--- PASS: TestBootstrapPollerDefaultConfig (0.00s)
+=== RUN   TestBootstrapPollerProgressOutput
+--- PASS: TestBootstrapPollerProgressOutput (0.00s)
+=== RUN   TestDestroyRun
+=== RUN   TestDestroyRun/happy_path_-_all_resources_destroyed
+=== RUN   TestDestroyRun/not_confirmed_returns_error
+=== RUN   TestDestroyRun/no_VM_found_returns_error
+=== RUN   TestDestroyRun/describe_instances_error_propagates
+=== RUN   TestDestroyRun/terminate_error_propagates
+=== RUN   TestDestroyRun/no_project_volumes_-_continues_without_error
+=== RUN   TestDestroyRun/no_elastic_IP_-_continues_without_error
+=== RUN   TestDestroyRun/volume_describe_error_is_non-fatal_(logged,_continues)
+2026/02/16 23:20:10 failed to discover project volumes: volume API down
+=== RUN   TestDestroyRun/EIP_describe_error_is_non-fatal_(logged,_continues)
+2026/02/16 23:20:10 failed to discover Elastic IP: EIP API down
+=== RUN   TestDestroyRun/detach_volume_error_is_non-fatal
+2026/02/16 23:20:10 failed to detach volume vol-proj1: volume already detached
+=== RUN   TestDestroyRun/delete_volume_error_is_non-fatal
+2026/02/16 23:20:10 failed to delete volume vol-proj1: volume not found
+=== RUN   TestDestroyRun/release_address_error_is_non-fatal
+2026/02/16 23:20:10 failed to release Elastic IP eipalloc-abc123: address not found
+--- PASS: TestDestroyRun (0.00s)
+    --- PASS: TestDestroyRun/happy_path_-_all_resources_destroyed (0.00s)
+    --- PASS: TestDestroyRun/not_confirmed_returns_error (0.00s)
+    --- PASS: TestDestroyRun/no_VM_found_returns_error (0.00s)
+    --- PASS: TestDestroyRun/describe_instances_error_propagates (0.00s)
+    --- PASS: TestDestroyRun/terminate_error_propagates (0.00s)
+    --- PASS: TestDestroyRun/no_project_volumes_-_continues_without_error (0.00s)
+    --- PASS: TestDestroyRun/no_elastic_IP_-_continues_without_error (0.00s)
+    --- PASS: TestDestroyRun/volume_describe_error_is_non-fatal_(logged,_continues) (0.00s)
+    --- PASS: TestDestroyRun/EIP_describe_error_is_non-fatal_(logged,_continues) (0.00s)
+    --- PASS: TestDestroyRun/detach_volume_error_is_non-fatal (0.00s)
+    --- PASS: TestDestroyRun/delete_volume_error_is_non-fatal (0.00s)
+    --- PASS: TestDestroyRun/release_address_error_is_non-fatal (0.00s)
+=== RUN   TestDestroyTerminatesCorrectInstance
+--- PASS: TestDestroyTerminatesCorrectInstance (0.00s)
+=== RUN   TestDestroyDeletesProjectVolume
+--- PASS: TestDestroyDeletesProjectVolume (0.00s)
+=== RUN   TestDestroyDetachesInUseVolume
+--- PASS: TestDestroyDetachesInUseVolume (0.00s)
+=== RUN   TestDestroySkipsDetachForAvailableVolume
+--- PASS: TestDestroySkipsDetachForAvailableVolume (0.00s)
+=== RUN   TestDestroyReleasesElasticIP
+--- PASS: TestDestroyReleasesElasticIP (0.00s)
+=== RUN   TestDestroyMultipleVolumes
+--- PASS: TestDestroyMultipleVolumes (0.00s)
+=== RUN   TestDestroyRunResult
+--- PASS: TestDestroyRunResult (0.00s)
+=== RUN   TestValidateVPC
+=== RUN   TestValidateVPC/default_VPC_found_with_public_subnet
+=== RUN   TestValidateVPC/no_default_VPC
+=== RUN   TestValidateVPC/VPC_API_error
+=== RUN   TestValidateVPC/no_public_subnets
+=== RUN   TestValidateVPC/subnets_API_error
+--- PASS: TestValidateVPC (0.00s)
+    --- PASS: TestValidateVPC/default_VPC_found_with_public_subnet (0.00s)
+    --- PASS: TestValidateVPC/no_default_VPC (0.00s)
+    --- PASS: TestValidateVPC/VPC_API_error (0.00s)
+    --- PASS: TestValidateVPC/no_public_subnets (0.00s)
+    --- PASS: TestValidateVPC/subnets_API_error (0.00s)
+=== RUN   TestDiscoverEFS
+=== RUN   TestDiscoverEFS/admin_EFS_found
+=== RUN   TestDiscoverEFS/no_admin_EFS
+=== RUN   TestDiscoverEFS/EFS_API_error
+--- PASS: TestDiscoverEFS (0.00s)
+    --- PASS: TestDiscoverEFS/admin_EFS_found (0.00s)
+    --- PASS: TestDiscoverEFS/no_admin_EFS (0.00s)
+    --- PASS: TestDiscoverEFS/EFS_API_error (0.00s)
+=== RUN   TestEnsureSecurityGroup
+=== RUN   TestEnsureSecurityGroup/creates_new_security_group
+=== RUN   TestEnsureSecurityGroup/skips_existing_security_group
+=== RUN   TestEnsureSecurityGroup/describe_SG_API_error
+=== RUN   TestEnsureSecurityGroup/create_SG_API_error
+=== RUN   TestEnsureSecurityGroup/authorize_ingress_API_error
+--- PASS: TestEnsureSecurityGroup (0.00s)
+    --- PASS: TestEnsureSecurityGroup/creates_new_security_group (0.00s)
+    --- PASS: TestEnsureSecurityGroup/skips_existing_security_group (0.00s)
+    --- PASS: TestEnsureSecurityGroup/describe_SG_API_error (0.00s)
+    --- PASS: TestEnsureSecurityGroup/create_SG_API_error (0.00s)
+    --- PASS: TestEnsureSecurityGroup/authorize_ingress_API_error (0.00s)
+=== RUN   TestEnsureAccessPoint
+=== RUN   TestEnsureAccessPoint/creates_new_access_point
+=== RUN   TestEnsureAccessPoint/skips_existing_access_point
+=== RUN   TestEnsureAccessPoint/describe_AP_API_error
+=== RUN   TestEnsureAccessPoint/create_AP_API_error
+--- PASS: TestEnsureAccessPoint (0.00s)
+    --- PASS: TestEnsureAccessPoint/creates_new_access_point (0.00s)
+    --- PASS: TestEnsureAccessPoint/skips_existing_access_point (0.00s)
+    --- PASS: TestEnsureAccessPoint/describe_AP_API_error (0.00s)
+    --- PASS: TestEnsureAccessPoint/create_AP_API_error (0.00s)
+=== RUN   TestRunFullFlow
+=== RUN   TestRunFullFlow/happy_path_-_all_resources_created
+=== RUN   TestRunFullFlow/happy_path_-_idempotent_(SG_and_AP_already_exist)
+=== RUN   TestRunFullFlow/fails_on_VPC_validation
+=== RUN   TestRunFullFlow/fails_on_EFS_discovery
+=== RUN   TestRunFullFlow/fails_on_SG_creation
+=== RUN   TestRunFullFlow/fails_on_access_point_creation
+--- PASS: TestRunFullFlow (0.00s)
+    --- PASS: TestRunFullFlow/happy_path_-_all_resources_created (0.00s)
+    --- PASS: TestRunFullFlow/happy_path_-_idempotent_(SG_and_AP_already_exist) (0.00s)
+    --- PASS: TestRunFullFlow/fails_on_VPC_validation (0.00s)
+    --- PASS: TestRunFullFlow/fails_on_EFS_discovery (0.00s)
+    --- PASS: TestRunFullFlow/fails_on_SG_creation (0.00s)
+    --- PASS: TestRunFullFlow/fails_on_access_point_creation (0.00s)
+=== RUN   TestProvisionerRestartStoppedVM
+--- PASS: TestProvisionerRestartStoppedVM (0.00s)
+=== RUN   TestProvisionerExistingRunningVM
+--- PASS: TestProvisionerExistingRunningVM (0.00s)
+=== RUN   TestProvisionerFullHappyPath
+--- PASS: TestProvisionerFullHappyPath (0.00s)
+=== RUN   TestProvisionerBootstrapVerificationFailure
+--- PASS: TestProvisionerBootstrapVerificationFailure (0.00s)
+=== RUN   TestProvisionerEIPQuotaExceeded
+--- PASS: TestProvisionerEIPQuotaExceeded (0.00s)
+=== RUN   TestProvisionerAMIResolutionFailure
+--- PASS: TestProvisionerAMIResolutionFailure (0.00s)
+=== RUN   TestProvisionerUserSGNotFound
+--- PASS: TestProvisionerUserSGNotFound (0.00s)
+=== RUN   TestProvisionerAdminSGNotFound
+--- PASS: TestProvisionerAdminSGNotFound (0.00s)
+=== RUN   TestProvisionerSGDescribeError
+--- PASS: TestProvisionerSGDescribeError (0.00s)
+=== RUN   TestProvisionerNoSubnetsFound
+--- PASS: TestProvisionerNoSubnetsFound (0.00s)
+=== RUN   TestProvisionerSubnetDescribeError
+--- PASS: TestProvisionerSubnetDescribeError (0.00s)
+=== RUN   TestProvisionerRunInstancesError
+--- PASS: TestProvisionerRunInstancesError (0.00s)
+=== RUN   TestProvisionerRunInstancesNoInstances
+--- PASS: TestProvisionerRunInstancesNoInstances (0.00s)
+=== RUN   TestProvisionerCreateVolumeError
+--- PASS: TestProvisionerCreateVolumeError (0.00s)
+=== RUN   TestProvisionerAttachVolumeError
+--- PASS: TestProvisionerAttachVolumeError (0.00s)
+=== RUN   TestProvisionerAllocateAddressError
+--- PASS: TestProvisionerAllocateAddressError (0.00s)
+=== RUN   TestProvisionerAssociateAddressError
+--- PASS: TestProvisionerAssociateAddressError (0.00s)
+=== RUN   TestProvisionerDiscoverVMError
+--- PASS: TestProvisionerDiscoverVMError (0.00s)
+=== RUN   TestProvisionerStartStoppedVMError
+--- PASS: TestProvisionerStartStoppedVMError (0.00s)
+=== RUN   TestProvisionerDefaultVolumeSize
+--- PASS: TestProvisionerDefaultVolumeSize (0.00s)
+=== RUN   TestProvisionerCustomVolumeSize
+--- PASS: TestProvisionerCustomVolumeSize (0.00s)
+=== RUN   TestProvisionerInstanceTags
+--- PASS: TestProvisionerInstanceTags (0.00s)
+=== RUN   TestInterpolateBootstrapReplacesAllVariables
+--- PASS: TestInterpolateBootstrapReplacesAllVariables (0.00s)
+=== RUN   TestInterpolateBootstrapLeavesUnknownVariables
+--- PASS: TestInterpolateBootstrapLeavesUnknownVariables (0.00s)
+=== RUN   TestInterpolateBootstrapHandlesBashDefaults
+--- PASS: TestInterpolateBootstrapHandlesBashDefaults (0.00s)
+=== RUN   TestLaunchInstanceInterpolatesBootstrapScript
+--- PASS: TestLaunchInstanceInterpolatesBootstrapScript (0.00s)
+=== RUN   TestLaunchInstanceDefaultsIdleTimeout
+--- PASS: TestLaunchInstanceDefaultsIdleTimeout (0.00s)
+=== RUN   TestProvisionerEIPQuotaCheckError
+--- PASS: TestProvisionerEIPQuotaCheckError (0.00s)
+=== RUN   TestProvisionerRun
+=== RUN   TestProvisionerRun/happy_path_-_all_resources_created
+=== RUN   TestProvisionerRun/discover_VM_error
+=== RUN   TestProvisionerRun/bootstrap_verification_failure_aborts
+=== RUN   TestProvisionerRun/AMI_resolution_failure_aborts
+=== RUN   TestProvisionerRun/EIP_quota_exceeded_aborts
+=== RUN   TestProvisionerRun/create_volume_error
+=== RUN   TestProvisionerRun/allocate_address_error
+--- PASS: TestProvisionerRun (0.00s)
+    --- PASS: TestProvisionerRun/happy_path_-_all_resources_created (0.00s)
+    --- PASS: TestProvisionerRun/discover_VM_error (0.00s)
+    --- PASS: TestProvisionerRun/bootstrap_verification_failure_aborts (0.00s)
+    --- PASS: TestProvisionerRun/AMI_resolution_failure_aborts (0.00s)
+    --- PASS: TestProvisionerRun/EIP_quota_exceeded_aborts (0.00s)
+    --- PASS: TestProvisionerRun/create_volume_error (0.00s)
+    --- PASS: TestProvisionerRun/allocate_address_error (0.00s)
+=== RUN   TestProvisionerCallsPollOnFreshProvision
+--- PASS: TestProvisionerCallsPollOnFreshProvision (0.00s)
+=== RUN   TestProvisionerBootstrapPollFailureSetsBootstrapError
+--- PASS: TestProvisionerBootstrapPollFailureSetsBootstrapError (0.00s)
+=== RUN   TestProvisionerNoPollWhenPollerNil
+--- PASS: TestProvisionerNoPollWhenPollerNil (0.00s)
+=== RUN   TestProvisionerNoPollOnRestart
+--- PASS: TestProvisionerNoPollOnRestart (0.00s)
+=== RUN   TestProvisionerNoPollOnRunningVM
+--- PASS: TestProvisionerNoPollOnRunningVM (0.00s)
+PASS
+coverage: 97.3% of statements
+ok  	github.com/nicholasgasior/mint/internal/provision	1.886s	coverage: 97.3% of statements
+=== RUN   TestRecordAndCheckKey_Match
+--- PASS: TestRecordAndCheckKey_Match (0.00s)
+=== RUN   TestCheckKey_NoExistingKey
+--- PASS: TestCheckKey_NoExistingKey (0.00s)
+=== RUN   TestCheckKey_KeyChanged
+--- PASS: TestCheckKey_KeyChanged (0.00s)
+=== RUN   TestRecordKey_OverwritesExisting
+--- PASS: TestRecordKey_OverwritesExisting (0.01s)
+=== RUN   TestRemoveKey
+--- PASS: TestRemoveKey (0.00s)
+=== RUN   TestRemoveKey_Nonexistent
+--- PASS: TestRemoveKey_Nonexistent (0.00s)
+=== RUN   TestMultipleVMs
+--- PASS: TestMultipleVMs (0.01s)
+=== RUN   TestHostKeyStoreFilePermissions
+--- PASS: TestHostKeyStoreFilePermissions (0.00s)
+=== RUN   TestGenerateBlock
+--- PASS: TestGenerateBlock (0.00s)
+=== RUN   TestGenerateBlockProxyCommand
+--- PASS: TestGenerateBlockProxyCommand (0.00s)
+=== RUN   TestGenerateBlockIdentityFile
+--- PASS: TestGenerateBlockIdentityFile (0.00s)
+=== RUN   TestGenerateBlockProxyCommandUser
+--- PASS: TestGenerateBlockProxyCommandUser (0.00s)
+=== RUN   TestGenerateBlockChecksumIsStable
+--- PASS: TestGenerateBlockChecksumIsStable (0.00s)
+=== RUN   TestGenerateBlockChecksumDiffers
+--- PASS: TestGenerateBlockChecksumDiffers (0.00s)
+=== RUN   TestReadManagedBlock_Present
+--- PASS: TestReadManagedBlock_Present (0.00s)
+=== RUN   TestReadManagedBlock_Absent
+--- PASS: TestReadManagedBlock_Absent (0.00s)
+=== RUN   TestReadManagedBlock_DifferentVM
+--- PASS: TestReadManagedBlock_DifferentVM (0.00s)
+=== RUN   TestHasHandEdits_NoEdits
+--- PASS: TestHasHandEdits_NoEdits (0.00s)
+=== RUN   TestHasHandEdits_WithEdits
+--- PASS: TestHasHandEdits_WithEdits (0.00s)
+=== RUN   TestHasHandEdits_NoBlock
+--- PASS: TestHasHandEdits_NoBlock (0.00s)
+=== RUN   TestWriteManagedBlock_NewFile
+--- PASS: TestWriteManagedBlock_NewFile (0.00s)
+=== RUN   TestWriteManagedBlock_ExistingFileWithoutBlock
+--- PASS: TestWriteManagedBlock_ExistingFileWithoutBlock (0.01s)
+=== RUN   TestWriteManagedBlock_ReplacesExistingBlock
+--- PASS: TestWriteManagedBlock_ReplacesExistingBlock (0.00s)
+=== RUN   TestWriteManagedBlock_MultipleVMs
+--- PASS: TestWriteManagedBlock_MultipleVMs (0.01s)
+=== RUN   TestRemoveManagedBlock
+--- PASS: TestRemoveManagedBlock (0.01s)
+=== RUN   TestRemoveManagedBlock_NoBlock
+--- PASS: TestRemoveManagedBlock_NoBlock (0.00s)
+=== RUN   TestRemoveManagedBlock_FileNotExist
+--- PASS: TestRemoveManagedBlock_FileNotExist (0.00s)
+PASS
+coverage: 88.6% of statements
+ok  	github.com/nicholasgasior/mint/internal/sshconfig	1.827s	coverage: 88.6% of statements
+=== RUN   TestTagConstants
+=== RUN   TestTagConstants/TagMint
+=== RUN   TestTagConstants/TagComponent
+=== RUN   TestTagConstants/TagVM
+=== RUN   TestTagConstants/TagOwner
+=== RUN   TestTagConstants/TagOwnerARN
+=== RUN   TestTagConstants/TagBootstrap
+=== RUN   TestTagConstants/TagHealth
+=== RUN   TestTagConstants/TagName
+--- PASS: TestTagConstants (0.00s)
+    --- PASS: TestTagConstants/TagMint (0.00s)
+    --- PASS: TestTagConstants/TagComponent (0.00s)
+    --- PASS: TestTagConstants/TagVM (0.00s)
+    --- PASS: TestTagConstants/TagOwner (0.00s)
+    --- PASS: TestTagConstants/TagOwnerARN (0.00s)
+    --- PASS: TestTagConstants/TagBootstrap (0.00s)
+    --- PASS: TestTagConstants/TagHealth (0.00s)
+    --- PASS: TestTagConstants/TagName (0.00s)
+=== RUN   TestComponentConstants
+=== RUN   TestComponentConstants/ComponentInstance
+=== RUN   TestComponentConstants/ComponentVolume
+=== RUN   TestComponentConstants/ComponentSecurityGroup
+=== RUN   TestComponentConstants/ComponentElasticIP
+=== RUN   TestComponentConstants/ComponentProjectVolume
+=== RUN   TestComponentConstants/ComponentEFSAccessPoint
+--- PASS: TestComponentConstants (0.00s)
+    --- PASS: TestComponentConstants/ComponentInstance (0.00s)
+    --- PASS: TestComponentConstants/ComponentVolume (0.00s)
+    --- PASS: TestComponentConstants/ComponentSecurityGroup (0.00s)
+    --- PASS: TestComponentConstants/ComponentElasticIP (0.00s)
+    --- PASS: TestComponentConstants/ComponentProjectVolume (0.00s)
+    --- PASS: TestComponentConstants/ComponentEFSAccessPoint (0.00s)
+=== RUN   TestBootstrapStatusConstants
+=== RUN   TestBootstrapStatusConstants/BootstrapPending
+=== RUN   TestBootstrapStatusConstants/BootstrapComplete
+=== RUN   TestBootstrapStatusConstants/BootstrapFailed
+--- PASS: TestBootstrapStatusConstants (0.00s)
+    --- PASS: TestBootstrapStatusConstants/BootstrapPending (0.00s)
+    --- PASS: TestBootstrapStatusConstants/BootstrapComplete (0.00s)
+    --- PASS: TestBootstrapStatusConstants/BootstrapFailed (0.00s)
+=== RUN   TestTagBuilderBaseTags
+--- PASS: TestTagBuilderBaseTags (0.00s)
+=== RUN   TestTagBuilderNameFormat
+=== RUN   TestTagBuilderNameFormat/simple
+=== RUN   TestTagBuilderNameFormat/custom_vm
+--- PASS: TestTagBuilderNameFormat (0.00s)
+    --- PASS: TestTagBuilderNameFormat/simple (0.00s)
+    --- PASS: TestTagBuilderNameFormat/custom_vm (0.00s)
+=== RUN   TestTagBuilderWithComponent
+=== RUN   TestTagBuilderWithComponent/instance
+=== RUN   TestTagBuilderWithComponent/volume
+=== RUN   TestTagBuilderWithComponent/security-group
+=== RUN   TestTagBuilderWithComponent/elastic-ip
+=== RUN   TestTagBuilderWithComponent/project-volume
+=== RUN   TestTagBuilderWithComponent/efs-access-point
+--- PASS: TestTagBuilderWithComponent (0.00s)
+    --- PASS: TestTagBuilderWithComponent/instance (0.00s)
+    --- PASS: TestTagBuilderWithComponent/volume (0.00s)
+    --- PASS: TestTagBuilderWithComponent/security-group (0.00s)
+    --- PASS: TestTagBuilderWithComponent/elastic-ip (0.00s)
+    --- PASS: TestTagBuilderWithComponent/project-volume (0.00s)
+    --- PASS: TestTagBuilderWithComponent/efs-access-point (0.00s)
+=== RUN   TestTagBuilderWithBootstrap
+=== RUN   TestTagBuilderWithBootstrap/pending
+=== RUN   TestTagBuilderWithBootstrap/complete
+=== RUN   TestTagBuilderWithBootstrap/failed
+--- PASS: TestTagBuilderWithBootstrap (0.00s)
+    --- PASS: TestTagBuilderWithBootstrap/pending (0.00s)
+    --- PASS: TestTagBuilderWithBootstrap/complete (0.00s)
+    --- PASS: TestTagBuilderWithBootstrap/failed (0.00s)
+=== RUN   TestTagBuilderFluent
+--- PASS: TestTagBuilderFluent (0.00s)
+=== RUN   TestFilterByOwner
+--- PASS: TestFilterByOwner (0.00s)
+=== RUN   TestFilterByOwnerAndVM
+--- PASS: TestFilterByOwnerAndVM (0.00s)
+PASS
+coverage: 100.0% of statements
+ok  	github.com/nicholasgasior/mint/internal/tags	1.765s	coverage: 100.0% of statements
+=== RUN   TestCheck_CacheMiss_FetchesFromAPI
+--- PASS: TestCheck_CacheMiss_FetchesFromAPI (0.01s)
+=== RUN   TestCheck_CacheHit_SkipsAPI
+--- PASS: TestCheck_CacheHit_SkipsAPI (0.01s)
+=== RUN   TestCheck_CacheExpired_FetchesFromAPI
+--- PASS: TestCheck_CacheExpired_FetchesFromAPI (0.00s)
+=== RUN   TestCheck_APIFailure_FailsOpen
+--- PASS: TestCheck_APIFailure_FailsOpen (0.00s)
+=== RUN   TestCheck_NetworkError_FailsOpen
+--- PASS: TestCheck_NetworkError_FailsOpen (0.00s)
+=== RUN   TestCheck_InvalidCacheJSON_FetchesFromAPI
+--- PASS: TestCheck_InvalidCacheJSON_FetchesFromAPI (0.01s)
+=== RUN   TestCheck_CacheWritten
+--- PASS: TestCheck_CacheWritten (0.00s)
+=== RUN   TestCompareSemver
+=== RUN   TestCompareSemver/same_version
+=== RUN   TestCompareSemver/patch_update
+=== RUN   TestCompareSemver/minor_update
+=== RUN   TestCompareSemver/major_update
+=== RUN   TestCompareSemver/current_newer
+=== RUN   TestCompareSemver/no_v_prefix_current
+=== RUN   TestCompareSemver/no_v_prefix_latest
+=== RUN   TestCompareSemver/no_v_prefix_either
+=== RUN   TestCompareSemver/dev_version
+=== RUN   TestCompareSemver/invalid_current
+=== RUN   TestCompareSemver/invalid_latest
+--- PASS: TestCompareSemver (0.00s)
+    --- PASS: TestCompareSemver/same_version (0.00s)
+    --- PASS: TestCompareSemver/patch_update (0.00s)
+    --- PASS: TestCompareSemver/minor_update (0.00s)
+    --- PASS: TestCompareSemver/major_update (0.00s)
+    --- PASS: TestCompareSemver/current_newer (0.00s)
+    --- PASS: TestCompareSemver/no_v_prefix_current (0.00s)
+    --- PASS: TestCompareSemver/no_v_prefix_latest (0.00s)
+    --- PASS: TestCompareSemver/no_v_prefix_either (0.00s)
+    --- PASS: TestCompareSemver/dev_version (0.00s)
+    --- PASS: TestCompareSemver/invalid_current (0.00s)
+    --- PASS: TestCompareSemver/invalid_latest (0.00s)
+=== RUN   TestCheck_SameVersion_NoUpdate
+--- PASS: TestCheck_SameVersion_NoUpdate (0.00s)
+=== RUN   TestCheck_DevVersion_SkipsComparison
+--- PASS: TestCheck_DevVersion_SkipsComparison (0.00s)
+=== RUN   TestCheck_PublicEndpoint
+--- PASS: TestCheck_PublicEndpoint (0.24s)
+PASS
+coverage: 90.2% of statements
+ok  	github.com/nicholasgasior/mint/internal/version	2.065s	coverage: 90.2% of statements
+=== RUN   TestFindVM_Found
+--- PASS: TestFindVM_Found (0.00s)
+=== RUN   TestFindVM_NotFound
+--- PASS: TestFindVM_NotFound (0.00s)
+=== RUN   TestFindVM_MultipleMatchesError
+--- PASS: TestFindVM_MultipleMatchesError (0.00s)
+=== RUN   TestFindVM_APIError
+--- PASS: TestFindVM_APIError (0.00s)
+=== RUN   TestFindVM_FiltersTerminatedInstances
+--- PASS: TestFindVM_FiltersTerminatedInstances (0.00s)
+=== RUN   TestFindVM_FiltersShuttingDownInstances
+--- PASS: TestFindVM_FiltersShuttingDownInstances (0.00s)
+=== RUN   TestFindVM_NoPublicIP
+--- PASS: TestFindVM_NoPublicIP (0.00s)
+=== RUN   TestListVMs_Empty
+--- PASS: TestListVMs_Empty (0.00s)
+=== RUN   TestListVMs_Single
+--- PASS: TestListVMs_Single (0.00s)
+=== RUN   TestListVMs_Multiple
+--- PASS: TestListVMs_Multiple (0.00s)
+=== RUN   TestListVMs_FiltersTerminated
+--- PASS: TestListVMs_FiltersTerminated (0.00s)
+=== RUN   TestListVMs_APIError
+--- PASS: TestListVMs_APIError (0.00s)
+=== RUN   TestVMTagsParsed
+--- PASS: TestVMTagsParsed (0.00s)
+PASS
+coverage: 94.1% of statements
+ok  	github.com/nicholasgasior/mint/internal/vm	1.392s	coverage: 94.1% of statements

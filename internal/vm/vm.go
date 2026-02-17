@@ -19,14 +19,15 @@ import (
 
 // VM represents a Mint-managed EC2 instance.
 type VM struct {
-	ID              string
-	Name            string
-	State           string
-	PublicIP        string
-	InstanceType    string
-	LaunchTime      time.Time
-	BootstrapStatus string
-	Tags            map[string]string
+	ID               string
+	Name             string
+	State            string
+	PublicIP         string
+	InstanceType     string
+	AvailabilityZone string
+	LaunchTime       time.Time
+	BootstrapStatus  string
+	Tags             map[string]string
 }
 
 // FindVM discovers a single VM by owner and VM name. It returns nil (without
@@ -102,6 +103,9 @@ func parseInstance(inst ec2types.Instance) *VM {
 
 	if inst.PublicIpAddress != nil {
 		vm.PublicIP = aws.ToString(inst.PublicIpAddress)
+	}
+	if inst.Placement != nil && inst.Placement.AvailabilityZone != nil {
+		vm.AvailabilityZone = aws.ToString(inst.Placement.AvailabilityZone)
 	}
 	if inst.LaunchTime != nil {
 		vm.LaunchTime = *inst.LaunchTime
