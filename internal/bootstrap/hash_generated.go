@@ -5,4 +5,4 @@ package bootstrap
 // ScriptSHA256 is the expected SHA256 hash of scripts/bootstrap.sh,
 // computed at build time via go:generate. Used to verify script integrity
 // before sending user-data to EC2 (ADR-0009).
-const ScriptSHA256 = "dd71c6f6c81765adbbd3e084a328c06afe66a164388b72d73cae381605c70ec6"
+const ScriptSHA256 = "5f45de8ab8bba753d2ab8e70eca0a269539f6607b695f4ef1ec0b1f34e187936"

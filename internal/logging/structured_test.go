@@ -3,8 +3,10 @@ package logging
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -99,6 +101,66 @@ func TestStructuredLoggerRecordsErrorResult(t *testing.T) {
 
 	if entry.Result != "error" {
 		t.Errorf("Result = %q, want %q", entry.Result, "error")
+	}
+	if entry.Error != "permission denied" {
+		t.Errorf("Error = %q, want %q", entry.Error, "permission denied")
+	}
+}
+
+func TestStructuredLoggerSuccessOmitsErrorField(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "logs")
+	logger, err := NewStructuredLogger(dir, false)
+	if err != nil {
+		t.Fatalf("NewStructuredLogger() unexpected error: %v", err)
+	}
+
+	logger.Log("ec2", "DescribeInstances", 10*time.Millisecond, nil)
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir() error: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, entries[0].Name()))
+	if err != nil {
+		t.Fatalf("ReadFile() error: %v", err)
+	}
+
+	// Verify "error" key is absent from JSON (omitempty)
+	var raw map[string]interface{}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+	if _, exists := raw["error"]; exists {
+		t.Error("error field should be omitted for successful entries")
+	}
+}
+
+func TestStructuredLoggerConcurrentAccess(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "logs")
+	logger, err := NewStructuredLogger(dir, false)
+	if err != nil {
+		t.Fatalf("NewStructuredLogger() unexpected error: %v", err)
+	}
+
+	const goroutines = 20
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+
+	for i := 0; i < goroutines; i++ {
+		go func(n int) {
+			defer wg.Done()
+			logger.Log("ec2", fmt.Sprintf("Op%d", n), time.Duration(n)*time.Millisecond, nil)
+		}(i)
+	}
+	wg.Wait()
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir() error: %v", err)
+	}
+	if len(entries) != goroutines {
+		t.Errorf("expected %d log files, got %d", goroutines, len(entries))
 	}
 }
 

@@ -47,9 +47,18 @@ usermod -aG docker ec2-user
 log "Installing Docker Compose plugin"
 mkdir -p /usr/local/lib/docker/cli-plugins
 COMPOSE_VERSION=$(curl -fsSL https://api.github.com/repos/docker/compose/releases/latest | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+COMPOSE_DOWNLOAD="/usr/local/lib/docker/cli-plugins/docker-compose"
 curl -fsSL "https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-linux-$(uname -m)" \
-    -o /usr/local/lib/docker/cli-plugins/docker-compose
-chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+    -o "$COMPOSE_DOWNLOAD"
+
+# TODO: Update this checksum when pinning a specific Docker Compose version
+DOCKER_COMPOSE_SHA256="PLACEHOLDER_UPDATE_BEFORE_RELEASE"
+echo "${DOCKER_COMPOSE_SHA256}  ${COMPOSE_DOWNLOAD}" | sha256sum --check || {
+    log "FATAL: checksum mismatch for ${COMPOSE_DOWNLOAD}"
+    exit 1
+}
+
+chmod +x "$COMPOSE_DOWNLOAD"
 
 # --- Node.js LTS ---
 
@@ -92,6 +101,14 @@ dnf install -y -q gh
 log "Installing AWS CLI v2"
 if ! command -v aws &> /dev/null; then
     curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/awscliv2.zip
+
+    # TODO: Update this checksum when pinning a specific AWS CLI version
+    AWSCLI_SHA256="PLACEHOLDER_UPDATE_BEFORE_RELEASE"
+    echo "${AWSCLI_SHA256}  /tmp/awscliv2.zip" | sha256sum --check || {
+        log "FATAL: checksum mismatch for /tmp/awscliv2.zip"
+        exit 1
+    }
+
     cd /tmp && unzip -q awscliv2.zip
     /tmp/aws/install
     rm -rf /tmp/aws /tmp/awscliv2.zip

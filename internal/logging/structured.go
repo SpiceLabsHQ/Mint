@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
@@ -28,11 +29,13 @@ type StructuredLogEntry struct {
 	Operation  string `json:"operation"`
 	DurationMs int64  `json:"duration_ms"`
 	Result     string `json:"result"`
+	Error      string `json:"error,omitempty"`
 }
 
 // structuredLogger writes per-call JSON log files to a directory
 // and optionally mirrors entries to stderr when debug mode is enabled.
 type structuredLogger struct {
+	mu     sync.Mutex
 	dir    string
 	debug  bool
 	stderr io.Writer
@@ -61,10 +64,16 @@ func (l *structuredLogger) SetStderr(w io.Writer) {
 
 // Log records a single AWS API call as a JSON file in the log directory.
 // If debug mode is enabled, the entry is also written to stderr.
+// Log is safe for concurrent use.
 func (l *structuredLogger) Log(service, operation string, duration time.Duration, err error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
 	result := "success"
+	var errMsg string
 	if err != nil {
 		result = "error"
+		errMsg = err.Error()
 	}
 
 	entry := StructuredLogEntry{
@@ -73,6 +82,7 @@ func (l *structuredLogger) Log(service, operation string, duration time.Duration
 		Operation:  operation,
 		DurationMs: duration.Milliseconds(),
 		Result:     result,
+		Error:      errMsg,
 	}
 
 	data, jsonErr := json.Marshal(entry)

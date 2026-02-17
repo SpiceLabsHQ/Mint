@@ -21,13 +21,16 @@ type CLIContext struct {
 }
 
 // NewCLIContext extracts global flag values from a cobra command's persistent
-// flags and returns a populated CLIContext.
+// flags and returns a populated CLIContext. It resolves flags via the root
+// command's PersistentFlags so that persistent flags registered on a parent
+// are accessible regardless of which subcommand cmd points to.
 func NewCLIContext(cmd *cobra.Command) *CLIContext {
-	verbose, _ := cmd.Flags().GetBool("verbose")
-	debug, _ := cmd.Flags().GetBool("debug")
-	jsonFlag, _ := cmd.Flags().GetBool("json")
-	yes, _ := cmd.Flags().GetBool("yes")
-	vm, _ := cmd.Flags().GetString("vm")
+	pflags := cmd.Root().PersistentFlags()
+	verbose, _ := pflags.GetBool("verbose")
+	debug, _ := pflags.GetBool("debug")
+	jsonFlag, _ := pflags.GetBool("json")
+	yes, _ := pflags.GetBool("yes")
+	vm, _ := pflags.GetString("vm")
 
 	return &CLIContext{
 		Verbose: verbose,

@@ -3,6 +3,7 @@ package logging
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -151,6 +152,109 @@ func TestAuditLoggerAppendsToExistingFile(t *testing.T) {
 
 	if lineCount != 2 {
 		t.Errorf("expected 2 lines after two separate loggers, got %d", lineCount)
+	}
+}
+
+func TestAuditLoggerLogResourceCreate(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.log")
+	logger, err := NewAuditLogger(path)
+	if err != nil {
+		t.Fatalf("NewAuditLogger() unexpected error: %v", err)
+	}
+
+	if err := logger.LogResourceCreate("ec2_instance", "i-abc123", "default", "arn:aws:iam::123456789012:user/alice"); err != nil {
+		t.Fatalf("LogResourceCreate() error: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error: %v", err)
+	}
+
+	var entry AuditEntry
+	if err := json.Unmarshal(data, &entry); err != nil {
+		t.Fatalf("audit entry is not valid JSON: %v", err)
+	}
+
+	if entry.Type != "resource_create" {
+		t.Errorf("Type = %q, want %q", entry.Type, "resource_create")
+	}
+	if entry.ResourceType != "ec2_instance" {
+		t.Errorf("ResourceType = %q, want %q", entry.ResourceType, "ec2_instance")
+	}
+	if entry.ResourceID != "i-abc123" {
+		t.Errorf("ResourceID = %q, want %q", entry.ResourceID, "i-abc123")
+	}
+	if entry.VMName != "default" {
+		t.Errorf("VMName = %q, want %q", entry.VMName, "default")
+	}
+	if entry.Timestamp == "" {
+		t.Error("Timestamp is empty")
+	}
+}
+
+func TestAuditLoggerLogResourceDestroy(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.log")
+	logger, err := NewAuditLogger(path)
+	if err != nil {
+		t.Fatalf("NewAuditLogger() unexpected error: %v", err)
+	}
+
+	if err := logger.LogResourceDestroy("security_group", "sg-xyz789", "staging", "arn:aws:iam::123456789012:user/bob"); err != nil {
+		t.Fatalf("LogResourceDestroy() error: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error: %v", err)
+	}
+
+	var entry AuditEntry
+	if err := json.Unmarshal(data, &entry); err != nil {
+		t.Fatalf("audit entry is not valid JSON: %v", err)
+	}
+
+	if entry.Type != "resource_destroy" {
+		t.Errorf("Type = %q, want %q", entry.Type, "resource_destroy")
+	}
+	if entry.ResourceType != "security_group" {
+		t.Errorf("ResourceType = %q, want %q", entry.ResourceType, "security_group")
+	}
+	if entry.ResourceID != "sg-xyz789" {
+		t.Errorf("ResourceID = %q, want %q", entry.ResourceID, "sg-xyz789")
+	}
+}
+
+func TestAuditLoggerLogError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.log")
+	logger, err := NewAuditLogger(path)
+	if err != nil {
+		t.Fatalf("NewAuditLogger() unexpected error: %v", err)
+	}
+
+	testErr := fmt.Errorf("instance not found")
+	if err := logger.LogError("up", "default", "arn:aws:iam::123456789012:user/alice", testErr); err != nil {
+		t.Fatalf("LogError() error: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error: %v", err)
+	}
+
+	var entry AuditEntry
+	if err := json.Unmarshal(data, &entry); err != nil {
+		t.Fatalf("audit entry is not valid JSON: %v", err)
+	}
+
+	if entry.Type != "error" {
+		t.Errorf("Type = %q, want %q", entry.Type, "error")
+	}
+	if entry.Command != "up" {
+		t.Errorf("Command = %q, want %q", entry.Command, "up")
+	}
+	if entry.Error != "instance not found" {
+		t.Errorf("Error = %q, want %q", entry.Error, "instance not found")
 	}
 }
 

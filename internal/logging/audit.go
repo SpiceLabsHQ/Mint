@@ -12,10 +12,26 @@ import (
 // Each command execution is recorded with its context for traceability.
 type Auditor interface {
 	LogCommand(command, vmName, callerARN string) error
+	LogResourceCreate(resourceType, resourceID, vmName, callerARN string) error
+	LogResourceDestroy(resourceType, resourceID, vmName, callerARN string) error
+	LogError(command, vmName, callerARN string, err error) error
 	Close() error
 }
 
+// AuditEntry represents a single audit record that can represent any event type.
+type AuditEntry struct {
+	Timestamp    string `json:"timestamp"`
+	Type         string `json:"type"`
+	Command      string `json:"command,omitempty"`
+	VMName       string `json:"vm_name"`
+	CallerARN    string `json:"caller_arn"`
+	ResourceType string `json:"resource_type,omitempty"`
+	ResourceID   string `json:"resource_id,omitempty"`
+	Error        string `json:"error,omitempty"`
+}
+
 // AuditLogEntry represents a single command invocation audit record.
+// Retained for backward compatibility with existing LogCommand callers.
 type AuditLogEntry struct {
 	Timestamp string `json:"timestamp"`
 	Command   string `json:"command"`
@@ -53,6 +69,61 @@ func (a *auditLogger) LogCommand(command, vmName, callerARN string) error {
 		CallerARN: callerARN,
 	}
 
+	data, err := json.Marshal(entry)
+	if err != nil {
+		return fmt.Errorf("marshal audit entry: %w", err)
+	}
+
+	data = append(data, '\n')
+	if _, err := a.file.Write(data); err != nil {
+		return fmt.Errorf("write audit entry: %w", err)
+	}
+
+	return nil
+}
+
+// LogResourceCreate records a resource creation event as a JSON Lines entry.
+func (a *auditLogger) LogResourceCreate(resourceType, resourceID, vmName, callerARN string) error {
+	return a.writeEntry(AuditEntry{
+		Timestamp:    time.Now().UTC().Format(time.RFC3339),
+		Type:         "resource_create",
+		VMName:       vmName,
+		CallerARN:    callerARN,
+		ResourceType: resourceType,
+		ResourceID:   resourceID,
+	})
+}
+
+// LogResourceDestroy records a resource destruction event as a JSON Lines entry.
+func (a *auditLogger) LogResourceDestroy(resourceType, resourceID, vmName, callerARN string) error {
+	return a.writeEntry(AuditEntry{
+		Timestamp:    time.Now().UTC().Format(time.RFC3339),
+		Type:         "resource_destroy",
+		VMName:       vmName,
+		CallerARN:    callerARN,
+		ResourceType: resourceType,
+		ResourceID:   resourceID,
+	})
+}
+
+// LogError records a command error event as a JSON Lines entry.
+func (a *auditLogger) LogError(command, vmName, callerARN string, err error) error {
+	var errMsg string
+	if err != nil {
+		errMsg = err.Error()
+	}
+	return a.writeEntry(AuditEntry{
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Type:      "error",
+		Command:   command,
+		VMName:    vmName,
+		CallerARN: callerARN,
+		Error:     errMsg,
+	})
+}
+
+// writeEntry marshals and appends an AuditEntry as a JSON Lines entry.
+func (a *auditLogger) writeEntry(entry AuditEntry) error {
 	data, err := json.Marshal(entry)
 	if err != nil {
 		return fmt.Errorf("marshal audit entry: %w", err)

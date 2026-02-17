@@ -230,3 +230,149 @@ func TestConfigFileCreatedOnSet(t *testing.T) {
 		t.Errorf("config.toml not created after set: %v", err)
 	}
 }
+
+func TestConfigGetReturnsSetValue(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("MINT_CONFIG_DIR", dir)
+
+	// First set a value
+	buf := new(bytes.Buffer)
+	rootCmd := NewRootCommand()
+	rootCmd.SetOut(buf)
+	rootCmd.SetErr(buf)
+	rootCmd.SetArgs([]string{"config", "set", "region", "us-west-2"})
+
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("config set error: %v", err)
+	}
+
+	// Now get it
+	buf.Reset()
+	rootCmd2 := NewRootCommand()
+	rootCmd2.SetOut(buf)
+	rootCmd2.SetErr(buf)
+	rootCmd2.SetArgs([]string{"config", "get", "region"})
+
+	if err := rootCmd2.Execute(); err != nil {
+		t.Fatalf("config get error: %v", err)
+	}
+
+	output := strings.TrimSpace(buf.String())
+	if output != "us-west-2" {
+		t.Errorf("config get region = %q, want %q", output, "us-west-2")
+	}
+}
+
+func TestConfigGetDefaultValue(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("MINT_CONFIG_DIR", dir)
+
+	buf := new(bytes.Buffer)
+	rootCmd := NewRootCommand()
+	rootCmd.SetOut(buf)
+	rootCmd.SetErr(buf)
+	rootCmd.SetArgs([]string{"config", "get", "instance_type"})
+
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("config get error: %v", err)
+	}
+
+	output := strings.TrimSpace(buf.String())
+	if output != "m6i.xlarge" {
+		t.Errorf("config get instance_type = %q, want %q", output, "m6i.xlarge")
+	}
+}
+
+func TestConfigGetEmptyRegion(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("MINT_CONFIG_DIR", dir)
+
+	buf := new(bytes.Buffer)
+	rootCmd := NewRootCommand()
+	rootCmd.SetOut(buf)
+	rootCmd.SetErr(buf)
+	rootCmd.SetArgs([]string{"config", "get", "region"})
+
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("config get error: %v", err)
+	}
+
+	// Empty region should output empty string
+	output := buf.String()
+	if strings.TrimSpace(output) != "" {
+		t.Errorf("config get region (unset) = %q, want empty", output)
+	}
+}
+
+func TestConfigGetUnknownKey(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("MINT_CONFIG_DIR", dir)
+
+	buf := new(bytes.Buffer)
+	rootCmd := NewRootCommand()
+	rootCmd.SetOut(buf)
+	rootCmd.SetErr(buf)
+	rootCmd.SetArgs([]string{"config", "get", "unknown_key"})
+
+	err := rootCmd.Execute()
+	if err == nil {
+		t.Fatal("config get unknown_key should fail")
+	}
+
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "region") {
+		t.Errorf("error message should list valid keys, got: %s", errMsg)
+	}
+}
+
+func TestConfigGetRequiresArgs(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("MINT_CONFIG_DIR", dir)
+
+	buf := new(bytes.Buffer)
+	rootCmd := NewRootCommand()
+	rootCmd.SetOut(buf)
+	rootCmd.SetErr(buf)
+	rootCmd.SetArgs([]string{"config", "get"})
+
+	err := rootCmd.Execute()
+	if err == nil {
+		t.Fatal("config get without args should fail")
+	}
+}
+
+func TestConfigGetJSONOutput(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("MINT_CONFIG_DIR", dir)
+
+	// Set a value first
+	buf := new(bytes.Buffer)
+	rootCmd := NewRootCommand()
+	rootCmd.SetOut(buf)
+	rootCmd.SetErr(buf)
+	rootCmd.SetArgs([]string{"config", "set", "region", "eu-west-1"})
+
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("config set error: %v", err)
+	}
+
+	// Get with --json
+	buf.Reset()
+	rootCmd2 := NewRootCommand()
+	rootCmd2.SetOut(buf)
+	rootCmd2.SetErr(buf)
+	rootCmd2.SetArgs([]string{"--json", "config", "get", "region"})
+
+	if err := rootCmd2.Execute(); err != nil {
+		t.Fatalf("config get --json error: %v", err)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
+		t.Fatalf("config get --json output is not valid JSON: %v\nOutput: %s", err, buf.String())
+	}
+
+	if result["region"] != "eu-west-1" {
+		t.Errorf("JSON region = %v, want eu-west-1", result["region"])
+	}
+}

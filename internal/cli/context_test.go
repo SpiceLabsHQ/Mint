@@ -160,6 +160,31 @@ func TestFromCommandIntegration(t *testing.T) {
 	}
 }
 
+func TestNewCLIContextFromChildCommand(t *testing.T) {
+	// Create a parent with persistent flags (simulating root command)
+	parent := newTestCommand(map[string]any{
+		"verbose": true,
+		"vm":      "staging",
+	})
+
+	// Add a child subcommand
+	child := &cobra.Command{Use: "child"}
+	parent.AddCommand(child)
+
+	// NewCLIContext called on the child must still resolve root persistent flags
+	ctx := NewCLIContext(child)
+
+	if !ctx.Verbose {
+		t.Error("Verbose should be true when read from child command")
+	}
+	if ctx.VM != "staging" {
+		t.Errorf("VM should be %q, got %q", "staging", ctx.VM)
+	}
+	if ctx.Debug {
+		t.Error("Debug should remain false")
+	}
+}
+
 func TestFromCommandWithoutContextReturnsNil(t *testing.T) {
 	cmd := &cobra.Command{Use: "bare"}
 	retrieved := FromCommand(cmd)

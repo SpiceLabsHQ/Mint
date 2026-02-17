@@ -11,9 +11,14 @@ import (
 
 //go:generate go run hash_gen.go
 
-// Verify checks that the provided script content matches the expected SHA256
-// hash embedded at compile time. Returns nil if the content is valid, or an
-// error describing the mismatch.
+// Verify checks that the given script content matches the SHA-256 hash
+// embedded at compile time via go:generate.
+//
+// IMPORTANT: This hash verifies the committed template, NOT the rendered
+// script after variable substitution. If substitution variables ever
+// reference external data (AMI IDs, dynamic package versions), the
+// integrity guarantee no longer holds. Do not extend substitution scope
+// without re-evaluating this boundary.
 //
 // If the hash does not match, mint up must abort immediately. The script must
 // never be sent to EC2 with a mismatched hash (ADR-0009).

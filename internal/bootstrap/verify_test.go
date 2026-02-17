@@ -106,6 +106,10 @@ func TestScriptContent(t *testing.T) {
 		{"bootstrap version", "/var/lib/mint/bootstrap-version"},
 		{"health check", "mint:bootstrap=complete"},
 		{"idle detection", "mint-idle"},
+		{"Docker Compose checksum verification", "DOCKER_COMPOSE_SHA256"},
+		{"AWS CLI checksum verification", "AWSCLI_SHA256"},
+		{"sha256sum check invocation", "sha256sum --check"},
+		{"checksum mismatch fatal", "checksum mismatch"},
 	}
 
 	for _, elem := range requiredElements {
