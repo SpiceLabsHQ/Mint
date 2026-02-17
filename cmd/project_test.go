@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -517,6 +518,339 @@ func TestProjectParentCommandHasNoRun(t *testing.T) {
 	}
 	if cmd.Run != nil {
 		t.Error("project parent command should not have Run")
+	}
+}
+
+// --- Project list tests ---
+
+func TestProjectListCommand(t *testing.T) {
+	tests := []struct {
+		name           string
+		describe       *mockDescribeForProject
+		sendKey        *mockSendKeyForProject
+		remote         *projectMockRemote
+		owner          string
+		vmName         string
+		jsonOutput     bool
+		wantErr        bool
+		wantErrContain string
+		wantOutput     []string
+		wantNotOutput  []string
+	}{
+		{
+			name: "lists projects with running containers",
+			describe: &mockDescribeForProject{
+				output: makeRunningInstanceForProject("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
+			},
+			sendKey: &mockSendKeyForProject{
+				output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
+			},
+			remote: &projectMockRemote{
+				outputs: [][]byte{
+					[]byte("myproject\nsidecar\n"),
+					[]byte("myproject_devcontainer-app-1\tUp 2 hours\tmcr.microsoft.com/devcontainers/go:1.21\t/mint/projects/myproject\n"),
+				},
+				errors: []error{nil, nil},
+			},
+			owner:      "alice",
+			wantOutput: []string{"myproject", "running", "mcr.microsoft.com/devcontainers/go:1.21", "sidecar", "none"},
+		},
+		{
+			name: "json output returns array",
+			describe: &mockDescribeForProject{
+				output: makeRunningInstanceForProject("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
+			},
+			sendKey: &mockSendKeyForProject{
+				output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
+			},
+			remote: &projectMockRemote{
+				outputs: [][]byte{
+					[]byte("myproject\n"),
+					[]byte("myproject_devcontainer-app-1\tUp 2 hours\tmcr.microsoft.com/devcontainers/go:1.21\t/mint/projects/myproject\n"),
+				},
+				errors: []error{nil, nil},
+			},
+			owner:      "alice",
+			jsonOutput: true,
+			wantOutput: []string{`"name"`, `"myproject"`, `"container_status"`, `"running"`, `"image"`},
+		},
+		{
+			name: "no projects directory shows message",
+			describe: &mockDescribeForProject{
+				output: makeRunningInstanceForProject("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
+			},
+			sendKey: &mockSendKeyForProject{
+				output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
+			},
+			remote: &projectMockRemote{
+				outputs: [][]byte{
+					[]byte(""),
+					[]byte(""),
+				},
+				errors: []error{nil, nil},
+			},
+			owner:      "alice",
+			wantOutput: []string{"No projects found"},
+		},
+		{
+			name: "no projects json returns empty array",
+			describe: &mockDescribeForProject{
+				output: makeRunningInstanceForProject("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
+			},
+			sendKey: &mockSendKeyForProject{
+				output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
+			},
+			remote: &projectMockRemote{
+				outputs: [][]byte{
+					[]byte(""),
+					[]byte(""),
+				},
+				errors: []error{nil, nil},
+			},
+			owner:      "alice",
+			jsonOutput: true,
+			wantOutput: []string{"[]"},
+		},
+		{
+			name: "projects with no containers show none status",
+			describe: &mockDescribeForProject{
+				output: makeRunningInstanceForProject("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
+			},
+			sendKey: &mockSendKeyForProject{
+				output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
+			},
+			remote: &projectMockRemote{
+				outputs: [][]byte{
+					[]byte("experiments\n"),
+					[]byte(""),
+				},
+				errors: []error{nil, nil},
+			},
+			owner:      "alice",
+			wantOutput: []string{"experiments", "none"},
+		},
+		{
+			name: "VM not found returns error",
+			describe: &mockDescribeForProject{
+				output: &ec2.DescribeInstancesOutput{},
+			},
+			sendKey:        &mockSendKeyForProject{},
+			remote:         &projectMockRemote{},
+			owner:          "alice",
+			wantErr:        true,
+			wantErrContain: "mint up",
+		},
+		{
+			name: "stopped VM returns error",
+			describe: &mockDescribeForProject{
+				output: makeStoppedInstanceForProject("i-abc123", "default", "alice"),
+			},
+			sendKey:        &mockSendKeyForProject{},
+			remote:         &projectMockRemote{},
+			owner:          "alice",
+			wantErr:        true,
+			wantErrContain: "not running",
+		},
+		{
+			name: "describe API error propagates",
+			describe: &mockDescribeForProject{
+				err: fmt.Errorf("throttled"),
+			},
+			sendKey:        &mockSendKeyForProject{},
+			remote:         &projectMockRemote{},
+			owner:          "alice",
+			wantErr:        true,
+			wantErrContain: "throttled",
+		},
+		{
+			name: "ls command error propagates",
+			describe: &mockDescribeForProject{
+				output: makeRunningInstanceForProject("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
+			},
+			sendKey: &mockSendKeyForProject{
+				output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
+			},
+			remote: &projectMockRemote{
+				errors: []error{fmt.Errorf("connection refused")},
+			},
+			owner:          "alice",
+			wantErr:        true,
+			wantErrContain: "connection refused",
+		},
+		{
+			name: "non-default VM name",
+			describe: &mockDescribeForProject{
+				output: makeRunningInstanceForProject("i-dev456", "dev", "alice", "10.0.0.1", "us-west-2a"),
+			},
+			sendKey: &mockSendKeyForProject{
+				output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
+			},
+			remote: &projectMockRemote{
+				outputs: [][]byte{
+					[]byte("myapp\n"),
+					[]byte(""),
+				},
+				errors: []error{nil, nil},
+			},
+			owner:      "alice",
+			vmName:     "dev",
+			wantOutput: []string{"myapp"},
+		},
+		{
+			name: "multiple projects mixed container states",
+			describe: &mockDescribeForProject{
+				output: makeRunningInstanceForProject("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
+			},
+			sendKey: &mockSendKeyForProject{
+				output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
+			},
+			remote: &projectMockRemote{
+				outputs: [][]byte{
+					[]byte("myproject\nsidecar\nexperiments\n"),
+					[]byte("myproject_devcontainer-app-1\tUp 2 hours\tmcr.microsoft.com/devcontainers/go:1.21\t/mint/projects/myproject\nsidecar_devcontainer-app-1\tExited (0) 5 minutes ago\tnode:18\t/mint/projects/sidecar\n"),
+				},
+				errors: []error{nil, nil},
+			},
+			owner:      "alice",
+			wantOutput: []string{"myproject", "running", "sidecar", "exited", "experiments", "none"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			buf := new(bytes.Buffer)
+
+			listDeps := &projectListDeps{
+				describe: tt.describe,
+				sendKey:  tt.sendKey,
+				owner:    tt.owner,
+				remote:   tt.remote.run,
+			}
+
+			projectCmd := newProjectCommandWithListDeps(listDeps)
+			root := newTestRootForProject()
+			root.AddCommand(projectCmd)
+			root.SetOut(buf)
+			root.SetErr(buf)
+
+			args := []string{"project", "list"}
+			if tt.vmName != "" && tt.vmName != "default" {
+				args = append([]string{"--vm", tt.vmName}, args...)
+			}
+			if tt.jsonOutput {
+				args = append(args, "--json")
+			}
+			root.SetArgs(args)
+
+			err := root.Execute()
+
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if tt.wantErrContain != "" && !strings.Contains(err.Error(), tt.wantErrContain) {
+					t.Errorf("error %q does not contain %q", err.Error(), tt.wantErrContain)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			output := buf.String()
+			for _, want := range tt.wantOutput {
+				if !strings.Contains(output, want) {
+					t.Errorf("output missing %q, got:\n%s", want, output)
+				}
+			}
+			for _, notWant := range tt.wantNotOutput {
+				if strings.Contains(output, notWant) {
+					t.Errorf("output should not contain %q, got:\n%s", notWant, output)
+				}
+			}
+
+			// Validate JSON output is parseable as an array.
+			if tt.jsonOutput {
+				trimmed := strings.TrimSpace(output)
+				var result []interface{}
+				if err := json.Unmarshal([]byte(trimmed), &result); err != nil {
+					t.Errorf("JSON output is not a valid array: %v\nOutput: %s", err, output)
+				}
+			}
+		})
+	}
+}
+
+func TestParseProjectsAndContainers(t *testing.T) {
+	tests := []struct {
+		name            string
+		lsOutput        string
+		dockerOutput    string
+		expectedCount   int
+		check           func(t *testing.T, projects []projectInfo)
+	}{
+		{
+			name:          "projects with matching containers",
+			lsOutput:      "myproject\nsidecar\n",
+			dockerOutput:  "myproject_devcontainer-app-1\tUp 2 hours\tmcr.microsoft.com/devcontainers/go:1.21\t/mint/projects/myproject\n",
+			expectedCount: 2,
+			check: func(t *testing.T, projects []projectInfo) {
+				if projects[0].Name != "myproject" {
+					t.Errorf("name = %q, want myproject", projects[0].Name)
+				}
+				if projects[0].ContainerStatus != "running" {
+					t.Errorf("status = %q, want running", projects[0].ContainerStatus)
+				}
+				if projects[0].Image != "mcr.microsoft.com/devcontainers/go:1.21" {
+					t.Errorf("image = %q, want mcr.microsoft.com/devcontainers/go:1.21", projects[0].Image)
+				}
+				if projects[1].Name != "sidecar" {
+					t.Errorf("name = %q, want sidecar", projects[1].Name)
+				}
+				if projects[1].ContainerStatus != "none" {
+					t.Errorf("status = %q, want none", projects[1].ContainerStatus)
+				}
+			},
+		},
+		{
+			name:          "empty projects",
+			lsOutput:      "",
+			dockerOutput:  "",
+			expectedCount: 0,
+		},
+		{
+			name:          "exited container",
+			lsOutput:      "sidecar\n",
+			dockerOutput:  "sidecar_devcontainer-app-1\tExited (0) 5 minutes ago\tnode:18\t/mint/projects/sidecar\n",
+			expectedCount: 1,
+			check: func(t *testing.T, projects []projectInfo) {
+				if projects[0].ContainerStatus != "exited" {
+					t.Errorf("status = %q, want exited", projects[0].ContainerStatus)
+				}
+				if projects[0].Image != "node:18" {
+					t.Errorf("image = %q, want node:18", projects[0].Image)
+				}
+			},
+		},
+		{
+			name:          "whitespace-only ls output",
+			lsOutput:      "  \n  \n",
+			dockerOutput:  "",
+			expectedCount: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			projects := parseProjectsAndContainers(tt.lsOutput, tt.dockerOutput)
+			if len(projects) != tt.expectedCount {
+				t.Fatalf("got %d projects, want %d", len(projects), tt.expectedCount)
+			}
+			if tt.check != nil {
+				tt.check(t, projects)
+			}
+		})
 	}
 }
 

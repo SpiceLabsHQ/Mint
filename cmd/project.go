@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"path"
 	"strings"
 
@@ -22,6 +24,21 @@ type projectAddDeps struct {
 	remote   RemoteCommandRunner
 }
 
+// projectListDeps holds the injectable dependencies for the project list command.
+type projectListDeps struct {
+	describe mintaws.DescribeInstancesAPI
+	sendKey  mintaws.SendSSHPublicKeyAPI
+	owner    string
+	remote   RemoteCommandRunner
+}
+
+// projectInfo represents a project on the VM with its container status.
+type projectInfo struct {
+	Name            string `json:"name"`
+	ContainerStatus string `json:"container_status"`
+	Image           string `json:"image"`
+}
+
 // newProjectCommand creates the parent "project" command with subcommands attached.
 func newProjectCommand() *cobra.Command {
 	return newProjectCommandWithDeps(nil)
@@ -37,6 +54,22 @@ func newProjectCommandWithDeps(deps *projectAddDeps) *cobra.Command {
 	}
 
 	cmd.AddCommand(newProjectAddCommandWithDeps(deps))
+	cmd.AddCommand(newProjectListCommand())
+
+	return cmd
+}
+
+// newProjectCommandWithListDeps creates the project command tree with explicit
+// list dependencies for testing. The add subcommand uses production deps (nil).
+func newProjectCommandWithListDeps(listDeps *projectListDeps) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "project",
+		Short: "Manage projects on the VM",
+		Long:  "Clone repositories, build devcontainers, and manage projects on the VM.",
+	}
+
+	cmd.AddCommand(newProjectAddCommand())
+	cmd.AddCommand(newProjectListCommandWithDeps(listDeps))
 
 	return cmd
 }
@@ -215,4 +248,199 @@ func extractProjectName(gitURL string) (string, error) {
 	}
 
 	return name, nil
+}
+
+// newProjectListCommand creates the production project list subcommand.
+func newProjectListCommand() *cobra.Command {
+	return newProjectListCommandWithDeps(nil)
+}
+
+// newProjectListCommandWithDeps creates the project list subcommand with explicit
+// dependencies for testing.
+func newProjectListCommandWithDeps(deps *projectListDeps) *cobra.Command {
+	return &cobra.Command{
+		Use:   "list",
+		Short: "List projects on the VM",
+		Long:  "List project directories under /mint/projects/ and their devcontainer status.",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if deps != nil {
+				return runProjectList(cmd, deps)
+			}
+			clients := awsClientsFromContext(cmd.Context())
+			if clients == nil {
+				return fmt.Errorf("AWS clients not configured")
+			}
+			return runProjectList(cmd, &projectListDeps{
+				describe: clients.ec2Client,
+				sendKey:  clients.icClient,
+				owner:    clients.owner,
+				remote:   defaultRemoteRunner,
+			})
+		},
+	}
+}
+
+// runProjectList executes the project list logic: discover VM, list project
+// directories and running containers, match them, and display results.
+func runProjectList(cmd *cobra.Command, deps *projectListDeps) error {
+	ctx := cmd.Context()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	cliCtx := cli.FromCommand(cmd)
+	vmName := "default"
+	jsonOutput := false
+	if cliCtx != nil {
+		vmName = cliCtx.VM
+		jsonOutput = cliCtx.JSON
+	}
+
+	// Discover VM by owner + VM name.
+	found, err := vm.FindVM(ctx, deps.describe, deps.owner, vmName)
+	if err != nil {
+		return fmt.Errorf("discovering VM: %w", err)
+	}
+	if found == nil {
+		return fmt.Errorf("no VM %q found — run mint up first to create one", vmName)
+	}
+
+	// Verify VM is running.
+	if found.State != string(ec2types.InstanceStateNameRunning) {
+		return fmt.Errorf("VM %q (%s) is not running (state: %s) — run mint up to start it",
+			vmName, found.ID, found.State)
+	}
+
+	// List project directories.
+	lsCmd := []string{"ls", "-1", "/mint/projects/"}
+	lsOutput, err := deps.remote(ctx, deps.sendKey, found.ID, found.AvailabilityZone,
+		found.PublicIP, defaultSSHPort, defaultSSHUser, lsCmd)
+	if err != nil {
+		return fmt.Errorf("listing projects: %w", err)
+	}
+
+	// List running containers with devcontainer label.
+	dockerCmd := []string{
+		"docker", "ps", "-a",
+		"--format", "{{.Names}}\t{{.Status}}\t{{.Image}}\t{{.Label \"devcontainer.local_folder\"}}",
+		"--filter", "label=devcontainer.local_folder",
+	}
+	dockerOutput, err := deps.remote(ctx, deps.sendKey, found.ID, found.AvailabilityZone,
+		found.PublicIP, defaultSSHPort, defaultSSHUser, dockerCmd)
+	if err != nil {
+		// Docker errors are non-fatal; just show projects without container info.
+		dockerOutput = nil
+	}
+
+	projects := parseProjectsAndContainers(string(lsOutput), string(dockerOutput))
+
+	w := cmd.OutOrStdout()
+	if jsonOutput {
+		return writeProjectListJSON(w, projects)
+	}
+	writeProjectListHuman(w, projects)
+	return nil
+}
+
+// parseProjectsAndContainers parses the output of ls and docker ps to build
+// a list of projects with their container status.
+func parseProjectsAndContainers(lsOutput, dockerOutput string) []projectInfo {
+	// Parse project directory names.
+	var projectNames []string
+	for _, line := range strings.Split(lsOutput, "\n") {
+		name := strings.TrimSpace(line)
+		if name != "" {
+			projectNames = append(projectNames, name)
+		}
+	}
+
+	if len(projectNames) == 0 {
+		return nil
+	}
+
+	// Parse docker output into a map of project path -> container info.
+	type containerInfo struct {
+		status string
+		image  string
+	}
+	containers := make(map[string]containerInfo)
+
+	for _, line := range strings.Split(dockerOutput, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// Format: name\tstatus\timage\tlocal_folder
+		parts := strings.Split(line, "\t")
+		if len(parts) < 4 {
+			continue
+		}
+		folder := strings.TrimSpace(parts[3])
+		status := normalizeContainerStatus(parts[1])
+		image := strings.TrimSpace(parts[2])
+		containers[folder] = containerInfo{status: status, image: image}
+	}
+
+	// Match projects to containers.
+	var projects []projectInfo
+	for _, name := range projectNames {
+		projectPath := "/mint/projects/" + name
+		p := projectInfo{
+			Name:            name,
+			ContainerStatus: "none",
+		}
+		if c, ok := containers[projectPath]; ok {
+			p.ContainerStatus = c.status
+			p.Image = c.image
+		}
+		projects = append(projects, p)
+	}
+
+	return projects
+}
+
+// normalizeContainerStatus converts a docker status string to a simplified
+// status label: "running", "exited", "created", "paused", or the raw status.
+func normalizeContainerStatus(rawStatus string) string {
+	lower := strings.ToLower(rawStatus)
+	switch {
+	case strings.HasPrefix(lower, "up"):
+		return "running"
+	case strings.HasPrefix(lower, "exited"):
+		return "exited"
+	case strings.HasPrefix(lower, "created"):
+		return "created"
+	case strings.HasPrefix(lower, "paused"):
+		return "paused"
+	default:
+		return lower
+	}
+}
+
+// writeProjectListJSON outputs projects as a JSON array.
+func writeProjectListJSON(w io.Writer, projects []projectInfo) error {
+	if projects == nil {
+		projects = []projectInfo{}
+	}
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(projects)
+}
+
+// writeProjectListHuman outputs projects as a human-readable table.
+func writeProjectListHuman(w io.Writer, projects []projectInfo) {
+	if len(projects) == 0 {
+		fmt.Fprintln(w, "No projects found")
+		return
+	}
+
+	fmt.Fprintf(w, "%-20s  %-10s  %s\n", "PROJECT", "STATUS", "IMAGE")
+	for _, p := range projects {
+		image := p.Image
+		if image == "" {
+			image = "\u2014"
+		}
+		fmt.Fprintf(w, "%-20s  %-10s  %s\n", p.Name, p.ContainerStatus, image)
+	}
 }
