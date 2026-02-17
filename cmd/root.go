@@ -46,7 +46,33 @@ func NewRootCommand() *cobra.Command {
 	return rootCmd
 }
 
+// embeddedBootstrapScript holds the bootstrap script bytes passed in from
+// main.go's go:embed directive. This package-level variable is set by
+// SetBootstrapScript before building the command tree.
+var embeddedBootstrapScript []byte
+
+// SetBootstrapScript stores the embedded bootstrap script for use by
+// subcommands (e.g., up) that need it for EC2 provisioning.
+func SetBootstrapScript(script []byte) {
+	embeddedBootstrapScript = script
+}
+
+// GetBootstrapScript returns the embedded bootstrap script previously
+// stored via SetBootstrapScript. Returns nil if no script has been set.
+func GetBootstrapScript() []byte {
+	return embeddedBootstrapScript
+}
+
 // Execute creates the root command and runs it. Called from main.
+// Deprecated: Use ExecuteWithBootstrapScript to pass the embedded bootstrap script.
 func Execute() error {
+	return NewRootCommand().Execute()
+}
+
+// ExecuteWithBootstrapScript stores the embedded bootstrap script and
+// executes the root command. The script is made available to subcommands
+// (e.g., up) that need it for EC2 provisioning.
+func ExecuteWithBootstrapScript(script []byte) error {
+	SetBootstrapScript(script)
 	return NewRootCommand().Execute()
 }

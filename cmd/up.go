@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 
 	"github.com/nicholasgasior/mint/internal/cli"
 	"github.com/nicholasgasior/mint/internal/provision"
@@ -43,27 +41,6 @@ func newUpCommandWithDeps(deps *upDeps) *cobra.Command {
 			return runUp(cmd, deps)
 		},
 	}
-}
-
-// readBootstrapScript reads the bootstrap script from the filesystem.
-// It looks for scripts/bootstrap.sh relative to the executable, or falls
-// back to the current working directory.
-func readBootstrapScript() ([]byte, error) {
-	// Try relative to executable first.
-	exe, err := os.Executable()
-	if err == nil {
-		p := filepath.Join(filepath.Dir(exe), "scripts", "bootstrap.sh")
-		if data, err := os.ReadFile(p); err == nil {
-			return data, nil
-		}
-	}
-
-	// Fall back to current working directory.
-	data, err := os.ReadFile("scripts/bootstrap.sh")
-	if err != nil {
-		return nil, fmt.Errorf("read bootstrap script: %w", err)
-	}
-	return data, nil
 }
 
 // runUp executes the up command logic.
