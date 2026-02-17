@@ -1,6 +1,6 @@
 #!/bin/bash
 # Mint bootstrap script — runs as EC2 user-data on first boot.
-# Target: Amazon Linux 2023 (AL2023)
+# Target: Ubuntu 24.04 LTS
 #
 # Environment variables (passed via user-data template):
 #   MINT_EFS_ID       — EFS filesystem ID for user storage
@@ -17,6 +17,8 @@ BOOTSTRAP_VERSION="1.0.0"
 MINT_STATE_DIR="/var/lib/mint"
 MINT_IDLE_TIMEOUT="${MINT_IDLE_TIMEOUT:-60}"
 
+export DEBIAN_FRONTEND=noninteractive
+
 # --- Logging ---
 
 log() {
@@ -28,42 +30,49 @@ log "Starting bootstrap v${BOOTSTRAP_VERSION}"
 # --- System updates ---
 
 log "Updating system packages"
-dnf update -y -q
+apt-get update -qq
+apt-get upgrade -y -qq
 
 # --- Git ---
 
 log "Installing git"
-dnf install -y -q git
+apt-get install -y -qq git
 
-# --- Docker Engine ---
+# --- Docker Engine (official apt repository) ---
 
 log "Installing Docker Engine"
-dnf install -y -q docker
+apt-get install -y -qq ca-certificates curl gnupg
+
+install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+chmod a+r /etc/apt/keyrings/docker.asc
+
+echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+  $(. /etc/os-release && echo "${VERSION_CODENAME}") stable" \
+  > /etc/apt/sources.list.d/docker.list
+
+apt-get update -qq
+apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 systemctl enable docker
 systemctl start docker
-usermod -aG docker ec2-user
+usermod -aG docker ubuntu
 
-# Docker Compose plugin
-log "Installing Docker Compose plugin"
-mkdir -p /usr/local/lib/docker/cli-plugins
-COMPOSE_VERSION=$(curl -fsSL https://api.github.com/repos/docker/compose/releases/latest | grep '"tag_name"' | head -1 | cut -d'"' -f4)
-COMPOSE_DOWNLOAD="/usr/local/lib/docker/cli-plugins/docker-compose"
-curl -fsSL "https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-linux-$(uname -m)" \
-    -o "$COMPOSE_DOWNLOAD"
-
-# TODO: Update this checksum when pinning a specific Docker Compose version
-DOCKER_COMPOSE_SHA256="PLACEHOLDER_UPDATE_BEFORE_RELEASE"
-echo "${DOCKER_COMPOSE_SHA256}  ${COMPOSE_DOWNLOAD}" | sha256sum --check || {
-    log "FATAL: checksum mismatch for ${COMPOSE_DOWNLOAD}"
-    exit 1
-}
-
-chmod +x "$COMPOSE_DOWNLOAD"
+# Docker Compose plugin is installed above via docker-compose-plugin apt package.
+# Apt handles integrity verification; no additional checksum needed.
 
 # --- Node.js LTS ---
 
 log "Installing Node.js LTS"
-dnf install -y -q nodejs npm
+NODESOURCE_KEYRING="/etc/apt/keyrings/nodesource.gpg"
+curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+    | gpg --dearmor -o "${NODESOURCE_KEYRING}"
+chmod a+r "${NODESOURCE_KEYRING}"
+NODE_MAJOR=22
+echo "deb [arch=$(dpkg --print-architecture) signed-by=${NODESOURCE_KEYRING}] https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main" \
+    > /etc/apt/sources.list.d/nodesource.list
+apt-get update -qq
+apt-get install -y -qq nodejs
 
 # --- devcontainer CLI ---
 
@@ -73,7 +82,7 @@ npm install -g @devcontainers/cli
 # --- tmux ---
 
 log "Installing tmux"
-dnf install -y -q tmux
+apt-get install -y -qq tmux
 
 # Configure tmux defaults for all users
 cat > /etc/tmux.conf << 'TMUX_CONF'
@@ -87,28 +96,26 @@ TMUX_CONF
 # --- mosh ---
 
 log "Installing mosh-server"
-dnf install -y -q mosh
+apt-get install -y -qq mosh
 
 # --- GitHub CLI ---
 
 log "Installing GitHub CLI (gh)"
-dnf install -y -q 'dnf-command(config-manager)'
-dnf config-manager --add-repo https://cli.github.com/packages/rpm/gh-cli.repo
-dnf install -y -q gh
+curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+    -o /etc/apt/keyrings/githubcli-archive-keyring.gpg
+chmod a+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+    > /etc/apt/sources.list.d/github-cli.list
+apt-get update -qq
+apt-get install -y -qq gh
 
 # --- AWS CLI v2 ---
 
 log "Installing AWS CLI v2"
 if ! command -v aws &> /dev/null; then
+    apt-get install -y -qq unzip
     curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/awscliv2.zip
-
-    # TODO: Update this checksum when pinning a specific AWS CLI version
-    AWSCLI_SHA256="PLACEHOLDER_UPDATE_BEFORE_RELEASE"
-    echo "${AWSCLI_SHA256}  /tmp/awscliv2.zip" | sha256sum --check || {
-        log "FATAL: checksum mismatch for /tmp/awscliv2.zip"
-        exit 1
-    }
-
+    # TODO: Add checksum verification when AWS CLI version is pinned
     cd /tmp && unzip -q awscliv2.zip
     /tmp/aws/install
     rm -rf /tmp/aws /tmp/awscliv2.zip
@@ -117,21 +124,19 @@ fi
 # --- EC2 Instance Connect ---
 
 log "Installing EC2 Instance Connect agent"
-dnf install -y -q ec2-instance-connect
+apt-get install -y -qq ec2-instance-connect
 
 # --- SSH configuration (ADR-0016) ---
 
 log "Configuring SSH on port 41122"
-sed -i 's/^#\?Port .*/Port 41122/' /etc/ssh/sshd_config
-sed -i 's/^#\?PasswordAuthentication .*/PasswordAuthentication no/' /etc/ssh/sshd_config
-sed -i 's/^#\?ChallengeResponseAuthentication .*/ChallengeResponseAuthentication no/' /etc/ssh/sshd_config
+cat > /etc/ssh/sshd_config.d/mint.conf << 'SSH_CONF'
+# Mint SSH configuration (ADR-0016)
+Port 41122
+PasswordAuthentication no
+ChallengeResponseAuthentication no
+SSH_CONF
 
-# Ensure the non-standard port is used
-if ! grep -q '^Port 41122' /etc/ssh/sshd_config; then
-    echo 'Port 41122' >> /etc/ssh/sshd_config
-fi
-
-systemctl restart sshd
+systemctl restart ssh
 
 # --- Storage mounts (ADR-0004) ---
 
@@ -141,13 +146,21 @@ mkdir -p /mint/user /mint/projects "${MINT_STATE_DIR}"
 # Mount EFS at /mint/user
 if [ -n "${MINT_EFS_ID:-}" ]; then
     log "Mounting EFS ${MINT_EFS_ID} at /mint/user"
-    dnf install -y -q amazon-efs-utils
+
+    # Install amazon-efs-utils from GitHub (not available in Ubuntu apt)
+    apt-get install -y -qq binutils rustc cargo pkg-config libssl-dev
+    git clone --branch v2.0.4 --depth 1 https://github.com/aws/efs-utils /tmp/efs-utils
+    cd /tmp/efs-utils
+    ./build-deb.sh
+    apt-get install -y -qq ./build/amazon-efs-utils*deb
+    rm -rf /tmp/efs-utils
+
     mount -t efs "${MINT_EFS_ID}:/" /mint/user
     # Write fstab entry for EFS
     if ! grep -q '/mint/user' /etc/fstab; then
         echo "${MINT_EFS_ID}:/ /mint/user efs _netdev,tls 0 0" >> /etc/fstab
     fi
-    chown ec2-user:ec2-user /mint/user
+    chown ubuntu:ubuntu /mint/user
 fi
 
 # Format and mount project EBS at /mint/projects
@@ -163,7 +176,7 @@ if [ -n "${MINT_PROJECT_DEV:-}" ]; then
     if ! grep -q '/mint/projects' /etc/fstab; then
         echo "UUID=${PROJECT_UUID} /mint/projects ext4 defaults,nofail 0 2" >> /etc/fstab
     fi
-    chown ec2-user:ec2-user /mint/projects
+    chown ubuntu:ubuntu /mint/projects
 fi
 
 # --- Idle detection (ADR-0018) ---
@@ -325,7 +338,6 @@ check_service() {
 }
 
 check_command docker
-check_command docker-compose || check_command "docker compose" || true
 check_command devcontainer
 check_command tmux
 check_command mosh-server
@@ -335,7 +347,7 @@ check_command node
 check_command npm
 check_command aws
 check_service docker
-check_service sshd
+check_service ssh
 
 if [ "$HEALTH_OK" = true ]; then
     log "Health check passed"

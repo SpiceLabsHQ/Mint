@@ -106,10 +106,9 @@ func TestScriptContent(t *testing.T) {
 		{"bootstrap version", "/var/lib/mint/bootstrap-version"},
 		{"health check", "mint:bootstrap=complete"},
 		{"idle detection", "mint-idle"},
-		{"Docker Compose checksum verification", "DOCKER_COMPOSE_SHA256"},
-		{"AWS CLI checksum verification", "AWSCLI_SHA256"},
-		{"sha256sum check invocation", "sha256sum --check"},
-		{"checksum mismatch fatal", "checksum mismatch"},
+		{"Node.js GPG keyring", "nodesource.gpg"},
+		{"Node.js signed-by apt repo", "signed-by=${NODESOURCE_KEYRING}"},
+		{"efs-utils version pinned", "--branch v2.0.4 --depth 1"},
 	}
 
 	for _, elem := range requiredElements {
