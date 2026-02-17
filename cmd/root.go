@@ -24,6 +24,7 @@ func NewRootCommand() *cobra.Command {
 
 	// Register subcommands
 	rootCmd.AddCommand(newVersionCommand())
+	rootCmd.AddCommand(newConfigCommand())
 
 	return rootCmd
 }
