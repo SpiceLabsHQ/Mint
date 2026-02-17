@@ -19,7 +19,7 @@ Adopt the following conventions across the Mint CLI:
   |-----|------|-------------|
   | `region` | string | AWS region (e.g. `us-east-1`) |
   | `instance_type` | string | Default EC2 instance type (e.g. `t3.medium`) |
-  | `volume_size_gb` | integer | Default root volume size in GB |
+  | `volume_size_gb` | integer | Project EBS volume size in GB (default 50; root EBS is fixed at 200GB) |
   | `idle_timeout_minutes` | integer | Minutes of idle before auto-stop |
   | `ssh_config_approved` | boolean | Whether user has approved Mint writing SSH config entries (see ADR-0015) |
 
@@ -44,7 +44,7 @@ Adopt the following conventions across the Mint CLI:
 
 - `mint version` — Non-negotiable CLI standard. Prints the Mint version and exits. No flags required.
 
-- `mint doctor` — Validates environment health. Checks AWS credentials, region configuration, service quota headroom (Elastic IPs, vCPUs), SSH config sanity, and VM health if a VM is running. Recommended after `mint init`. On-demand at any time.
+- `mint doctor` — Validates environment health. Checks AWS credentials, region configuration, service quota headroom (Elastic IPs, vCPUs), SSH config sanity, and VM health (including `mint:health` tag status) for any running VMs. Use `--vm` to target a specific VM. Recommended after `mint init`. On-demand at any time.
   - `mint doctor --fix` is the explicit repair path. When doctor detects drift or fixable issues, it does not auto-repair. The user must pass `--fix` to authorize corrective action.
   - `--json` outputs structured results for scripting.
 

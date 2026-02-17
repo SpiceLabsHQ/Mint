@@ -31,7 +31,7 @@ The bootstrap polling timeout is **7 minutes**.
 When `mint up` reaches the 7-minute timeout without observing `mint:bootstrap=complete`, Mint does not silently terminate the instance. Instead, it prompts the user to choose one of three options:
 
 1. **Stop the instance** — Halts billing for compute while preserving the instance for later debugging. The user can inspect cloud-init logs via `mint ssh` after manually starting the instance.
-2. **Terminate the instance** — Destroys the instance and cleans up resources. Before terminating, Mint tags the instance with `mint:bootstrap=failed` so that the failure is visible in the AWS console and in `mint ls` output until termination completes.
+2. **Terminate the instance** — Destroys the instance and cleans up resources. Before terminating, Mint tags the instance with `mint:bootstrap=failed` so that the failure is visible in the AWS console and in `mint list` output until termination completes.
 3. **Leave running** — Takes no action, allowing the user to connect immediately via SSH and debug the in-progress or failed bootstrap directly.
 
 This behavior aligns with the Transparency value: surface the problem, show the state, let the developer decide. Silent termination of a paying user's instance is not acceptable.

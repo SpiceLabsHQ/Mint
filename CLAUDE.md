@@ -36,10 +36,13 @@ These are non-negotiable constraints from the ADRs. Do not deviate without updat
 - **EC2 Instance Connect** (ADR-0007): Ephemeral SSH keys, no key management. `mint key add` escape hatch for clients that can't use Instance Connect.
 - **Single VM, multiple projects** (ADR-0002): One VM hosts multiple projects. Advanced users can run multiple VMs via `--vm`.
 - **tmux on host** (ADR-0003): Not inside containers. Survives container rebuilds and iOS app suspension.
-- **Single 200GB gp3 root volume** (ADR-0004): No separate Docker volume.
+- **Three-tier storage** (ADR-0004): Root EBS (200GB, ephemeral), User EFS (mounted at `/mint/user`, persistent), Project EBS (50GB default, VM-scoped).
 - **Default VPC** (ADR-0010): No custom networking, no bastion, no NAT gateway.
 - **Non-standard ports, open inbound** (ADR-0016): SSH on non-standard high port, mosh on 60000-61000. Open to all IPs; security via key-only auth, not network restriction.
 - **Permission before modifying user files** (ADR-0015): Mint prompts before writing files outside `~/.config/mint/`. Approval remembered in config.
+- **Auto-stop idle detection** (ADR-0018): systemd timer checks SSH/mosh sessions, tmux clients, `claude` processes in containers, manual extend. `mint list` auto-warns on VMs exceeding idle timeout.
+- **SSH host key TOFU** (ADR-0019): Trust-on-first-use with loud change detection. Keys stored in `~/.config/mint/known_hosts`.
+- **Binary signing deferred** (ADR-0020): v1 uses checksum verification only. Signing (minisign → cosign) planned for v2.
 
 ## CLI UX Conventions (ADR-0012)
 
@@ -54,4 +57,4 @@ These are non-negotiable constraints from the ADRs. Do not deviate without updat
 | Document | Purpose |
 |----------|---------|
 | `docs/SPEC.md` | Complete specification — the authoritative source |
-| `docs/adr/0001-*.md` through `docs/adr/0016-*.md` | Architecture Decision Records — binding constraints |
+| `docs/adr/0001-*.md` through `docs/adr/0020-*.md` | Architecture Decision Records — binding constraints |

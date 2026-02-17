@@ -39,7 +39,7 @@ This tier represents the user's identity within the tool. It is never destroyed 
 
 ### Tier 3: Project EBS (persistent, VM-scoped)
 
-- **Size**: Configurable (default TBD)
+- **Size**: 50GB gp3, configurable via `volume_size_gb` (minimum 50GB per ADR-0012)
 - **Type**: gp3 EBS volume
 - **Contents**: Project source code, local build artifacts, project-specific configuration
 - **Lifecycle**: Created on `mint up`. Persists across `mint resize` (same instance, no volume manipulation required) and `mint recreate` (detached from terminated instance, reattached to new instance). Destroyed on `mint destroy`.
@@ -53,7 +53,7 @@ This volume survives instance replacement but is destroyed when the VM environme
 - **AZ affinity**: EBS volumes are Availability Zone-scoped. `mint recreate` must launch the replacement instance in the same AZ as the existing project volume. The AZ is recorded implicitly via the volume's existing placement and must be honored when launching the new instance.
 - **`mint resize` simplicity**: Changing instance type on the same instance requires no volume manipulation (stop instance → modify instance type → start instance). The project EBS remains attached throughout.
 - **`mint recreate` complexity**: This is the most operationally complex lifecycle command. It must: (0) stop the instance, (1) detach the project EBS, (2) terminate the old instance (destroying the root EBS), (3) launch a new instance in the same AZ, (4) reattach the project EBS, (5) mount EFS.
-- **EFS mount point**: An implementation decision, not constrained by this ADR. Likely `/home/ubuntu` or a well-known subdirectory. Must be determined before bootstrap script authoring.
+- **EFS mount point**: `/mint/user`. Avoids collision with Ubuntu's default home directory skeleton. Symlinks from `$HOME` well-known paths (`~/.ssh`, `~/.config/claude`, dotfiles) into `/mint/user/` provide seamless user experience while keeping the mount point deterministic. If `/mint/user` is unmounted, the VM is detectably misconfigured.
 
 ## Consequences
 
