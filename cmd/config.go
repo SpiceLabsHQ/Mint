@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/nicholasgasior/mint/internal/cli"
 	"github.com/nicholasgasior/mint/internal/config"
 	"github.com/spf13/cobra"
 )
@@ -21,8 +22,8 @@ func newConfigCommand() *cobra.Command {
 				return err
 			}
 
-			jsonFlag, _ := cmd.Flags().GetBool("json")
-			if jsonFlag {
+			cliCtx := cli.FromCommand(cmd)
+			if cliCtx != nil && cliCtx.JSON {
 				return printConfigJSON(cmd, cfg)
 			}
 

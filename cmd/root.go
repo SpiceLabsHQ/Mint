@@ -1,6 +1,9 @@
 package cmd
 
 import (
+	"context"
+
+	"github.com/nicholasgasior/mint/internal/cli"
 	"github.com/spf13/cobra"
 )
 
@@ -13,6 +16,11 @@ func NewRootCommand() *cobra.Command {
 		Long:  "Provision and manage EC2-based development environments for running Claude Code.",
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			cliCtx := cli.NewCLIContext(cmd)
+			cmd.SetContext(cli.WithContext(context.Background(), cliCtx))
+			return nil
+		},
 	}
 
 	// Global flags matching CLI UX conventions (ADR-0012)

@@ -165,6 +165,34 @@ func TestConfigSetRejectsUnknownKey(t *testing.T) {
 	}
 }
 
+func TestConfigCommandUsesContextForJSON(t *testing.T) {
+	// Verifies --json flows through CLIContext (PersistentPreRunE), not direct flag read.
+	// If context plumbing breaks, this test catches it because config would fall back to
+	// human output instead of JSON.
+	dir := t.TempDir()
+	t.Setenv("MINT_CONFIG_DIR", dir)
+
+	buf := new(bytes.Buffer)
+	rootCmd := NewRootCommand()
+	rootCmd.SetOut(buf)
+	rootCmd.SetErr(buf)
+	rootCmd.SetArgs([]string{"--json", "config"})
+
+	err := rootCmd.Execute()
+	if err != nil {
+		t.Fatalf("config with --json error: %v", err)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
+		t.Fatalf("expected JSON output when --json is a global flag before subcommand, got: %s", buf.String())
+	}
+
+	if _, ok := result["region"]; !ok {
+		t.Error("JSON output missing 'region' key")
+	}
+}
+
 func TestConfigSetRequiresArgs(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("MINT_CONFIG_DIR", dir)
