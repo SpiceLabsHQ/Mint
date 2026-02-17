@@ -3,16 +3,12 @@ package cmd
 import (
 	"bufio"
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
-	"encoding/pem"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2instanceconnect"
 	"github.com/spf13/cobra"
@@ -24,25 +20,6 @@ import (
 	"github.com/nicholasgasior/mint/internal/sshconfig"
 	"github.com/nicholasgasior/mint/internal/vm"
 )
-
-// HostKeyScanner is a function type that scans a remote host for its SSH
-// host key and returns the SHA256 fingerprint. Production implementation
-// uses ssh-keyscan; tests inject a mock.
-type HostKeyScanner func(host string, port int) (fingerprint string, hostKeyLine string, err error)
-
-// CommandRunner is a function type that executes an external command.
-// It enables testing without actually exec'ing ssh/code binaries.
-type CommandRunner func(name string, args ...string) error
-
-// defaultRunner executes the command using os/exec, connecting
-// stdin/stdout/stderr to the parent process.
-func defaultRunner(name string, args ...string) error {
-	cmd := exec.Command(name, args...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
-}
 
 // sshDeps holds the injectable dependencies for the ssh command.
 type sshDeps struct {
@@ -216,71 +193,6 @@ func runSSH(cmd *cobra.Command, deps *sshDeps, extraArgs []string) error {
 	}
 
 	return runner("ssh", sshArgs...)
-}
-
-// lookupInstanceAZ queries DescribeInstances for a single instance ID
-// and returns its availability zone from the Placement field.
-func lookupInstanceAZ(ctx context.Context, client mintaws.DescribeInstancesAPI, instanceID string) (string, error) {
-	out, err := client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
-		InstanceIds: []string{instanceID},
-	})
-	if err != nil {
-		return "", fmt.Errorf("describe instance %s: %w", instanceID, err)
-	}
-
-	for _, res := range out.Reservations {
-		for _, inst := range res.Instances {
-			if inst.Placement != nil && inst.Placement.AvailabilityZone != nil {
-				return aws.ToString(inst.Placement.AvailabilityZone), nil
-			}
-		}
-	}
-
-	return "", fmt.Errorf("no placement info for instance %s", instanceID)
-}
-
-// generateEphemeralKeyPair generates a temporary ed25519 SSH key pair.
-// It returns the public key in OpenSSH authorized_keys format, the path
-// to the temporary private key file, a cleanup function, and any error.
-func generateEphemeralKeyPair() (pubKeyStr string, privKeyPath string, cleanup func(), err error) {
-	pubKey, privKey, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		return "", "", nil, fmt.Errorf("generate ed25519 key: %w", err)
-	}
-
-	// Convert public key to OpenSSH authorized_keys format.
-	sshPubKey, err := ssh.NewPublicKey(pubKey)
-	if err != nil {
-		return "", "", nil, fmt.Errorf("convert public key: %w", err)
-	}
-	pubKeyStr = strings.TrimSpace(string(ssh.MarshalAuthorizedKey(sshPubKey)))
-
-	// Marshal private key to PEM and write to temp file.
-	privKeyBytes, err := ssh.MarshalPrivateKey(privKey, "")
-	if err != nil {
-		return "", "", nil, fmt.Errorf("marshal private key: %w", err)
-	}
-
-	tmpFile, err := os.CreateTemp("", "mint-ssh-key-*")
-	if err != nil {
-		return "", "", nil, fmt.Errorf("create temp key file: %w", err)
-	}
-
-	if err := os.Chmod(tmpFile.Name(), 0o600); err != nil {
-		os.Remove(tmpFile.Name())
-		return "", "", nil, fmt.Errorf("chmod temp key file: %w", err)
-	}
-
-	if err := pem.Encode(tmpFile, privKeyBytes); err != nil {
-		os.Remove(tmpFile.Name())
-		return "", "", nil, fmt.Errorf("write private key: %w", err)
-	}
-	tmpFile.Close()
-
-	privKeyPath = tmpFile.Name()
-	cleanup = func() { os.Remove(privKeyPath) }
-
-	return pubKeyStr, privKeyPath, cleanup, nil
 }
 
 // defaultHostKeyScanner runs ssh-keyscan to fetch a host's SSH public key
