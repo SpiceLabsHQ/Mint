@@ -98,6 +98,7 @@ func TestConnectCommandWithSessionName(t *testing.T) {
 		sessionName    string
 		vmName         string
 		lookupMosh     func(string) (string, error)
+		runnerErr      error
 		wantErr        bool
 		wantErrContain string
 		wantExec       bool
@@ -216,6 +217,21 @@ func TestConnectCommandWithSessionName(t *testing.T) {
 			wantErrContain: "access denied",
 		},
 		{
+			name: "runner error with named session propagates",
+			describe: &mockDescribeForConnect{
+				output: makeRunningInstanceForConnect("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
+			},
+			sendKey: &mockSendSSHPublicKey{
+				output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
+			},
+			owner:          "alice",
+			sessionName:    "myproject",
+			lookupMosh:     func(string) (string, error) { return "/usr/bin/mosh", nil },
+			runnerErr:      fmt.Errorf("connection lost"),
+			wantErr:        true,
+			wantErrContain: "connection lost",
+		},
+		{
 			name: "non-default vm name",
 			describe: &mockDescribeForConnect{
 				output: makeRunningInstanceForConnect("i-dev456", "dev", "alice", "10.0.0.1", "us-west-2a"),
@@ -248,7 +264,7 @@ func TestConnectCommandWithSessionName(t *testing.T) {
 
 			runner := func(name string, args ...string) error {
 				captured = &capturedCommand{name: name, args: args}
-				return nil
+				return tt.runnerErr
 			}
 
 			deps := &connectDeps{

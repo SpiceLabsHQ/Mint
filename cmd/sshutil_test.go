@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ec2instanceconnect"
 
 	mintaws "github.com/nicholasgasior/mint/internal/aws"
@@ -186,35 +185,6 @@ func TestGenerateEphemeralKeyPairFromUtil(t *testing.T) {
 	cleanup()
 	if _, err := os.Stat(privKeyPath); !os.IsNotExist(err) {
 		t.Error("cleanup did not remove private key file")
-	}
-}
-
-func TestLookupInstanceAZFromUtil(t *testing.T) {
-	// Verify lookupInstanceAZ works when called through sshutil.go.
-	mock := &mockDescribeForSSH{
-		output: makeRunningInstanceWithAZ("i-test", "default", "alice", "1.2.3.4", "ap-southeast-1b"),
-	}
-
-	az, err := lookupInstanceAZ(context.Background(), mock, "i-test")
-	if err != nil {
-		t.Fatalf("lookupInstanceAZ: %v", err)
-	}
-	if az != "ap-southeast-1b" {
-		t.Errorf("az = %q, want %q", az, "ap-southeast-1b")
-	}
-}
-
-func TestLookupInstanceAZNoPlacement(t *testing.T) {
-	mock := &mockDescribeForSSH{
-		output: &ec2.DescribeInstancesOutput{},
-	}
-
-	_, err := lookupInstanceAZ(context.Background(), mock, "i-noplacement")
-	if err == nil {
-		t.Fatal("expected error for missing placement")
-	}
-	if !strings.Contains(err.Error(), "no placement info") {
-		t.Errorf("error %q does not mention missing placement", err.Error())
 	}
 }
 

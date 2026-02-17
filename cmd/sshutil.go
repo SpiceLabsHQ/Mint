@@ -13,7 +13,6 @@ import (
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ec2instanceconnect"
 	"golang.org/x/crypto/ssh"
 
@@ -278,27 +277,6 @@ func isTOFUError(err error) bool {
 		strings.Contains(msg, "scanning host key") ||
 		strings.Contains(msg, "checking host key") ||
 		strings.Contains(msg, "recording host key")
-}
-
-// lookupInstanceAZ queries DescribeInstances for a single instance ID
-// and returns its availability zone from the Placement field.
-func lookupInstanceAZ(ctx context.Context, client mintaws.DescribeInstancesAPI, instanceID string) (string, error) {
-	out, err := client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
-		InstanceIds: []string{instanceID},
-	})
-	if err != nil {
-		return "", fmt.Errorf("describe instance %s: %w", instanceID, err)
-	}
-
-	for _, res := range out.Reservations {
-		for _, inst := range res.Instances {
-			if inst.Placement != nil && inst.Placement.AvailabilityZone != nil {
-				return aws.ToString(inst.Placement.AvailabilityZone), nil
-			}
-		}
-	}
-
-	return "", fmt.Errorf("no placement info for instance %s", instanceID)
 }
 
 // generateEphemeralKeyPair generates a temporary ed25519 SSH key pair.
