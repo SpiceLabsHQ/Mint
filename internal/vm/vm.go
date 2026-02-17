@@ -7,6 +7,7 @@ package vm
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -27,6 +28,8 @@ type VM struct {
 	AvailabilityZone string
 	LaunchTime       time.Time
 	BootstrapStatus  string
+	RootVolumeGB     int
+	ProjectVolumeGB  int
 	Tags             map[string]string
 }
 
@@ -113,6 +116,17 @@ func parseInstance(inst ec2types.Instance) *VM {
 
 	vm.Name = tagMap[tags.TagVM]
 	vm.BootstrapStatus = tagMap[tags.TagBootstrap]
+
+	if v, ok := tagMap[tags.TagRootVolumeGB]; ok {
+		if n, err := strconv.Atoi(v); err == nil {
+			vm.RootVolumeGB = n
+		}
+	}
+	if v, ok := tagMap[tags.TagProjectVolumeGB]; ok {
+		if n, err := strconv.Atoi(v); err == nil {
+			vm.ProjectVolumeGB = n
+		}
+	}
 
 	return vm
 }

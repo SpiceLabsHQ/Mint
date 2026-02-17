@@ -57,9 +57,12 @@ type statusJSON struct {
 	State           string            `json:"state"`
 	PublicIP        string            `json:"public_ip,omitempty"`
 	InstanceType    string            `json:"instance_type"`
+	RootVolumeGB    int               `json:"root_volume_gb,omitempty"`
+	ProjectVolumeGB int               `json:"project_volume_gb,omitempty"`
 	LaunchTime      time.Time         `json:"launch_time"`
 	BootstrapStatus string            `json:"bootstrap_status"`
 	Tags            map[string]string `json:"tags,omitempty"`
+	MintVersion     string            `json:"mint_version"`
 }
 
 // runStatus executes the status command logic.
@@ -104,9 +107,12 @@ func writeStatusJSON(w io.Writer, v *vm.VM) error {
 		State:           v.State,
 		PublicIP:        v.PublicIP,
 		InstanceType:    v.InstanceType,
+		RootVolumeGB:    v.RootVolumeGB,
+		ProjectVolumeGB: v.ProjectVolumeGB,
 		LaunchTime:      v.LaunchTime,
 		BootstrapStatus: v.BootstrapStatus,
 		Tags:            v.Tags,
+		MintVersion:     version,
 	}
 
 	enc := json.NewEncoder(w)
@@ -131,6 +137,12 @@ func writeStatusHuman(w io.Writer, v *vm.VM) {
 	fmt.Fprintf(w, "State:     %s\n", v.State)
 	fmt.Fprintf(w, "IP:        %s\n", ip)
 	fmt.Fprintf(w, "Type:      %s\n", v.InstanceType)
+	if v.RootVolumeGB > 0 {
+		fmt.Fprintf(w, "Root Vol:  %d GB\n", v.RootVolumeGB)
+	}
+	if v.ProjectVolumeGB > 0 {
+		fmt.Fprintf(w, "Proj Vol:  %d GB\n", v.ProjectVolumeGB)
+	}
 	fmt.Fprintf(w, "Launched:  %s\n", v.LaunchTime.Format(time.RFC3339))
 	fmt.Fprintf(w, "Bootstrap: %s\n", bootstrap)
 
@@ -140,4 +152,10 @@ func writeStatusHuman(w io.Writer, v *vm.VM) {
 			fmt.Fprintf(w, "  %s = %s\n", k, val)
 		}
 	}
+
+	shortCommit := commit
+	if len(shortCommit) > 7 {
+		shortCommit = shortCommit[:7]
+	}
+	fmt.Fprintf(w, "\nmint %s (%s)\n", version, shortCommit)
 }

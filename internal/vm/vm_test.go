@@ -364,6 +364,84 @@ func TestVMTagsParsed(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Volume tag parsing tests
+// ---------------------------------------------------------------------------
+
+func TestVMParseVolumeTagsFromInstance(t *testing.T) {
+	now := time.Now()
+	inst := makeInstance("i-vol", "running", "1.2.3.4", "m6i.xlarge", "default", "alice", "complete", now)
+	inst.Tags = append(inst.Tags,
+		ec2types.Tag{Key: aws.String(tags.TagRootVolumeGB), Value: aws.String("200")},
+		ec2types.Tag{Key: aws.String(tags.TagProjectVolumeGB), Value: aws.String("50")},
+	)
+
+	mock := &mockDescribeInstances{
+		output: &ec2.DescribeInstancesOutput{
+			Reservations: []ec2types.Reservation{makeReservation(inst)},
+		},
+	}
+
+	vm, err := FindVM(context.Background(), mock, "alice", "default")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if vm.RootVolumeGB != 200 {
+		t.Errorf("RootVolumeGB = %d, want 200", vm.RootVolumeGB)
+	}
+	if vm.ProjectVolumeGB != 50 {
+		t.Errorf("ProjectVolumeGB = %d, want 50", vm.ProjectVolumeGB)
+	}
+}
+
+func TestVMParseVolumeTagsMissing(t *testing.T) {
+	now := time.Now()
+	inst := makeInstance("i-novol", "running", "1.2.3.4", "m6i.xlarge", "default", "alice", "complete", now)
+
+	mock := &mockDescribeInstances{
+		output: &ec2.DescribeInstancesOutput{
+			Reservations: []ec2types.Reservation{makeReservation(inst)},
+		},
+	}
+
+	vm, err := FindVM(context.Background(), mock, "alice", "default")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if vm.RootVolumeGB != 0 {
+		t.Errorf("RootVolumeGB = %d, want 0", vm.RootVolumeGB)
+	}
+	if vm.ProjectVolumeGB != 0 {
+		t.Errorf("ProjectVolumeGB = %d, want 0", vm.ProjectVolumeGB)
+	}
+}
+
+func TestVMParseVolumeTagsInvalidIgnored(t *testing.T) {
+	now := time.Now()
+	inst := makeInstance("i-bad", "running", "1.2.3.4", "m6i.xlarge", "default", "alice", "complete", now)
+	inst.Tags = append(inst.Tags,
+		ec2types.Tag{Key: aws.String(tags.TagRootVolumeGB), Value: aws.String("not-a-number")},
+		ec2types.Tag{Key: aws.String(tags.TagProjectVolumeGB), Value: aws.String("")},
+	)
+
+	mock := &mockDescribeInstances{
+		output: &ec2.DescribeInstancesOutput{
+			Reservations: []ec2types.Reservation{makeReservation(inst)},
+		},
+	}
+
+	vm, err := FindVM(context.Background(), mock, "alice", "default")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if vm.RootVolumeGB != 0 {
+		t.Errorf("RootVolumeGB = %d, want 0 (invalid tag should be ignored)", vm.RootVolumeGB)
+	}
+	if vm.ProjectVolumeGB != 0 {
+		t.Errorf("ProjectVolumeGB = %d, want 0 (empty tag should be ignored)", vm.ProjectVolumeGB)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 

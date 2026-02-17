@@ -8,7 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 )
 
 func TestStatusCommand(t *testing.T) {
@@ -157,5 +159,187 @@ func TestStatusCommand(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// makeInstanceWithVolumeTags creates a DescribeInstancesOutput with volume size tags.
+func makeInstanceWithVolumeTags(id, vmName, owner, state, ip, instanceType, bootstrap string, launchTime time.Time, rootGB, projectGB string) *ec2.DescribeInstancesOutput {
+	out := makeInstanceWithTime(id, vmName, owner, state, ip, instanceType, bootstrap, launchTime)
+	inst := &out.Reservations[0].Instances[0]
+	if rootGB != "" {
+		inst.Tags = append(inst.Tags, ec2types.Tag{
+			Key: aws.String("mint:root-volume-gb"), Value: aws.String(rootGB),
+		})
+	}
+	if projectGB != "" {
+		inst.Tags = append(inst.Tags, ec2types.Tag{
+			Key: aws.String("mint:project-volume-gb"), Value: aws.String(projectGB),
+		})
+	}
+	return out
+}
+
+func TestStatusShowsVolumeInfo(t *testing.T) {
+	recentLaunch := time.Now().Add(-30 * time.Minute)
+	buf := new(bytes.Buffer)
+
+	deps := &statusDeps{
+		describe: &mockDescribeInstances{
+			output: makeInstanceWithVolumeTags("i-vol1", "default", "alice", "running", "1.2.3.4", "m6i.xlarge", "complete", recentLaunch, "200", "50"),
+		},
+		owner: "alice",
+	}
+
+	cmd := newStatusCommandWithDeps(deps)
+	root := newTestRoot()
+	root.AddCommand(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"status"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "Root Vol:  200 GB") {
+		t.Errorf("output missing root volume info, got:\n%s", output)
+	}
+	if !strings.Contains(output, "Proj Vol:  50 GB") {
+		t.Errorf("output missing project volume info, got:\n%s", output)
+	}
+}
+
+func TestStatusHidesVolumesWhenZero(t *testing.T) {
+	recentLaunch := time.Now().Add(-30 * time.Minute)
+	buf := new(bytes.Buffer)
+
+	deps := &statusDeps{
+		describe: &mockDescribeInstances{
+			output: makeInstanceWithTime("i-novol", "default", "alice", "running", "1.2.3.4", "m6i.xlarge", "complete", recentLaunch),
+		},
+		owner: "alice",
+	}
+
+	cmd := newStatusCommandWithDeps(deps)
+	root := newTestRoot()
+	root.AddCommand(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"status"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := buf.String()
+	if strings.Contains(output, "Root Vol:") {
+		t.Errorf("output should NOT contain Root Vol when zero, got:\n%s", output)
+	}
+	if strings.Contains(output, "Proj Vol:") {
+		t.Errorf("output should NOT contain Proj Vol when zero, got:\n%s", output)
+	}
+}
+
+func TestStatusJSONIncludesVolumes(t *testing.T) {
+	recentLaunch := time.Now().Add(-30 * time.Minute)
+	buf := new(bytes.Buffer)
+
+	deps := &statusDeps{
+		describe: &mockDescribeInstances{
+			output: makeInstanceWithVolumeTags("i-vol2", "default", "alice", "running", "1.2.3.4", "m6i.xlarge", "complete", recentLaunch, "200", "50"),
+		},
+		owner: "alice",
+	}
+
+	cmd := newStatusCommandWithDeps(deps)
+	root := newTestRoot()
+	root.AddCommand(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"status", "--json"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+
+	if v, ok := result["root_volume_gb"]; !ok {
+		t.Error("JSON output missing root_volume_gb field")
+	} else if v.(float64) != 200 {
+		t.Errorf("root_volume_gb = %v, want 200", v)
+	}
+
+	if v, ok := result["project_volume_gb"]; !ok {
+		t.Error("JSON output missing project_volume_gb field")
+	} else if v.(float64) != 50 {
+		t.Errorf("project_volume_gb = %v, want 50", v)
+	}
+}
+
+func TestStatusShowsVersionNotice(t *testing.T) {
+	recentLaunch := time.Now().Add(-30 * time.Minute)
+	buf := new(bytes.Buffer)
+
+	deps := &statusDeps{
+		describe: &mockDescribeInstances{
+			output: makeInstanceWithTime("i-ver1", "default", "alice", "running", "1.2.3.4", "m6i.xlarge", "complete", recentLaunch),
+		},
+		owner: "alice",
+	}
+
+	cmd := newStatusCommandWithDeps(deps)
+	root := newTestRoot()
+	root.AddCommand(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"status"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := buf.String()
+	// Default version in tests is "dev" (set in cmd/version.go)
+	if !strings.Contains(output, "mint dev") {
+		t.Errorf("output missing version notice, got:\n%s", output)
+	}
+}
+
+func TestStatusJSONIncludesVersion(t *testing.T) {
+	recentLaunch := time.Now().Add(-30 * time.Minute)
+	buf := new(bytes.Buffer)
+
+	deps := &statusDeps{
+		describe: &mockDescribeInstances{
+			output: makeInstanceWithTime("i-ver2", "default", "alice", "running", "1.2.3.4", "m6i.xlarge", "complete", recentLaunch),
+		},
+		owner: "alice",
+	}
+
+	cmd := newStatusCommandWithDeps(deps)
+	root := newTestRoot()
+	root.AddCommand(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"status", "--json"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+
+	if v, ok := result["mint_version"]; !ok {
+		t.Error("JSON output missing mint_version field")
+	} else if v.(string) != "dev" {
+		t.Errorf("mint_version = %q, want %q", v, "dev")
 	}
 }

@@ -41,6 +41,12 @@ const (
 
 	// TagName is the standard AWS Name tag. Format: mint/<owner>/<vm-name>.
 	TagName = "Name"
+
+	// TagRootVolumeGB stores the root EBS volume size in GB (ADR-0004).
+	TagRootVolumeGB = "mint:root-volume-gb"
+
+	// TagProjectVolumeGB stores the project EBS volume size in GB (ADR-0004).
+	TagProjectVolumeGB = "mint:project-volume-gb"
 )
 
 // ---------------------------------------------------------------------------
