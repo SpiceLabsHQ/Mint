@@ -59,10 +59,18 @@ func newSSHCommandWithDeps(deps *sshDeps) *cobra.Command {
 			"Extra SSH arguments can be passed after --, for example: mint ssh -- -L 8080:localhost:8080",
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if deps == nil {
-				return fmt.Errorf("AWS clients not configured (not yet wired for production use)")
+			if deps != nil {
+				return runSSH(cmd, deps, args)
 			}
-			return runSSH(cmd, deps, args)
+			clients := awsClientsFromContext(cmd.Context())
+			if clients == nil {
+				return fmt.Errorf("AWS clients not configured")
+			}
+			return runSSH(cmd, &sshDeps{
+				describe: clients.ec2Client,
+				sendKey:  clients.icClient,
+				owner:    clients.owner,
+			}, args)
 		},
 	}
 

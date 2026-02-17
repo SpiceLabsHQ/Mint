@@ -35,10 +35,17 @@ func newStatusCommandWithDeps(deps *statusDeps) *cobra.Command {
 		Long:  "Show detailed status of a single VM including state, IP, instance type, and tags.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if deps == nil {
-				return fmt.Errorf("AWS clients not configured (not yet wired for production use)")
+			if deps != nil {
+				return runStatus(cmd, deps)
 			}
-			return runStatus(cmd, deps)
+			clients := awsClientsFromContext(cmd.Context())
+			if clients == nil {
+				return fmt.Errorf("AWS clients not configured")
+			}
+			return runStatus(cmd, &statusDeps{
+				describe: clients.ec2Client,
+				owner:    clients.owner,
+			})
 		},
 	}
 }

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/nicholasgasior/mint/internal/cli"
 	"github.com/spf13/cobra"
@@ -18,7 +19,20 @@ func NewRootCommand() *cobra.Command {
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			cliCtx := cli.NewCLIContext(cmd)
-			cmd.SetContext(cli.WithContext(context.Background(), cliCtx))
+			ctx := cli.WithContext(context.Background(), cliCtx)
+
+			// Initialize AWS clients for commands that need them.
+			// Local-only commands (version, config, ssh-config, help)
+			// skip AWS initialization entirely.
+			if commandNeedsAWS(cmd.Name()) {
+				clients, err := initAWSClients(ctx)
+				if err != nil {
+					return fmt.Errorf("initialize AWS: %w", err)
+				}
+				ctx = contextWithAWSClients(ctx, clients)
+			}
+
+			cmd.SetContext(ctx)
 			return nil
 		},
 	}

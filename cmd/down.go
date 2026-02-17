@@ -36,10 +36,18 @@ func newDownCommandWithDeps(deps *downDeps) *cobra.Command {
 		Long:  "Stop the VM instance. All volumes and Elastic IP persist for next mint up.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if deps == nil {
-				return fmt.Errorf("AWS clients not configured (not yet wired for production use)")
+			if deps != nil {
+				return runDown(cmd, deps)
 			}
-			return runDown(cmd, deps)
+			clients := awsClientsFromContext(cmd.Context())
+			if clients == nil {
+				return fmt.Errorf("AWS clients not configured")
+			}
+			return runDown(cmd, &downDeps{
+				describe: clients.ec2Client,
+				stop:     clients.ec2Client,
+				owner:    clients.owner,
+			})
 		},
 	}
 }

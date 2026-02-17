@@ -43,10 +43,23 @@ func newDestroyCommandWithDeps(deps *destroyDeps) *cobra.Command {
 			"point is preserved (user-scoped, persistent across VMs).",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if deps == nil {
-				return fmt.Errorf("AWS clients not configured (not yet wired for production use)")
+			if deps != nil {
+				return runDestroy(cmd, deps)
 			}
-			return runDestroy(cmd, deps)
+			clients := awsClientsFromContext(cmd.Context())
+			if clients == nil {
+				return fmt.Errorf("AWS clients not configured")
+			}
+			return runDestroy(cmd, &destroyDeps{
+				describe:        clients.ec2Client,
+				terminate:       clients.ec2Client,
+				describeVolumes: clients.ec2Client,
+				detachVolume:    clients.ec2Client,
+				deleteVolume:    clients.ec2Client,
+				describeAddrs:   clients.ec2Client,
+				releaseAddr:     clients.ec2Client,
+				owner:           clients.owner,
+			})
 		},
 	}
 }

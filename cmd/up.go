@@ -35,10 +35,34 @@ func newUpCommandWithDeps(deps *upDeps) *cobra.Command {
 			"stopped, it will be started.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if deps == nil {
-				return fmt.Errorf("AWS clients not configured (not yet wired for production use)")
+			if deps != nil {
+				return runUp(cmd, deps)
 			}
-			return runUp(cmd, deps)
+			clients := awsClientsFromContext(cmd.Context())
+			if clients == nil {
+				return fmt.Errorf("AWS clients not configured")
+			}
+			return runUp(cmd, &upDeps{
+				provisioner: provision.NewProvisioner(
+					clients.ec2Client, // DescribeInstancesAPI
+					clients.ec2Client, // StartInstancesAPI
+					clients.ec2Client, // RunInstancesAPI
+					clients.ec2Client, // DescribeSecurityGroupsAPI
+					clients.ec2Client, // DescribeSubnetsAPI
+					clients.ec2Client, // CreateVolumeAPI
+					clients.ec2Client, // AttachVolumeAPI
+					clients.ec2Client, // AllocateAddressAPI
+					clients.ec2Client, // AssociateAddressAPI
+					clients.ec2Client, // DescribeAddressesAPI
+					clients.ec2Client, // CreateTagsAPI
+					clients.ssmClient, // GetParameterAPI
+				),
+				owner:           clients.owner,
+				ownerARN:        clients.ownerARN,
+				bootstrapScript: GetBootstrapScript(),
+				instanceType:    clients.mintConfig.InstanceType,
+				volumeSize:      int32(clients.mintConfig.VolumeSizeGB),
+			})
 		},
 	}
 }

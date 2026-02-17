@@ -36,10 +36,17 @@ func newCodeCommandWithDeps(deps *codeDeps) *cobra.Command {
 			"Ensures the SSH config entry exists before launching.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if deps == nil {
-				return fmt.Errorf("AWS clients not configured (not yet wired for production use)")
+			if deps != nil {
+				return runCode(cmd, deps)
 			}
-			return runCode(cmd, deps)
+			clients := awsClientsFromContext(cmd.Context())
+			if clients == nil {
+				return fmt.Errorf("AWS clients not configured")
+			}
+			return runCode(cmd, &codeDeps{
+				describe: clients.ec2Client,
+				owner:    clients.owner,
+			})
 		},
 	}
 
