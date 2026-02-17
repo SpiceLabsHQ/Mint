@@ -32,7 +32,7 @@ Every AWS resource Mint creates is tagged for discovery and billing.
 | Tag Key | Value | Purpose |
 |---|---|---|
 | `mint` | `true` | Primary filter — identifies all Mint-managed resources |
-| `mint:component` | `instance`, `volume`, `security-group`, `elastic-ip` | Resource type |
+| `mint:component` | `instance`, `volume`, `security-group`, `elastic-ip`, `project-volume`, `efs-access-point` | Resource type |
 | `mint:vm` | VM name (e.g. `default`, `gpu-box`) | Which VM this resource belongs to |
 | `mint:owner` | Friendly name derived from AWS identity ARN (e.g. `ryan`) | Resource discovery and filtering |
 | `mint:owner-arn` | Full caller ARN from `sts get-caller-identity` | Auditability, disambiguation if friendly names collide |
@@ -65,19 +65,23 @@ An AWS administrator performs this once per account. It creates shared infrastru
 
 **IAM Instance Profile: `mint-instance-profile`** — Wraps the role above. Mint passes this profile to instances at launch.
 
+**EFS Filesystem** — A shared Amazon EFS filesystem for user configuration volumes. The CloudFormation template creates the filesystem and an associated security group allowing NFS access from Mint VMs.
+
 Mint ships with documentation containing the exact IAM policy JSON and a CloudFormation template the admin can deploy directly.
 
 ### Validation
 
-`mint init` checks for the instance profile. If missing, it exits with an error message directing the admin to the setup documentation. `mint init` also validates that the default VPC exists with a public subnet in the configured region. These are the only blockers — everything else Mint creates on its own.
+`mint init` checks for the instance profile and EFS filesystem. If either is missing, it exits with an error message directing the admin to the setup documentation. `mint init` also validates that the default VPC exists with a public subnet in the configured region. These are the only blockers — everything else Mint creates on its own.
 
 ## Per-User Init
 
 Each Mint user runs `mint init` once from their machine. This creates user-scoped resources within the shared AWS account using PowerUser permissions:
 
 - Creates a security group allowing SSH (TCP 41122) and mosh (UDP 60000-61000), tagged. Uses non-standard SSH port to avoid automated scanning; inbound is open to all IPs, with security provided by key-only authentication (see ADR-0016).
+- Creates a per-user EFS access point on the shared EFS filesystem for persistent user configuration (dotfiles, authorized_keys, Claude Code auth state)
 - Sets the AWS region explicitly (not inherited from AWS CLI default config)
 - Validates that the admin-created instance profile exists
+- Validates that the EFS filesystem exists
 - Validates that the default VPC exists with a public subnet
 
 No SSH keys are generated or stored. SSH access is handled by EC2 Instance Connect (see Authentication).
@@ -92,9 +96,19 @@ All commands support `--verbose` (progress steps) and `--debug` (AWS SDK call de
 
 **`mint up [--vm <name>]`** — Creates and starts a VM. If a stopped VM with that name exists (found by tag), starts it instead. The VM gets an Elastic IP for a stable address (Mint checks EIP quota before allocation). On first boot, the VM bootstraps itself and `mint up` polls for the `mint:bootstrap=complete` tag before reporting success, showing progress with phase labels ("Launching instance...", "Allocating Elastic IP...", "Waiting for bootstrap..."). On subsequent starts, a boot-time reconciliation script verifies installed software versions. Base image is Ubuntu 24.04 LTS, resolved dynamically. Instance type defaults to m6i.xlarge (4 vCPU, 16GB). All resources are tagged. After the VM is ready, `mint up` auto-generates the SSH config entry (prompting for permission on first run — see ADR-0015).
 
-**`mint down [--vm <name>]`** — Stops the VM. EBS volume persists. Compute billing stops. Elastic IP remains allocated so the address doesn't change on next start.
+**`mint down [--vm <name>]`** — Stops the VM. Root EBS, project EBS, and EFS all persist. Compute billing stops. Elastic IP remains allocated so the address doesn't change on next start.
 
-**`mint destroy [--vm <name>]`** — Terminates the VM and releases all associated resources (EBS, Elastic IP) found by tag. Requires interactive confirmation by default. Use `--yes` to skip confirmation in scripts.
+**`mint resize [--vm <name>] <instance-type>`** — Changes the EC2 instance type. Stops the instance, modifies the instance type attribute, starts the instance. All volumes preserved. This is a native EC2 operation taking ~60 seconds.
+
+**`mint recreate [--vm <name>]`** — Terminates the instance and root volume, launches a new instance in the same AZ, reattaches the project EBS volume, EFS mounts via fstab, and bootstrap runs on the fresh root volume. Use when the host OS or Docker environment needs a clean slate (bootstrap updates, root corruption, Ubuntu LTS upgrade). Requires interactive confirmation.
+
+**`mint destroy [--vm <name>]`** — Fully destructive. Terminates the instance, deletes root EBS, deletes project EBS, releases Elastic IP. User EFS unmounts naturally (user-scoped, not VM-scoped) and persists independently. Requires interactive confirmation by default. Use `--yes` to skip confirmation in scripts.
+
+**`mint doctor [--vm <name>] [--fix]`** — Validates environment health. Checks AWS credentials, region configuration, service quota headroom (Elastic IPs, vCPUs), and SSH config sanity. With `--vm`, also checks VM health, disk usage, and component versions. `--fix` triggers explicit repair of detected drift (the only path to remediation — auto-fix is intentionally avoided).
+
+**`mint version`** — Prints version information.
+
+**`mint update`** — Self-updates the CLI binary. Downloads the latest release, verifies the checksum, and performs atomic binary replacement. Leaves the existing binary untouched if the checksum does not match.
 
 **`mint list [--json]`** — Shows all VMs owned by the current user with their state (running, stopped), IP, uptime, and idle timer status.
 
@@ -134,9 +148,19 @@ Projects live on VMs. A single VM typically hosts multiple projects, each in its
 
 **`mint config [--json]`** — Shows current configuration.
 
-**`mint config set <key> <value>`** — Sets a configuration value (e.g. `mint config set idle.timeout_minutes 90`).
+**`mint config set <key> <value>`** — Sets a configuration value (e.g. `mint config set idle_timeout_minutes 90`). Validates aggressively on write: `instance_type` is validated against the AWS API, `volume_size_gb` must be >= 50, `idle_timeout_minutes` must be >= 15, and unknown keys are rejected.
 
-Configuration is stored at `~/.config/mint/config.toml` (following XDG conventions). Configuration covers: AWS region, default instance type, default volume size, and idle timeout. Owner identity is derived at runtime from AWS credentials, not stored in config. It does not store project or repo information — that lives on the VMs themselves.
+Configuration is stored at `~/.config/mint/config.toml` (following XDG conventions). Flat structure, no nesting, all keys are snake_case:
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `region` | string | AWS region (e.g. `us-east-1`) |
+| `instance_type` | string | Default EC2 instance type (e.g. `t3.medium`) |
+| `volume_size_gb` | integer | Default root volume size in GB |
+| `idle_timeout_minutes` | integer | Minutes of idle before auto-stop |
+| `ssh_config_approved` | boolean | Whether user has approved Mint writing SSH config entries |
+
+Owner identity is derived at runtime from AWS credentials, not stored in config. It does not store project or repo information — that lives on the VMs themselves.
 
 ## Auto-Stop
 
@@ -153,11 +177,17 @@ When none are true for the configured timeout (default 60 minutes), the VM stops
 
 ## Bootstrap Verification
 
-On first boot, the VM runs user-data to install all required software. A health-check script runs at the end of the bootstrap process to validate that all components are operational (Docker daemon running, devcontainer CLI in PATH, mosh-server available, tmux installed, etc.). On success, it tags the instance with `mint:bootstrap=complete`.
+On first boot, the VM runs user-data to install all required software. The bootstrap script's SHA256 hash is pinned in the Go binary and verified before sending to EC2 — if the hash does not match, `mint up` aborts immediately. This closes supply-chain attack vectors (compromised CDN, tampered repository) without requiring full signing infrastructure.
 
-`mint up` polls for this tag before reporting success. If the tag does not appear within a timeout, `mint up` reports a bootstrap failure and directs the user to check cloud-init logs.
+A health-check script runs at the end of the bootstrap process to validate that all components are operational (Docker daemon running, devcontainer CLI in PATH, mosh-server available, tmux installed, etc.). On success, it tags the instance with `mint:bootstrap=complete`. The bootstrap script writes its version to `/var/lib/mint/bootstrap-version` for drift detection on subsequent boots.
 
-On subsequent starts (stop/start cycles), a boot-time reconciliation script (systemd unit) compares installed component versions against expected versions and logs discrepancies. This catches drift from manual modifications or extended periods between restarts.
+`mint up` polls for this tag with a **7-minute timeout** before reporting success. If the tag does not appear within the timeout, `mint up` prompts the user to choose one of three options:
+
+1. **Stop the instance** — Halts billing while preserving the instance for later debugging.
+2. **Terminate the instance** — Destroys the instance and cleans up resources.
+3. **Leave running** — Takes no action, allowing the user to connect via SSH and debug directly.
+
+On subsequent starts (stop/start cycles), a boot-time reconciliation script (systemd unit) compares installed component versions against expected versions and logs warnings to journald. The reconciliation unit does **not** auto-fix — `mint doctor --fix` is the explicit repair path. This avoids the security anti-pattern of unattended package operations on boot.
 
 ## Multiple VMs (advanced)
 
@@ -173,13 +203,16 @@ mint list                        # shows both VMs
 mint down --vm gpu-box           # stops only gpu-box
 ```
 
-Each VM has its own Elastic IP, EBS volume, idle timer, and set of devcontainers. They share the user's security group.
+Each VM has its own Elastic IP, root EBS volume, project EBS volume, idle timer, and set of devcontainers. They share the user's security group and EFS access point (user config is shared across all VMs).
 
 ## EC2 Instance Details
 
 - **AMI**: Ubuntu 24.04 LTS, resolved via SSM parameter (not hardcoded)
 - **Instance type**: m6i.xlarge (4 vCPU, 16GB RAM), configurable per VM
-- **Storage**: 200GB gp3 EBS root volume, persists across stop/start
+- **Storage**: Three-tier model:
+  - **Root EBS**: 200GB gp3, ephemeral OS and Docker layer. Created fresh on `mint up` and `mint recreate`. Destroyed on `mint destroy` and `mint recreate`.
+  - **User EFS**: Per-user EFS access point for persistent configuration (dotfiles, authorized_keys, Claude Code auth state). Created during `mint init`. Shared across all of the user's VMs. Persists across all lifecycle operations including `mint destroy`.
+  - **Project EBS**: Per-VM gp3 volume for project source code. Created on `mint up`. Persists across `mint resize` and `mint recreate`. Destroyed on `mint destroy`.
 - **Elastic IP**: One per VM, stable across stop/start cycles (default quota: 5 per region — admin should request increase via Service Quotas for multi-user setups)
 - **Security group**: Shared across user's VMs (SSH on port 41122 + mosh ports, open to all IPs)
 - **Instance profile**: `mint-instance-profile` (admin-created, shared)
@@ -189,7 +222,7 @@ Each VM has its own Elastic IP, EBS volume, idle timer, and set of devcontainers
 
 Docker Engine, Docker Compose, devcontainer CLI, tmux (with mouse support and large scroll buffer), mosh-server, Git, GitHub CLI, Node.js LTS, AWS CLI v2, EC2 Instance Connect agent.
 
-Docker BuildKit cache mounts are persisted on the EBS volume so devcontainer rebuilds reuse layers across projects.
+Docker BuildKit cache mounts are persisted on the root EBS volume so devcontainer rebuilds reuse layers across projects.
 
 ### tmux configuration
 
@@ -205,6 +238,16 @@ Mouse support enabled, 50k line scroll buffer, 256-color terminal. This is host-
 
 For clients that cannot use EC2 Instance Connect (e.g. Termius on iPad, CI runners), `mint key add` appends a public key to the VM's `authorized_keys` via Instance Connect, enabling direct SSH access with that key.
 
+**SSH host key trust**: Mint stores first-seen host keys in `~/.config/mint/known_hosts` and validates on reconnect. When a new host key appears for a VM name that already has a stored key (e.g. after `mint recreate`), Mint prompts the user before accepting the new key.
+
+## Observability
+
+**CLI structured logging**: Every AWS API call is logged with service, operation, duration, and result. Logs are written to `~/.config/mint/logs/` and suppressed by default. Visible via `--debug` for ad-hoc troubleshooting or post-mortem analysis.
+
+**CLI audit logging**: All Mint commands are recorded to `~/.config/mint/audit.log` with timestamp, command, VM name, and caller ARN. Local-only, no centralized export in v1.
+
+**VM disk usage alerting**: A journald threshold warning fires at 80% root volume usage. This warning is surfaced in `mint status` output so users are aware before disk pressure causes failures.
+
 ## VS Code Integration
 
 The primary workflow uses VS Code Remote-SSH. After `mint up`, the developer:
@@ -219,11 +262,10 @@ The primary workflow uses VS Code Remote-SSH. After `mint up`, the developer:
 
 - Spot instance support for cost savings
 - Automatic devcontainer rebuild on git push via webhook
-- Instance type scaling (resize a running VM)
 - EBS snapshot/restore for fast recreation
 - Team shared instances with per-user tmux sessions
 - Push notifications when Claude Code needs input
 - Dead-man's switch Lambda for detecting auto-stop failures (watchdog that checks heartbeat tags and force-stops stale instances)
-- Dedicated Docker EBS volume at `/var/lib/docker` (upgrade from shared root volume)
 - IAM permission boundaries for untrusted multi-user environments
 - `mint up --project <git-url>` to provision a VM and clone a project in one command
+- CLI binary signing (cosign/GPG) for release verification

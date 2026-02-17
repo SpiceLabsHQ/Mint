@@ -1,26 +1,66 @@
-# ADR-0004: Single 200GB gp3 Root Volume
+# ADR-0004: Three-Tier Storage Model
 
 ## Status
-Accepted
+
+Accepted (supersedes original single-volume decision)
 
 ## Context
-Docker stores images, layers, and container filesystems under `/var/lib/docker`. On a busy dev machine with multiple devcontainers, this can consume 50-100GB. Two storage strategies were evaluated:
 
-1. **Separate EBS volume** mounted at `/var/lib/docker`. Isolates Docker storage from the OS. If Docker fills the disk, the root filesystem is unaffected. Adds provisioning complexity (create volume, attach, format, mount, update fstab).
-2. **Single root volume.** Everything on one gp3 disk. Simpler provisioning. If Docker fills the disk, the OS is also affected.
+The original ADR-0004 specified a single 200GB gp3 root volume for everything — OS, Docker, and project code. The squadron design review identified that different categories of data have fundamentally different lifecycle semantics, and conflating them on a single volume creates problems:
 
-The original spec called for a 100GB root volume.
+- **User configuration** (dotfiles, `~/.ssh/authorized_keys`, Claude Code auth state) must persist across ALL VMs and all lifecycle operations. A user recreating or destroying a VM should not lose their shell preferences or lose Claude Code authentication state.
+- **Project source code** must persist across VM recreations (new instance type, fresh OS) but is naturally VM-scoped — it belongs to a particular project environment, not the user's identity.
+- **The OS and Docker layer** are ephemeral by nature. They should be rebuildable without losing user data or project code. Treating them as precious increases operational risk and migration cost.
+
+Colocating all three on a single root volume means any lifecycle operation that touches the OS (recreate, destroy) also destroys user config and project code. This is incorrect behavior for a developer environment tool.
 
 ## Decision
-Use a single 200GB gp3 EBS root volume. No dedicated Docker volume.
 
-The volume size was increased from the original spec's 100GB to 200GB to provide adequate headroom for Docker images, build layers, multiple project repositories, and OS overhead.
+Use a three-tier storage model with distinct volumes for each tier, each with its own lifecycle semantics.
 
-`mint status` will report disk usage so developers can see when they are running low. A future v2 release may introduce a separate Docker volume if disk contention proves problematic in practice.
+### Tier 1: Root EBS (ephemeral, OS layer)
+
+- **Size**: 200GB gp3
+- **Contents**: OS, Docker Engine, Docker image layers and container data, system packages
+- **Lifecycle**: Created fresh on `mint up` and `mint recreate`. Destroyed on `mint destroy` and `mint recreate`.
+- **Tag**: `mint:component=volume`
+
+This volume is intentionally disposable. Its contents can always be reconstructed by re-running the bootstrap script and pulling Docker images.
+
+### Tier 2: User EFS (persistent, user-scoped)
+
+- **Type**: Amazon EFS access point
+- **Contents**: Dotfiles, `~/.ssh/authorized_keys`, Claude Code auth state, user customizations
+- **Lifecycle**: Created during `mint init` as a per-user EFS access point. The underlying EFS filesystem is created once per AWS account during admin setup (CloudFormation template). Persists across ALL lifecycle operations including `mint destroy`.
+- **Tag**: `mint:component=efs-access-point`
+- **Scope**: Mounted on every VM the user runs. A user with multiple VMs (via `--vm`) shares the same EFS access point across all of them.
+
+This tier represents the user's identity within the tool. It is never destroyed by normal lifecycle commands.
+
+### Tier 3: Project EBS (persistent, VM-scoped)
+
+- **Size**: Configurable (default TBD)
+- **Type**: gp3 EBS volume
+- **Contents**: Project source code, local build artifacts, project-specific configuration
+- **Lifecycle**: Created on `mint up`. Persists across `mint resize` (same instance, no volume manipulation required) and `mint recreate` (detached from terminated instance, reattached to new instance). Destroyed on `mint destroy`.
+- **Tags**: `mint:component=project-volume`, `mint:vm=<name>`
+- **Scope**: Bound to a named VM, not to the underlying EC2 instance.
+
+This volume survives instance replacement but is destroyed when the VM environment itself is destroyed.
+
+## Key Constraints
+
+- **AZ affinity**: EBS volumes are Availability Zone-scoped. `mint recreate` must launch the replacement instance in the same AZ as the existing project volume. The AZ is recorded implicitly via the volume's existing placement and must be honored when launching the new instance.
+- **`mint resize` simplicity**: Changing instance type on the same instance requires no volume manipulation (stop instance → modify instance type → start instance). The project EBS remains attached throughout.
+- **`mint recreate` complexity**: This is the most operationally complex lifecycle command. It must: (0) stop the instance, (1) detach the project EBS, (2) terminate the old instance (destroying the root EBS), (3) launch a new instance in the same AZ, (4) reattach the project EBS, (5) mount EFS.
+- **EFS mount point**: An implementation decision, not constrained by this ADR. Likely `/home/ubuntu` or a well-known subdirectory. Must be determined before bootstrap script authoring.
 
 ## Consequences
-- **Simpler provisioning.** One volume to create, no mount/format/fstab logic in the bootstrap script.
-- **Simpler teardown.** `mint destroy` deletes the instance and its root volume. No orphaned EBS volumes to track.
-- **Blast radius.** A Docker storage runaway (large images, build cache accumulation) can fill the root filesystem and destabilize the OS. Mitigated by the 200GB size and `mint status` disk reporting.
-- **No resize friction.** Users can adjust volume size in config before `mint up` without coordinating two volumes.
-- **Upgrade path exists.** Separating Docker storage onto a dedicated volume in v2 is a non-breaking change that only affects the bootstrap script and volume provisioning logic.
+
+- **Increased provisioning complexity**: `mint up` creates two EBS volumes and mounts EFS instead of creating a single volume. Bootstrap script must handle EFS mount and project volume attachment.
+- **Admin setup required**: The EFS filesystem must be created before any user can run `mint init`. This requires a CloudFormation template or equivalent one-time setup step.
+- **`mint init` creates EFS access point and security group**: Per-user onboarding now includes AWS API calls to create an EFS access point and security group scoped to that user.
+- **`mint recreate` is the most complex lifecycle operation**: Detach, terminate, launch (AZ-constrained), reattach is a multi-step operation with failure modes at each step. Error handling and rollback behavior must be carefully specified (see ADR-0017).
+- **Clear separation of concerns**: The OS is disposable, user config is permanent, and project code is VM-scoped. Each tier can be reasoned about independently.
+- **Volume behavior is precisely defined per lifecycle operation**: The lifecycle semantics for each tier are documented in ADR-0017.
+- **`mint status` disk reporting**: Still relevant for the root EBS and project EBS. EFS usage reporting may differ due to its managed nature.
