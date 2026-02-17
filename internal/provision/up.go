@@ -35,16 +35,21 @@ type ProvisionConfig struct {
 
 // ProvisionResult holds the outcome of a successful provision run.
 type ProvisionResult struct {
-	InstanceID   string
-	PublicIP     string
-	VolumeID     string
-	AllocationID string
-	Restarted    bool
+	InstanceID     string
+	PublicIP       string
+	VolumeID       string
+	AllocationID   string
+	Restarted      bool
+	BootstrapError error // non-nil if bootstrap polling failed/timed out
 }
 
 // BootstrapVerifier is a function that verifies bootstrap script integrity.
 // Defaults to bootstrap.Verify; overridden in tests.
 type BootstrapVerifier func(content []byte) error
+
+// BootstrapPollFunc is a function that polls for bootstrap completion.
+// Matches the signature of BootstrapPoller.Poll for test injection.
+type BootstrapPollFunc func(ctx context.Context, owner, vmName, instanceID string) error
 
 // AMIResolver is a function that resolves the current AMI ID.
 // Defaults to mintaws.ResolveAMI; overridden in tests.
@@ -68,6 +73,7 @@ type Provisioner struct {
 
 	verifyBootstrap BootstrapVerifier
 	resolveAMI      AMIResolver
+	pollBootstrap   BootstrapPollFunc
 }
 
 // NewProvisioner creates a Provisioner with all required AWS interfaces.
@@ -112,6 +118,21 @@ func (p *Provisioner) WithBootstrapVerifier(v BootstrapVerifier) *Provisioner {
 // WithAMIResolver overrides the default AMI resolver (for testing).
 func (p *Provisioner) WithAMIResolver(r AMIResolver) *Provisioner {
 	p.resolveAMI = r
+	return p
+}
+
+// WithBootstrapPollFunc sets a function to poll for bootstrap completion.
+// When set, Run() calls this after EIP allocation on fresh provisions (not restarts).
+// Use WithBootstrapPoller for production; this method enables test injection.
+func (p *Provisioner) WithBootstrapPollFunc(fn BootstrapPollFunc) *Provisioner {
+	p.pollBootstrap = fn
+	return p
+}
+
+// WithBootstrapPoller sets a BootstrapPoller to poll for bootstrap completion.
+// Wraps the poller's Poll method as a BootstrapPollFunc.
+func (p *Provisioner) WithBootstrapPoller(bp *BootstrapPoller) *Provisioner {
+	p.pollBootstrap = bp.Poll
 	return p
 }
 
@@ -183,12 +204,21 @@ func (p *Provisioner) Run(ctx context.Context, owner, ownerARN, vmName string, c
 		return nil, fmt.Errorf("allocating Elastic IP: %w", err)
 	}
 
-	return &ProvisionResult{
+	result := &ProvisionResult{
 		InstanceID:   instanceID,
 		PublicIP:     publicIP,
 		VolumeID:     volumeID,
 		AllocationID: allocID,
-	}, nil
+	}
+
+	// Step 11: Poll for bootstrap completion (if poller configured).
+	if p.pollBootstrap != nil {
+		if pollErr := p.pollBootstrap(ctx, owner, vmName, instanceID); pollErr != nil {
+			result.BootstrapError = pollErr
+		}
+	}
+
+	return result, nil
 }
 
 // handleExistingVM starts a stopped VM or returns info about a running VM.

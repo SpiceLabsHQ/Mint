@@ -226,7 +226,7 @@ func TestUpCommandHumanOutput(t *testing.T) {
 		"54.10.20.30",
 		"vol-test",
 		"eipalloc-test",
-		"provisioning",
+		"Bootstrap complete",
 	}
 
 	for _, exp := range expectations {
@@ -441,5 +441,126 @@ func TestUpCommandRegistered(t *testing.T) {
 
 	if !found {
 		t.Error("up command not registered on root command")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests: Bootstrap polling output
+// ---------------------------------------------------------------------------
+
+func TestUpCommandBootstrapCompleteOutput(t *testing.T) {
+	buf := new(bytes.Buffer)
+	cmd := &cobra.Command{}
+	cmd.SetOut(buf)
+
+	cliCtx := &cli.CLIContext{VM: "default"}
+	ctx := cli.WithContext(context.Background(), cliCtx)
+	cmd.SetContext(ctx)
+
+	// Set a poll func that succeeds.
+	deps := newTestUpDeps()
+	deps.provisioner.WithBootstrapPollFunc(func(ctx context.Context, owner, vmName, instanceID string) error {
+		return nil
+	})
+
+	err := upWithProvisioner(ctx, cmd, cliCtx, deps, "default")
+	if err != nil {
+		t.Fatalf("upWithProvisioner error: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "Bootstrap complete. VM is ready.") {
+		t.Errorf("output should contain 'Bootstrap complete. VM is ready.', got:\n%s", output)
+	}
+}
+
+func TestUpCommandBootstrapErrorOutput(t *testing.T) {
+	buf := new(bytes.Buffer)
+	cmd := &cobra.Command{}
+	cmd.SetOut(buf)
+
+	cliCtx := &cli.CLIContext{VM: "default"}
+	ctx := cli.WithContext(context.Background(), cliCtx)
+	cmd.SetContext(ctx)
+
+	// Set a poll func that fails.
+	deps := newTestUpDeps()
+	deps.provisioner.WithBootstrapPollFunc(func(ctx context.Context, owner, vmName, instanceID string) error {
+		return fmt.Errorf("bootstrap timed out after 7m0s")
+	})
+
+	err := upWithProvisioner(ctx, cmd, cliCtx, deps, "default")
+	if err != nil {
+		t.Fatalf("upWithProvisioner error: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "Bootstrap warning:") {
+		t.Errorf("output should contain 'Bootstrap warning:', got:\n%s", output)
+	}
+	if !strings.Contains(output, "bootstrap timed out") {
+		t.Errorf("output should contain the error message, got:\n%s", output)
+	}
+	// Should still contain resource info.
+	if !strings.Contains(output, "i-test123") {
+		t.Errorf("output should still contain instance ID, got:\n%s", output)
+	}
+}
+
+func TestUpCommandBootstrapErrorJSON(t *testing.T) {
+	buf := new(bytes.Buffer)
+	cmd := &cobra.Command{}
+	cmd.SetOut(buf)
+
+	cliCtx := &cli.CLIContext{JSON: true, VM: "default"}
+	ctx := cli.WithContext(context.Background(), cliCtx)
+	cmd.SetContext(ctx)
+
+	deps := newTestUpDeps()
+	deps.provisioner.WithBootstrapPollFunc(func(ctx context.Context, owner, vmName, instanceID string) error {
+		return fmt.Errorf("poll timeout")
+	})
+
+	err := upWithProvisioner(ctx, cmd, cliCtx, deps, "default")
+	if err != nil {
+		t.Fatalf("upWithProvisioner error: %v", err)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
+		t.Fatalf("output is not valid JSON: %v\nOutput: %s", err, buf.String())
+	}
+
+	if result["bootstrap_error"] != "poll timeout" {
+		t.Errorf("bootstrap_error = %v, want %q", result["bootstrap_error"], "poll timeout")
+	}
+}
+
+func TestUpCommandBootstrapSuccessJSONNoError(t *testing.T) {
+	buf := new(bytes.Buffer)
+	cmd := &cobra.Command{}
+	cmd.SetOut(buf)
+
+	cliCtx := &cli.CLIContext{JSON: true, VM: "default"}
+	ctx := cli.WithContext(context.Background(), cliCtx)
+	cmd.SetContext(ctx)
+
+	deps := newTestUpDeps()
+	deps.provisioner.WithBootstrapPollFunc(func(ctx context.Context, owner, vmName, instanceID string) error {
+		return nil
+	})
+
+	err := upWithProvisioner(ctx, cmd, cliCtx, deps, "default")
+	if err != nil {
+		t.Fatalf("upWithProvisioner error: %v", err)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
+		t.Fatalf("output is not valid JSON: %v\nOutput: %s", err, buf.String())
+	}
+
+	if _, ok := result["bootstrap_error"]; ok {
+		t.Error("JSON output should NOT contain bootstrap_error key when bootstrap succeeds")
 	}
 }

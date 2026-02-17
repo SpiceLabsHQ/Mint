@@ -1149,3 +1149,164 @@ func TestProvisionerRun(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Tests: Bootstrap polling integration
+// ---------------------------------------------------------------------------
+
+func TestProvisionerCallsPollOnFreshProvision(t *testing.T) {
+	m := newUpHappyMocks()
+	p := m.build()
+
+	pollCalled := false
+	var pollOwner, pollVM, pollInstance string
+	p.WithBootstrapPollFunc(func(ctx context.Context, owner, vmName, instanceID string) error {
+		pollCalled = true
+		pollOwner = owner
+		pollVM = vmName
+		pollInstance = instanceID
+		return nil
+	})
+
+	result, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", defaultConfig())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !pollCalled {
+		t.Error("bootstrap poll function should be called on fresh provision")
+	}
+	if pollOwner != "alice" {
+		t.Errorf("poll owner = %q, want %q", pollOwner, "alice")
+	}
+	if pollVM != "default" {
+		t.Errorf("poll vmName = %q, want %q", pollVM, "default")
+	}
+	if pollInstance != "i-new123" {
+		t.Errorf("poll instanceID = %q, want %q", pollInstance, "i-new123")
+	}
+	if result.BootstrapError != nil {
+		t.Errorf("BootstrapError should be nil on success, got: %v", result.BootstrapError)
+	}
+}
+
+func TestProvisionerBootstrapPollFailureSetsBootstrapError(t *testing.T) {
+	m := newUpHappyMocks()
+	p := m.build()
+
+	pollErr := fmt.Errorf("bootstrap timed out")
+	p.WithBootstrapPollFunc(func(ctx context.Context, owner, vmName, instanceID string) error {
+		return pollErr
+	})
+
+	result, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", defaultConfig())
+	// Run itself should succeed -- the instance exists.
+	if err != nil {
+		t.Fatalf("Run should not return error on poll failure, got: %v", err)
+	}
+
+	if result.BootstrapError == nil {
+		t.Fatal("BootstrapError should be non-nil when poll fails")
+	}
+	if result.BootstrapError.Error() != "bootstrap timed out" {
+		t.Errorf("BootstrapError = %q, want %q", result.BootstrapError.Error(), "bootstrap timed out")
+	}
+
+	// Verify the result still contains all resource info.
+	if result.InstanceID != "i-new123" {
+		t.Errorf("InstanceID = %q, want %q", result.InstanceID, "i-new123")
+	}
+	if result.PublicIP != "54.1.2.3" {
+		t.Errorf("PublicIP = %q, want %q", result.PublicIP, "54.1.2.3")
+	}
+}
+
+func TestProvisionerNoPollWhenPollerNil(t *testing.T) {
+	m := newUpHappyMocks()
+	p := m.build()
+	// Do NOT set a poll func -- default nil behavior.
+
+	result, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", defaultConfig())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.BootstrapError != nil {
+		t.Errorf("BootstrapError should be nil when no poller set, got: %v", result.BootstrapError)
+	}
+}
+
+func TestProvisionerNoPollOnRestart(t *testing.T) {
+	m := newUpHappyMocks()
+	m.describeInstances.output = &ec2.DescribeInstancesOutput{
+		Reservations: []ec2types.Reservation{{
+			Instances: []ec2types.Instance{{
+				InstanceId:   aws.String("i-stopped1"),
+				InstanceType: ec2types.InstanceTypeM6iXlarge,
+				State: &ec2types.InstanceState{
+					Name: ec2types.InstanceStateNameStopped,
+				},
+				PublicIpAddress: aws.String("54.0.0.1"),
+				Tags: []ec2types.Tag{
+					{Key: aws.String("mint:vm"), Value: aws.String("default")},
+					{Key: aws.String("mint:owner"), Value: aws.String("alice")},
+				},
+			}},
+		}},
+	}
+	p := m.build()
+
+	pollCalled := false
+	p.WithBootstrapPollFunc(func(ctx context.Context, owner, vmName, instanceID string) error {
+		pollCalled = true
+		return nil
+	})
+
+	result, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", defaultConfig())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if pollCalled {
+		t.Error("bootstrap poll should NOT be called on restart (Restarted == true)")
+	}
+	if !result.Restarted {
+		t.Error("result.Restarted should be true")
+	}
+}
+
+func TestProvisionerNoPollOnRunningVM(t *testing.T) {
+	m := newUpHappyMocks()
+	m.describeInstances.output = &ec2.DescribeInstancesOutput{
+		Reservations: []ec2types.Reservation{{
+			Instances: []ec2types.Instance{{
+				InstanceId:   aws.String("i-running1"),
+				InstanceType: ec2types.InstanceTypeM6iXlarge,
+				State: &ec2types.InstanceState{
+					Name: ec2types.InstanceStateNameRunning,
+				},
+				PublicIpAddress: aws.String("54.0.0.2"),
+				Tags: []ec2types.Tag{
+					{Key: aws.String("mint:vm"), Value: aws.String("default")},
+					{Key: aws.String("mint:owner"), Value: aws.String("alice")},
+				},
+			}},
+		}},
+	}
+	p := m.build()
+
+	pollCalled := false
+	p.WithBootstrapPollFunc(func(ctx context.Context, owner, vmName, instanceID string) error {
+		pollCalled = true
+		return nil
+	})
+
+	_, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", defaultConfig())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if pollCalled {
+		t.Error("bootstrap poll should NOT be called for already-running VM")
+	}
+}

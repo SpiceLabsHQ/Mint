@@ -42,6 +42,14 @@ func newUpCommandWithDeps(deps *upDeps) *cobra.Command {
 			if clients == nil {
 				return fmt.Errorf("AWS clients not configured")
 			}
+			poller := provision.NewBootstrapPoller(
+				clients.ec2Client, // DescribeInstancesAPI
+				clients.ec2Client, // StopInstancesAPI
+				clients.ec2Client, // TerminateInstancesAPI
+				clients.ec2Client, // CreateTagsAPI
+				cmd.OutOrStdout(),
+				cmd.InOrStdin(),
+			)
 			return runUp(cmd, &upDeps{
 				provisioner: provision.NewProvisioner(
 					clients.ec2Client, // DescribeInstancesAPI
@@ -56,7 +64,7 @@ func newUpCommandWithDeps(deps *upDeps) *cobra.Command {
 					clients.ec2Client, // DescribeAddressesAPI
 					clients.ec2Client, // CreateTagsAPI
 					clients.ssmClient, // GetParameterAPI
-				),
+				).WithBootstrapPoller(poller),
 				owner:           clients.owner,
 				ownerARN:        clients.ownerARN,
 				bootstrapScript: GetBootstrapScript(),
@@ -120,6 +128,10 @@ func printUpJSON(cmd *cobra.Command, result *provision.ProvisionResult) error {
 		"restarted":     result.Restarted,
 	}
 
+	if result.BootstrapError != nil {
+		data["bootstrap_error"] = result.BootstrapError.Error()
+	}
+
 	enc := json.NewEncoder(cmd.OutOrStdout())
 	enc.SetIndent("", "  ")
 	return enc.Encode(data)
@@ -148,7 +160,11 @@ func printUpHuman(cmd *cobra.Command, result *provision.ProvisionResult, verbose
 		fmt.Fprintf(w, "EIP           %s\n", result.AllocationID)
 	}
 
-	fmt.Fprintln(w, "\nVM is provisioning. Bootstrap may take a few minutes.")
+	if result.BootstrapError != nil {
+		fmt.Fprintf(w, "\nBootstrap warning: %v\n", result.BootstrapError)
+	} else {
+		fmt.Fprintln(w, "\nBootstrap complete. VM is ready.")
+	}
 	return nil
 }
 
