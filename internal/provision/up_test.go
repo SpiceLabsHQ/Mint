@@ -877,6 +877,165 @@ func TestProvisionerInstanceTags(t *testing.T) {
 // Tests: EIP quota check error
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Tests: Bootstrap variable interpolation
+// ---------------------------------------------------------------------------
+
+func TestInterpolateBootstrapReplacesAllVariables(t *testing.T) {
+	script := []byte(`#!/bin/bash
+EFS_ID="${MINT_EFS_ID}"
+PROJECT_DEV="${MINT_PROJECT_DEV}"
+VM_NAME="${MINT_VM_NAME}"
+IDLE_TIMEOUT="${MINT_IDLE_TIMEOUT:-60}"
+echo done`)
+
+	vars := map[string]string{
+		"MINT_EFS_ID":       "fs-abc123",
+		"MINT_PROJECT_DEV":  "/dev/xvdf",
+		"MINT_VM_NAME":      "default",
+		"MINT_IDLE_TIMEOUT": "90",
+	}
+
+	result := interpolateBootstrap(script, vars)
+
+	expected := `#!/bin/bash
+EFS_ID="fs-abc123"
+PROJECT_DEV="/dev/xvdf"
+VM_NAME="default"
+IDLE_TIMEOUT="90"
+echo done`
+
+	if string(result) != expected {
+		t.Errorf("interpolateBootstrap result:\n%s\nwant:\n%s", string(result), expected)
+	}
+}
+
+func TestInterpolateBootstrapLeavesUnknownVariables(t *testing.T) {
+	script := []byte(`#!/bin/bash
+KNOWN="${MINT_EFS_ID}"
+UNKNOWN="${SOME_OTHER_VAR}"
+ALSO_UNKNOWN="${PATH}"
+BARE_KNOWN="${MINT_VM_NAME}"`)
+
+	vars := map[string]string{
+		"MINT_EFS_ID":  "fs-xyz",
+		"MINT_VM_NAME": "myvm",
+	}
+
+	result := interpolateBootstrap(script, vars)
+
+	// Known variables should be replaced
+	if !strings.Contains(string(result), `KNOWN="fs-xyz"`) {
+		t.Errorf("expected MINT_EFS_ID to be replaced, got:\n%s", string(result))
+	}
+	if !strings.Contains(string(result), `BARE_KNOWN="myvm"`) {
+		t.Errorf("expected MINT_VM_NAME to be replaced, got:\n%s", string(result))
+	}
+
+	// Unknown variables should remain untouched
+	if !strings.Contains(string(result), "${SOME_OTHER_VAR}") {
+		t.Errorf("expected ${SOME_OTHER_VAR} to remain, got:\n%s", string(result))
+	}
+	if !strings.Contains(string(result), "${PATH}") {
+		t.Errorf("expected ${PATH} to remain, got:\n%s", string(result))
+	}
+}
+
+func TestInterpolateBootstrapHandlesBashDefaults(t *testing.T) {
+	// When a variable is in the mapping, ${VAR:-default} should become
+	// just the mapped value (the whole ${...} is replaced).
+	script := []byte(`TIMEOUT="${MINT_IDLE_TIMEOUT:-60}"`)
+	vars := map[string]string{
+		"MINT_IDLE_TIMEOUT": "120",
+	}
+
+	result := interpolateBootstrap(script, vars)
+
+	if !strings.Contains(string(result), `TIMEOUT="120"`) {
+		t.Errorf("expected bash default expression to be replaced, got:\n%s", string(result))
+	}
+}
+
+func TestLaunchInstanceInterpolatesBootstrapScript(t *testing.T) {
+	m := newUpHappyMocks()
+	p := m.build()
+
+	scriptWithVars := []byte(`#!/bin/bash
+EFS="${MINT_EFS_ID}"
+DEV="${MINT_PROJECT_DEV}"
+VM="${MINT_VM_NAME}"
+TIMEOUT="${MINT_IDLE_TIMEOUT:-60}"`)
+
+	cfg := ProvisionConfig{
+		InstanceType:    "m6i.xlarge",
+		VolumeSize:      50,
+		BootstrapScript: scriptWithVars,
+		EFSID:           "fs-test789",
+		IdleTimeout:     45,
+	}
+
+	_, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "testvm", cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !m.runInstances.called {
+		t.Fatal("RunInstances was not called")
+	}
+
+	// Decode UserData and verify variables were interpolated.
+	ud, err := base64.StdEncoding.DecodeString(aws.ToString(m.runInstances.input.UserData))
+	if err != nil {
+		t.Fatalf("failed to decode UserData: %v", err)
+	}
+
+	decoded := string(ud)
+	checks := map[string]string{
+		"MINT_EFS_ID":       "fs-test789",
+		"MINT_PROJECT_DEV":  "/dev/xvdf",
+		"MINT_VM_NAME":      "testvm",
+		"MINT_IDLE_TIMEOUT": "45",
+	}
+
+	for varName, wantVal := range checks {
+		if strings.Contains(decoded, "${"+varName) {
+			t.Errorf("UserData still contains uninterpolated ${%s}", varName)
+		}
+		if !strings.Contains(decoded, wantVal) {
+			t.Errorf("UserData missing interpolated value %q for %s\nUserData:\n%s", wantVal, varName, decoded)
+		}
+	}
+}
+
+func TestLaunchInstanceDefaultsIdleTimeout(t *testing.T) {
+	m := newUpHappyMocks()
+	p := m.build()
+
+	scriptWithVars := []byte(`TIMEOUT="${MINT_IDLE_TIMEOUT:-60}"`)
+
+	cfg := ProvisionConfig{
+		InstanceType:    "m6i.xlarge",
+		VolumeSize:      50,
+		BootstrapScript: scriptWithVars,
+		EFSID:           "fs-test789",
+		IdleTimeout:     0, // zero means use default (60)
+	}
+
+	_, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	ud, err := base64.StdEncoding.DecodeString(aws.ToString(m.runInstances.input.UserData))
+	if err != nil {
+		t.Fatalf("failed to decode UserData: %v", err)
+	}
+
+	if !strings.Contains(string(ud), "60") {
+		t.Errorf("expected default idle timeout of 60, got:\n%s", string(ud))
+	}
+}
+
 func TestProvisionerEIPQuotaCheckError(t *testing.T) {
 	m := newUpHappyMocks()
 	m.describeAddrs.err = fmt.Errorf("describe addresses API error")

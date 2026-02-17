@@ -8,6 +8,8 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
@@ -27,6 +29,8 @@ type ProvisionConfig struct {
 	InstanceType    string
 	VolumeSize      int32
 	BootstrapScript []byte
+	EFSID           string // EFS filesystem ID for user storage
+	IdleTimeout     int    // Idle timeout in minutes (0 defaults to 60)
 }
 
 // ProvisionResult holds the outcome of a successful provision run.
@@ -293,6 +297,57 @@ func (p *Provisioner) findSubnet(ctx context.Context) (subnetID, az string, err 
 	return aws.ToString(subnet.SubnetId), aws.ToString(subnet.AvailabilityZone), nil
 }
 
+// interpolateBootstrap substitutes Mint-specific variables in the bootstrap
+// script. Only variables present in the vars map are replaced; all other
+// ${...} expressions (including bash defaults like ${VAR:-default}) are left
+// untouched so the shell can evaluate them normally.
+func interpolateBootstrap(script []byte, vars map[string]string) []byte {
+	result := string(script)
+	for name, value := range vars {
+		// Replace ${VAR:-default} patterns first (bash default syntax).
+		// We need to handle these because os.Expand won't match them.
+		// Find and replace any ${NAME...} where NAME matches our variable.
+		result = replaceBashVar(result, name, value)
+	}
+	return []byte(result)
+}
+
+// replaceBashVar replaces all occurrences of ${name}, ${name:-...}, and
+// ${name-...} with the given value. This handles bash default-value syntax
+// so that Go sets the value explicitly rather than relying on shell defaults.
+func replaceBashVar(s, name, value string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+
+	for i := 0; i < len(s); i++ {
+		if i+1 < len(s) && s[i] == '$' && s[i+1] == '{' {
+			// Check if this ${...} starts with our variable name.
+			rest := s[i+2:]
+			if strings.HasPrefix(rest, name) {
+				after := rest[len(name):]
+				if len(after) > 0 && after[0] == '}' {
+					// Exact match: ${NAME}
+					b.WriteString(value)
+					i += 2 + len(name) // skip past }
+					continue
+				}
+				if len(after) > 0 && (after[0] == ':' || after[0] == '-') {
+					// Bash default syntax: ${NAME:-default} or ${NAME-default}
+					// Find the closing brace.
+					closeBrace := strings.IndexByte(after, '}')
+					if closeBrace >= 0 {
+						b.WriteString(value)
+						i += 2 + len(name) + closeBrace // skip past }
+						continue
+					}
+				}
+			}
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
 // launchInstance runs a new EC2 instance with the given configuration.
 func (p *Provisioner) launchInstance(
 	ctx context.Context,
@@ -301,7 +356,18 @@ func (p *Provisioner) launchInstance(
 	userSGID, adminSGID, subnetID string,
 	owner, ownerARN, vmName string,
 ) (string, error) {
-	userData := base64.StdEncoding.EncodeToString(cfg.BootstrapScript)
+	idleTimeout := cfg.IdleTimeout
+	if idleTimeout == 0 {
+		idleTimeout = 60
+	}
+
+	interpolated := interpolateBootstrap(cfg.BootstrapScript, map[string]string{
+		"MINT_EFS_ID":       cfg.EFSID,
+		"MINT_PROJECT_DEV":  "/dev/xvdf",
+		"MINT_VM_NAME":      vmName,
+		"MINT_IDLE_TIMEOUT": strconv.Itoa(idleTimeout),
+	})
+	userData := base64.StdEncoding.EncodeToString(interpolated)
 
 	instanceTags := tags.NewTagBuilder(owner, ownerARN, vmName).
 		WithComponent(tags.ComponentInstance).
