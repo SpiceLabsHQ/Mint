@@ -26,19 +26,23 @@ Five lifecycle operations, each with precisely defined behavior for every resour
 **`mint resize`** — Changes instance type without touching any storage. Stops the instance, modifies the instance type attribute, starts the instance. All volumes remain attached. This is a native EC2 operation taking ~60 seconds. No volume manipulation needed.
 
 **`mint recreate`** — Replaces the instance and root volume while preserving project data and user config. Requires no active SSH, mosh, or tmux sessions (use `--force` to override). Orchestration sequence:
-1. Check for active sessions; refuse if any detected (unless `--force`)
+1. Check for active sessions; refuse if any detected (unless `--force`). See ADR-0018 for how active sessions are detected.
 2. Query project EBS volume's AZ via `DescribeVolumes`
-3. Tag project EBS with `mint:pending-attach=true` for failure recovery
+3. Tag project EBS with `mint:pending-attach` for failure recovery (presence-only; the tag's existence signals pending reattachment)
 4. Stop instance
 5. Detach project EBS volume
 6. Terminate instance (destroys root EBS)
 7. Launch new instance in the **same AZ** as project EBS (select matching subnet)
-8. Attach project EBS to new instance; clear `mint:pending-attach` tag
+8. Attach project EBS to new instance; remove `mint:pending-attach` tag
 9. Mount project EBS at project directory
 10. EFS mounts via fstab during boot
 11. Bootstrap runs on new root volume
 12. Health check validates all components; tags instance `mint:bootstrap=complete` on success
 13. Report success to user
+
+Note: `mint recreate` produces a new instance with a different host key. See ADR-0019 for the host key change detection behavior that triggers on next connection.
+
+If bootstrap fails or times out during initial provisioning, the instance is tagged `mint:bootstrap=failed`. This state is visible in `mint list`. The VM can be cleaned up with `mint destroy`.
 
 If a recreate fails mid-sequence (e.g. new instance launch fails, EBS reattachment fails), `mint up` detects the `mint:pending-attach` tag on the project EBS and resumes the reattachment sequence. If the project EBS volume is missing (manually deleted), `mint recreate` fails fast with guidance to use `mint destroy` instead.
 

@@ -38,7 +38,7 @@ Every AWS resource Mint creates is tagged for discovery and billing.
 | `mint:owner-arn` | Full caller ARN from `sts get-caller-identity` | Auditability, disambiguation if friendly names collide |
 | `mint:bootstrap` | `complete`, `failed` | Set by health-check script after first-boot provisioning; `failed` set before termination on bootstrap timeout |
 | `mint:health` | `healthy`, `drift-detected` | Client-queryable VM health state, set by boot-time reconciliation unit |
-| `mint:pending-attach` | Instance ID | Set on project EBS during `mint recreate` for failure recovery |
+| `mint:pending-attach` | (none) | Presence-only. Set on project EBS during `mint recreate` for failure recovery; tag existence signals pending reattachment |
 | `Name` | `mint/<owner>/<vm-name>` | Standard AWS console display |
 
 Mint discovers its own resources exclusively via tags. There is no local state file tracking resource IDs. Multiple users in the same AWS account coexist by filtering on `mint:owner`.
@@ -102,7 +102,7 @@ All commands support `--verbose` (progress steps) and `--debug` (AWS SDK call de
 
 **`mint resize [--vm <name>] <instance-type>`** — Changes the EC2 instance type. Stops the instance, modifies the instance type attribute, starts the instance. All volumes preserved. This is a native EC2 operation taking ~60 seconds.
 
-**`mint recreate [--vm <name>]`** — Terminates the instance and root volume, launches a new instance in the same AZ, reattaches the project EBS volume, EFS mounts via fstab, and bootstrap runs on the fresh root volume. Use when the host OS or Docker environment needs a clean slate (bootstrap updates, root corruption, Ubuntu LTS upgrade). Requires interactive confirmation. Refuses to proceed if active SSH, mosh, or tmux sessions are detected; use `--force` to override. AZ is determined by querying the project EBS volume's AZ via `DescribeVolumes` before termination. Before terminating the old instance, Mint tags the project EBS with `mint:pending-attach=true` for failure recovery — if a recreate fails mid-sequence, `mint up` detects the pending-attach tag on a detached project volume and resumes the reattachment.
+**`mint recreate [--vm <name>]`** — Terminates the instance and root volume, launches a new instance in the same AZ, reattaches the project EBS volume, EFS mounts via fstab, and bootstrap runs on the fresh root volume. Use when the host OS or Docker environment needs a clean slate (bootstrap updates, root corruption, Ubuntu LTS upgrade). Requires interactive confirmation. Refuses to proceed if active SSH, mosh, or tmux sessions are detected; use `--force` to override. Orchestration sequence: (1) check for active sessions, (2) query the project EBS volume's AZ via `DescribeVolumes` — this happens first so that if the query fails, no state has changed, (3) tag the project EBS with `mint:pending-attach` for failure recovery, (4) stop the instance, (5) detach the project EBS, (6) terminate the instance, (7) launch a new instance in the same AZ, (8) attach the project EBS and remove the `mint:pending-attach` tag. If a recreate fails mid-sequence, `mint up` detects the pending-attach tag on the project volume and resumes the reattachment.
 
 **`mint destroy [--vm <name>]`** — Fully destructive. Terminates the instance, deletes root EBS, deletes project EBS, releases Elastic IP. User EFS unmounts naturally (user-scoped, not VM-scoped) and persists independently. Requires interactive confirmation by default. Use `--yes` to skip confirmation in scripts.
 
@@ -214,7 +214,7 @@ Each VM has its own Elastic IP, root EBS volume, project EBS volume, idle timer,
 - **Storage**: Three-tier model:
   - **Root EBS**: 200GB gp3, ephemeral OS and Docker layer. Created fresh on `mint up` and `mint recreate`. Destroyed on `mint destroy` and `mint recreate`.
   - **User EFS**: Per-user EFS access point mounted at `/mint/user`, with symlinks into `$HOME` for well-known paths (`~/.ssh`, `~/.config/claude`, dotfiles). Persistent configuration: dotfiles, authorized_keys, Claude Code auth state. Created during `mint init`. Shared across all of the user's VMs. Persists across all lifecycle operations including `mint destroy`.
-  - **Project EBS**: Per-VM 50GB gp3 volume (configurable via `volume_size_gb`) for project source code. Created on `mint up`. Persists across `mint resize` and `mint recreate`. Destroyed on `mint destroy`.
+  - **Project EBS**: Per-VM 50GB gp3 volume (configurable via `volume_size_gb`) mounted at `/mint/projects` for project source code. Created on `mint up`. Persists across `mint resize` and `mint recreate`. Destroyed on `mint destroy`.
 - **Elastic IP**: One per VM, stable across stop/start cycles (default quota: 5 per region — admin should request increase via Service Quotas for multi-user setups)
 - **Security group**: Shared across user's VMs (SSH on port 41122 + mosh ports, open to all IPs)
 - **Instance profile**: `mint-instance-profile` (admin-created, shared)

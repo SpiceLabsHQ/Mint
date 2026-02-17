@@ -19,5 +19,5 @@ The command writes `Host mint-<vm-name>` blocks containing:
 ## Consequences
 - **Closes the primary workflow gap.** After `mint up` and `mint ssh-config`, the user can immediately `code --remote ssh-remote+mint-default /path` or select the host in VS Code's Remote-SSH picker.
 - **Reproducible config.** Re-running `mint ssh-config` after adding or removing VMs updates the config to match current state. No manual editing.
-- **SSH config ownership.** Mint writes to the user's `~/.ssh/config`. It must handle this carefully -- using a managed block with markers or a separate include file to avoid clobbering user-managed entries.
+- **SSH config ownership.** Mint writes to the user's `~/.ssh/config`. It must handle this carefully -- using a managed block with markers or a separate include file to avoid clobbering user-managed entries. See ADR-0015 for the permission model governing writes to files outside `~/.config/mint/`.
 - **Scope increase.** Adding this command to v1 increases the v1 surface area, but the implementation is straightforward (tag query + file generation) and the UX payoff is high.

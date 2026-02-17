@@ -16,12 +16,12 @@ The squadron review identified that idle detection deserves its own ADR because:
 
 ### Detection Method
 
-A systemd timer fires every 5 minutes and runs the idle detection service. The service checks four activity criteria:
+A systemd timer fires at a fixed 5-minute interval (not user-configurable) and runs the idle detection service. The service checks four activity criteria:
 
 1. **SSH/mosh sessions**: Check for active `sshd` child processes and `mosh-server` processes with connected clients.
 2. **tmux attached clients**: Run `tmux list-clients` to detect attached sessions. Detached tmux sessions (no client) are not considered active — a developer who disconnected is idle.
 3. **Claude process in containers**: Run `docker top` against all running containers and scan for processes matching `claude`. This catches Claude Code running inside any devcontainer without requiring per-container configuration.
-4. **Manual extend**: Check the extend timestamp file (`/var/lib/mint/idle-extended-until`). If the current time is before the extended timestamp, the VM is considered active.
+4. **Manual extend**: Check the extend timestamp file (`/var/lib/mint/idle-extended-until`). If the current time is before the extended timestamp, the VM is considered active. See the `mint extend` mechanism below for how this file is written.
 
 If none of these criteria are met for the configured timeout (default 60 minutes), the VM stops itself using the IAM permissions from the instance role (ADR-0009).
 
@@ -57,9 +57,13 @@ When a stop is triggered:
 }
 ```
 
+### `mint extend` Mechanism
+
+`mint extend` SSHs into the VM and writes a timestamp to `/var/lib/mint/idle-extended-until`. The timestamp is set to the current time plus the configured idle timeout duration (default 60 minutes). The idle detection timer checks this file on every poll — if the current time is before the extend-until timestamp, the VM is considered active regardless of other criteria.
+
 ### `mint list` Auto-Warning
 
-`mint list` compares each running VM's uptime against its configured idle timeout. VMs running longer than their timeout without recent activity (queryable via the last idle-check log or instance uptime heuristic) are flagged with a warning. This is the primary v1 mechanism for detecting auto-stop failures.
+`mint list` runs on the developer's MacBook and cannot directly read the structured logs in the VM's journald. Instead, `mint list` uses a heuristic: it compares each running VM's launch time and uptime (from the EC2 API `DescribeInstances`) against its configured idle timeout. VMs running longer than their timeout are flagged with a warning. This is the primary v1 mechanism for detecting auto-stop failures — it does not SSH into the VM to read journald.
 
 ## Consequences
 - **Explicit detection design.** Each activity criterion is specified with its detection method, enabling direct implementation without ambiguity.

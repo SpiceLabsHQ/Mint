@@ -18,7 +18,7 @@ Adopt the following conventions across the Mint CLI:
   | Key | Type | Description |
   |-----|------|-------------|
   | `region` | string | AWS region (e.g. `us-east-1`) |
-  | `instance_type` | string | Default EC2 instance type (e.g. `t3.medium`) |
+  | `instance_type` | string | Default EC2 instance type (default `m6i.xlarge` — 4 vCPU, 16GB) |
   | `volume_size_gb` | integer | Project EBS volume size in GB (default 50; root EBS is fixed at 200GB) |
   | `idle_timeout_minutes` | integer | Minutes of idle before auto-stop |
   | `ssh_config_approved` | boolean | Whether user has approved Mint writing SSH config entries (see ADR-0015) |
@@ -51,6 +51,14 @@ Adopt the following conventions across the Mint CLI:
 - `mint resize [--vm <name>] <instance-type>` — Changes the EC2 instance type of a running or stopped VM. Sequence: stop → modify → start. All volumes are preserved. Fails fast with a clear error if the requested type does not exist in the configured region. See ADR-0017.
 
 - `mint recreate [--vm <name>]` — Rebuilds the VM OS and Docker environment from scratch while preserving project data (EBS volume contents, mounted project directories) and user config. Use when the host environment is corrupted or needs a clean slate. See ADR-0017.
+
+- `mint init` — Validates the default VPC, creates the user's EFS access point, and sets up initial config at `~/.config/mint/config.toml`. Run once per user to prepare the AWS environment for Mint usage.
+
+- `mint extend [--vm <name>] [duration]` — Extends the idle timer for the current VM. Duration defaults to the configured idle timeout. Writes to `/var/lib/mint/idle-extended-until` on the VM.
+
+- `mint code [--vm <name>]` — Opens VS Code Remote-SSH to the specified VM. Launches `code --remote ssh-remote+mint-<vm>`.
+
+- `mint project list [--vm <name>]` — Lists projects on a VM. A "project" is a directory on the Project EBS volume, typically containing a devcontainer configuration. Supports `--json` for machine-readable output.
 
 - `mint update` — Self-updates the Mint binary using atomic replacement: downloads the new binary to a temp path, verifies the checksum, then replaces the existing binary via `mv`. No package manager required. Fails and leaves the existing binary untouched if the checksum does not match.
 

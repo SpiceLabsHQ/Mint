@@ -34,6 +34,7 @@ This volume is intentionally disposable. Its contents can always be reconstructe
 - **Lifecycle**: Created during `mint init` as a per-user EFS access point. The underlying EFS filesystem is created once per AWS account during admin setup (CloudFormation template). Persists across ALL lifecycle operations including `mint destroy`.
 - **Tag**: `mint:component=efs-access-point`
 - **Scope**: Mounted on every VM the user runs. A user with multiple VMs (via `--vm`) shares the same EFS access point across all of them.
+- **Security group**: A single shared `mint-efs` security group is created once by the admin via CloudFormation. It has an NFS inbound rule referencing itself (self-referencing SG), so any instance launched with this SG can reach the EFS mount target. Every Mint VM is launched with this shared SG attached.
 
 This tier represents the user's identity within the tool. It is never destroyed by normal lifecycle commands.
 
@@ -42,6 +43,7 @@ This tier represents the user's identity within the tool. It is never destroyed 
 - **Size**: 50GB gp3, configurable via `volume_size_gb` (minimum 50GB per ADR-0012)
 - **Type**: gp3 EBS volume
 - **Contents**: Project source code, local build artifacts, project-specific configuration
+- **Mount point**: `/mint/projects`
 - **Lifecycle**: Created on `mint up`. Persists across `mint resize` (same instance, no volume manipulation required) and `mint recreate` (detached from terminated instance, reattached to new instance). Destroyed on `mint destroy`.
 - **Tags**: `mint:component=project-volume`, `mint:vm=<name>`
 - **Scope**: Bound to a named VM, not to the underlying EC2 instance.
@@ -59,7 +61,7 @@ This volume survives instance replacement but is destroyed when the VM environme
 
 - **Increased provisioning complexity**: `mint up` creates two EBS volumes and mounts EFS instead of creating a single volume. Bootstrap script must handle EFS mount and project volume attachment.
 - **Admin setup required**: The EFS filesystem must be created before any user can run `mint init`. This requires a CloudFormation template or equivalent one-time setup step.
-- **`mint init` creates EFS access point and security group**: Per-user onboarding now includes AWS API calls to create an EFS access point and security group scoped to that user.
+- **`mint init` creates EFS access point**: Per-user onboarding includes an AWS API call to create an EFS access point. The shared `mint-efs` security group is created once by the admin via CloudFormation and attached to every Mint VM at launch.
 - **`mint recreate` is the most complex lifecycle operation**: Detach, terminate, launch (AZ-constrained), reattach is a multi-step operation with failure modes at each step. Error handling and rollback behavior must be carefully specified (see ADR-0017).
 - **Clear separation of concerns**: The OS is disposable, user config is permanent, and project code is VM-scoped. Each tier can be reasoned about independently.
 - **Volume behavior is precisely defined per lifecycle operation**: The lifecycle semantics for each tier are documented in ADR-0017.

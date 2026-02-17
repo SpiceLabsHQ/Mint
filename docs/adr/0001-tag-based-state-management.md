@@ -20,7 +20,7 @@ Mint discovers all resources exclusively via AWS resource tags. There is no loca
 | `mint:owner-arn` | Full caller ARN for auditability (see ADR-0013) |
 | `mint:bootstrap` | `complete` or `failed` after first-boot provisioning (see ADR-0009) |
 | `mint:health` | Client-queryable VM health state: `healthy` or `drift-detected` (see ADR-0018) |
-| `mint:pending-attach` | Set on project EBS during `mint recreate` for failure recovery (see ADR-0017) |
+| `mint:pending-attach` | Presence-only. Set on project EBS during `mint recreate` for failure recovery. Tag existence signals pending reattachment; cleared after successful attach (see ADR-0017) |
 | `Name` | `mint/<owner>/<vm-name>` for AWS Console display |
 
 Multi-user isolation is achieved by filtering on `mint:owner`. Billing review filters Cost Explorer on `mint=true` and groups by `mint:vm` or `mint:owner`.

@@ -18,7 +18,7 @@ Implement a bootstrap verification protocol with two components:
 
 **`mint up` polling**: After starting the instance, `mint up` polls for the `mint:bootstrap=complete` tag before reporting success to the user. If the tag does not appear within a timeout, `mint up` reports a bootstrap failure and directs the user to check cloud-init logs.
 
-**Restart reconciliation**: A boot-time script (systemd unit) runs on every start (not just first boot). It compares installed component versions against expected versions and logs discrepancies. This catches drift from manual modifications or package updates.
+**Restart reconciliation**: A boot-time script (systemd unit) runs on every start (not just first boot). It compares installed component versions against expected versions and logs discrepancies. This catches drift from manual modifications or package updates. After checking, the reconciliation unit sets the `mint:health` tag on the instance to `healthy` or `drift-detected`, making this tag's lifecycle owned by the bootstrap verification protocol.
 
 ### Bootstrap timeout
 
@@ -31,7 +31,7 @@ The bootstrap polling timeout is **7 minutes**.
 When `mint up` reaches the 7-minute timeout without observing `mint:bootstrap=complete`, Mint does not silently terminate the instance. Instead, it prompts the user to choose one of three options:
 
 1. **Stop the instance** — Halts billing for compute while preserving the instance for later debugging. The user can inspect cloud-init logs via `mint ssh` after manually starting the instance.
-2. **Terminate the instance** — Destroys the instance and cleans up resources. Before terminating, Mint tags the instance with `mint:bootstrap=failed` so that the failure is visible in the AWS console and in `mint list` output until termination completes.
+2. **Terminate the instance** — Destroys the instance and cleans up resources. Before terminating, Mint tags the instance with `mint:bootstrap=failed` so that the failure is visible in the AWS console and in `mint list` output until termination completes. The `mint:bootstrap=failed` state indicates that bootstrap did not complete successfully; VMs in this state are surfaced in `mint list` output with a failure indicator, and `mint destroy` can clean up VMs in this state.
 3. **Leave running** — Takes no action, allowing the user to connect immediately via SSH and debug the in-progress or failed bootstrap directly.
 
 This behavior aligns with the Transparency value: surface the problem, show the state, let the developer decide. Silent termination of a paying user's instance is not acceptable.
@@ -48,7 +48,7 @@ If the hash does not match, `mint up` aborts immediately with an error directing
 
 The restart reconciliation systemd unit detects drift (component version mismatches, missing packages, corrupted state) and logs warnings to journald. It does **not** auto-remediate.
 
-The explicit repair path is `mint doctor --fix`, which the user runs intentionally. Unattended `apt-get` on every boot is a security anti-pattern: the xz-utils backdoor (CVE-2024-3094) demonstrated that automated package operations during startup are a high-value attack vector. Detection-only with user-initiated repair preserves auditability — the user controls when the system changes, and the change is visible in shell history.
+The explicit repair path is `mint doctor --fix`, which the user runs intentionally. `mint doctor --fix` re-runs the bootstrap verification checks and attempts to reinstall missing or outdated components (packages, services). It does **not** re-run the full user-data script — it targets only the specific components that failed verification. Unattended `apt-get` on every boot is a security anti-pattern: the xz-utils backdoor (CVE-2024-3094) demonstrated that automated package operations during startup are a high-value attack vector. Detection-only with user-initiated repair preserves auditability — the user controls when the system changes, and the change is visible in shell history.
 
 ### Bootstrap script versioning
 

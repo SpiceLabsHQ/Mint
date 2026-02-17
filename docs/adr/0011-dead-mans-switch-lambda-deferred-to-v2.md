@@ -23,5 +23,5 @@ The v2 implementation will be an admin-deployed CloudFormation template containi
 - **Cost risk.** A stuck VM runs at ~$0.19/hour (m6i.xlarge). A weekend of undetected running costs ~$9. A month costs ~$140. This is annoying but not catastrophic for individual developers.
 - **No external alerting.** In v1, there is no mechanism to notify users that their VM failed to auto-stop. Users must check `mint list` or their AWS bill.
 - **Simpler admin setup.** v1 admin setup is a single IAM role and instance profile. No Lambda, no CloudWatch rules, no additional IAM roles for the watchdog.
-- **Clear upgrade path.** The v2 Lambda watchdog is additive. It reads heartbeat tags and stops stale instances. No changes to Mint CLI or the existing systemd timer are required.
+- **Clear upgrade path.** The v2 Lambda watchdog is additive. It reads heartbeat tags and stops stale instances. No changes to Mint CLI or the existing systemd timer are required. Note: The heartbeat tag described above is a v2 design element and does not appear in the v1 tag table (ADR-0001).
 - **Mitigation available.** Users can set up their own CloudWatch billing alarms as a partial substitute.
