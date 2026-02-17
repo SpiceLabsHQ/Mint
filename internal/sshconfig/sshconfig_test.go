@@ -83,6 +83,45 @@ func TestGenerateBlockProxyCommand(t *testing.T) {
 	}
 }
 
+func TestGenerateBlockProxyCommandUsesMktemp(t *testing.T) {
+	block := GenerateBlock("myvm", "1.2.3.4", "ubuntu", 41122, "i-abc123", "us-east-1a")
+
+	// ProxyCommand must use mktemp -d for unique temp dir per invocation
+	// to avoid concurrent connection race conditions.
+	if !strings.Contains(block, "mktemp -d") {
+		t.Errorf("ProxyCommand must use mktemp -d for unique temp key dir, got:\n%s", block)
+	}
+}
+
+func TestGenerateBlockProxyCommandHasTrapCleanup(t *testing.T) {
+	block := GenerateBlock("myvm", "1.2.3.4", "ubuntu", 41122, "i-abc123", "us-east-1a")
+
+	// ProxyCommand must include a trap for cleanup to prevent key persistence.
+	if !strings.Contains(block, "trap") {
+		t.Errorf("ProxyCommand must include trap for cleanup, got:\n%s", block)
+	}
+}
+
+func TestGenerateBlockProxyCommandUsesAtomicSymlink(t *testing.T) {
+	block := GenerateBlock("myvm", "1.2.3.4", "ubuntu", 41122, "i-abc123", "us-east-1a")
+
+	// ProxyCommand must use ln -sf for atomic symlink update to the fixed
+	// IdentityFile path, preventing concurrent connection corruption.
+	if !strings.Contains(block, "ln -sf") {
+		t.Errorf("ProxyCommand must use ln -sf for atomic symlink update, got:\n%s", block)
+	}
+}
+
+func TestGenerateBlockProxyCommandNoFixedKeyInKeygen(t *testing.T) {
+	block := GenerateBlock("myvm", "1.2.3.4", "ubuntu", 41122, "i-abc123", "us-east-1a")
+
+	// ssh-keygen must NOT write directly to the fixed key path.
+	// It should write to the mktemp directory instead.
+	if strings.Contains(block, "ssh-keygen -t ed25519 -f ~/.config/mint/ssh_key_") {
+		t.Errorf("ssh-keygen must not write directly to fixed key path (use mktemp dir instead), got:\n%s", block)
+	}
+}
+
 func TestGenerateBlockIdentityFile(t *testing.T) {
 	block := GenerateBlock("myvm", "1.2.3.4", "ubuntu", 41122, "i-abc123", "us-east-1a")
 

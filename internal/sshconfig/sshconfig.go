@@ -42,15 +42,22 @@ func computeChecksum(innerContent string) string {
 func GenerateBlock(vmName, hostname, user string, port int, instanceID, az string) string {
 	keyPath := fmt.Sprintf("~/.config/mint/ssh_key_%s", vmName)
 
+	// ProxyCommand uses mktemp -d for a unique temp dir per invocation,
+	// generates the ephemeral key there, then atomically updates the fixed
+	// IdentityFile symlink via ln -sf. A trap cleans up the temp dir on exit.
+	// This eliminates key persistence and concurrent connection race conditions.
 	proxyCmd := fmt.Sprintf(
-		"sh -c 'ssh-keygen -t ed25519 -f %s -N \"\" -q 2>/dev/null; "+
+		"sh -c 'TMPD=$(mktemp -d); "+
+			"trap \"rm -rf $TMPD\" EXIT; "+
+			"ssh-keygen -t ed25519 -f $TMPD/key -N \"\" -q 2>/dev/null; "+
+			"ln -sf $TMPD/key %s; "+
 			"aws ec2-instance-connect send-ssh-public-key "+
 			"--instance-id %s "+
 			"--instance-os-user %s "+
-			"--ssh-public-key file://%s.pub "+
+			"--ssh-public-key file://$TMPD/key.pub "+
 			"--availability-zone %s "+
 			"--no-cli-pager >/dev/null 2>&1 && nc %%h %%p'",
-		keyPath, instanceID, user, keyPath, az)
+		keyPath, instanceID, user, az)
 
 	inner := fmt.Sprintf("Host mint-%s\n"+
 		"    HostName %s\n"+
