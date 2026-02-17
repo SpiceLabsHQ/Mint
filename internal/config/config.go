@@ -15,6 +15,12 @@ import (
 	"github.com/spf13/viper"
 )
 
+// InstanceTypeValidatorFunc validates that an instance type exists in the
+// given AWS region. The caller (cmd layer) wires this with an AWS-backed
+// implementation; tests use a mock. When nil, validation falls back to a
+// basic non-empty check.
+type InstanceTypeValidatorFunc func(instanceType, region string) error
+
 // Config holds user preferences from ~/.config/mint/config.toml.
 // All fields use flat snake_case TOML keys per ADR-0012.
 type Config struct {
@@ -23,6 +29,10 @@ type Config struct {
 	VolumeSizeGB       int    `mapstructure:"volume_size_gb"      toml:"volume_size_gb"`
 	IdleTimeoutMinutes int    `mapstructure:"idle_timeout_minutes" toml:"idle_timeout_minutes"`
 	SSHConfigApproved  bool   `mapstructure:"ssh_config_approved" toml:"ssh_config_approved"`
+
+	// InstanceTypeValidator is an optional callback for AWS API validation.
+	// Set by the cmd layer when an EC2 client is available. Not serialized.
+	InstanceTypeValidator InstanceTypeValidatorFunc `mapstructure:"-" toml:"-"`
 }
 
 // validator is a function that validates a string value for a config key.
@@ -124,6 +134,15 @@ func (c *Config) Set(key, value string) error {
 
 	if err := validate(value); err != nil {
 		return fmt.Errorf("invalid value for %s: %w", key, err)
+	}
+
+	// For instance_type, run AWS API validation when a validator and region
+	// are both available. Without a region, we cannot query a specific
+	// region's instance type catalog, so we fall back to the basic check.
+	if key == "instance_type" && c.InstanceTypeValidator != nil && c.Region != "" {
+		if err := c.InstanceTypeValidator(value, c.Region); err != nil {
+			return fmt.Errorf("invalid value for %s: %w", key, err)
+		}
 	}
 
 	switch key {

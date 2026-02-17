@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -281,6 +282,71 @@ func TestSaveFilePermissions(t *testing.T) {
 	perm := info.Mode().Perm()
 	if perm != 0o600 {
 		t.Errorf("config.toml permissions = %o, want 600", perm)
+	}
+}
+
+func TestSetInstanceTypeWithValidator(t *testing.T) {
+	dir := t.TempDir()
+	cfg, _ := Load(dir)
+	cfg.Region = "us-west-2"
+
+	// Wire a mock validator that accepts only "m6i.xlarge"
+	cfg.InstanceTypeValidator = func(instanceType, region string) error {
+		if instanceType == "m6i.xlarge" {
+			return nil
+		}
+		return fmt.Errorf("instance type %q is not available in %s", instanceType, region)
+	}
+
+	// Valid type passes
+	if err := cfg.Set("instance_type", "m6i.xlarge"); err != nil {
+		t.Errorf("Set(instance_type, m6i.xlarge) with validator: unexpected error: %v", err)
+	}
+	if cfg.InstanceType != "m6i.xlarge" {
+		t.Errorf("InstanceType = %q, want %q", cfg.InstanceType, "m6i.xlarge")
+	}
+
+	// Invalid type rejected by validator
+	if err := cfg.Set("instance_type", "z99.nonexistent"); err == nil {
+		t.Errorf("Set(instance_type, z99.nonexistent) with validator: expected error, got nil")
+	}
+}
+
+func TestSetInstanceTypeWithoutValidator(t *testing.T) {
+	dir := t.TempDir()
+	cfg, _ := Load(dir)
+
+	// No validator set -- falls back to basic non-empty check
+	if err := cfg.Set("instance_type", "t3.micro"); err != nil {
+		t.Errorf("Set(instance_type, t3.micro) without validator: unexpected error: %v", err)
+	}
+	if cfg.InstanceType != "t3.micro" {
+		t.Errorf("InstanceType = %q, want %q", cfg.InstanceType, "t3.micro")
+	}
+
+	// Empty still rejected
+	if err := cfg.Set("instance_type", ""); err == nil {
+		t.Errorf("Set(instance_type, empty) without validator: expected error, got nil")
+	}
+}
+
+func TestSetInstanceTypeWithoutRegion(t *testing.T) {
+	dir := t.TempDir()
+	cfg, _ := Load(dir)
+	cfg.Region = "" // No region configured
+
+	called := false
+	cfg.InstanceTypeValidator = func(instanceType, region string) error {
+		called = true
+		return nil
+	}
+
+	// Should succeed with basic validation only, validator not called
+	if err := cfg.Set("instance_type", "t3.micro"); err != nil {
+		t.Errorf("Set(instance_type, t3.micro) without region: unexpected error: %v", err)
+	}
+	if called {
+		t.Errorf("InstanceTypeValidator should not be called when region is empty")
 	}
 }
 
