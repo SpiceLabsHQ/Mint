@@ -9,7 +9,7 @@ Mint is a CLI tool that provisions and manages EC2-based development environment
 **Primary workflow**: MacBook → VS Code Remote-SSH → EC2 host → (user opens devcontainer via VS Code)
 **Secondary workflow**: iPad (Termius) → mosh → EC2 host → tmux → (user connects to container manually)
 
-**Current state**: Specification and architecture phase. `docs/SPEC.md` is the authoritative specification. `docs/adr/` contains Architecture Decision Records that are binding design constraints.
+**Current state**: Phase 0 scaffold complete. Go CLI skeleton with config, identity, logging, and build tooling. `docs/SPEC.md` is the authoritative specification. `docs/adr/` contains Architecture Decision Records that are binding design constraints.
 
 ## The Five Keys
 
@@ -52,9 +52,42 @@ These are non-negotiable constraints from the ADRs. Do not deviate without updat
 - `--yes` to skip confirmation on destructive operations (`mint destroy`)
 - `--vm <name>` defaults to `default` and can be omitted for single-VM users
 
+## Build & Test Commands
+
+```bash
+go build ./...                    # build all packages
+go test ./... -v -count=1         # run all tests (101 tests)
+go test ./... -coverprofile=c.out # coverage (87.4%)
+go vet ./...                      # lint
+go generate ./...                 # regenerate bootstrap hash (run before build)
+go mod tidy                       # always run after adding new dependencies
+```
+
+## Project Structure
+
+| Package | Purpose |
+|---------|---------|
+| `cmd/` | Cobra CLI commands: root, version, config, config set |
+| `internal/cli/` | CLIContext struct — global flag propagation via `context.Context` |
+| `internal/config/` | Viper/TOML config at `~/.config/mint/config.toml` with composable validators |
+| `internal/identity/` | STS owner derivation + ARN normalization (ADR-0013) |
+| `internal/aws/` | EC2 client — instance type validation via DescribeInstanceTypes |
+| `internal/bootstrap/` | Bootstrap script SHA256 hash embedding via `go:generate` (ADR-0009) |
+| `internal/logging/` | Structured JSON logs + audit log (JSON Lines format) |
+| `scripts/` | `bootstrap.sh` — EC2 user-data script for AL2023 |
+
+## Development Patterns
+
+- Run `go mod tidy` after adding new Go dependencies — Viper's `WriteConfigAs` and AWS SDK imports frequently get incorrect `// indirect` annotations without it
+- Config tests use `MINT_CONFIG_DIR` env var and `t.TempDir()` to avoid writing to real `~/.config/mint/`
+- AWS clients use narrow interfaces (e.g., `STSClient`, `DescribeInstanceTypesAPI`) for mock injection in tests
+- Config validation uses a callback pattern (`InstanceTypeValidatorFunc`) to keep the config package decoupled from AWS
+- Bootstrap script hash is embedded at compile time — always run `go generate ./...` before building if `scripts/bootstrap.sh` changes
+
 ## Key Reference Documents
 
 | Document | Purpose |
 |----------|---------|
 | `docs/SPEC.md` | Complete specification — the authoritative source |
+| `docs/ROADMAP.md` | Phased implementation plan (Phase 0–4) |
 | `docs/adr/0001-*.md` through `docs/adr/0020-*.md` | Architecture Decision Records — binding constraints |
