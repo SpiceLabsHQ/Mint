@@ -33,6 +33,8 @@ func NewRootCommand() *cobra.Command {
 	// Register subcommands
 	rootCmd.AddCommand(newVersionCommand())
 	rootCmd.AddCommand(newConfigCommand())
+	rootCmd.AddCommand(newDownCommand())
+	rootCmd.AddCommand(newInitCommand())
 
 	return rootCmd
 }
