@@ -69,6 +69,7 @@ func TestPhase3CommandsRegistered(t *testing.T) {
 
 	phase3Commands := []string{
 		"resize",
+		"recreate",
 	}
 
 	registered := make(map[string]bool)
