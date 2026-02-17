@@ -2,7 +2,7 @@
 
 This roadmap breaks the Mint CLI into five phases, ordered by dependency and shippability. Each phase produces a working subset of Mint.
 
-## Phase 0: Project Scaffold and Foundation
+## Phase 0: Project Scaffold and Foundation ✅
 
 **Goal**: Buildable Go binary with CLI framework, config management, and AWS identity resolution. No AWS resources created yet.
 
@@ -28,7 +28,7 @@ This roadmap breaks the Mint CLI into five phases, ordered by dependency and shi
 
 ---
 
-## Phase 1: Init and Single-VM Provisioning
+## Phase 1: Init and Single-VM Provisioning ✅
 
 **Goal**: A developer can run `mint init`, `mint up`, connect via SSH, and `mint down` to stop the VM. This is the minimum viable product -- a working cloud dev environment with the primary connectivity workflow.
 
@@ -254,8 +254,8 @@ This roadmap breaks the Mint CLI into five phases, ordered by dependency and shi
 
 | Phase | What Ships |
 |-------|------------|
-| 0 -- Scaffold | Buildable CLI with config and identity |
-| 1 -- Init and Provisioning | Create, connect, stop, destroy a VM |
+| **0 -- Scaffold** | **Buildable CLI with config and identity** ✅ |
+| **1 -- Init and Provisioning** | **Create, connect, stop, destroy a VM** ✅ |
 | 2 -- Connectivity and Projects | mosh, tmux, projects, iPad workflow |
 | 3 -- Lifecycle, Health, and Self-Update | resize, recreate, doctor, update, bootstrap CI |
 | 4 -- Polish and Distribution | Homebrew, docs, production-ready |
