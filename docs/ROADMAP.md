@@ -110,7 +110,7 @@ This roadmap breaks the Mint CLI into five phases, ordered by dependency and shi
 
 ---
 
-## Phase 2: Connectivity and Session Management
+## Phase 2: Connectivity and Session Management ✅
 
 **Goal**: Complete the secondary workflow (iPad/mosh/tmux) and project management. After this phase, both primary and secondary usage patterns are fully functional.
 
@@ -256,7 +256,7 @@ This roadmap breaks the Mint CLI into five phases, ordered by dependency and shi
 |-------|------------|
 | **0 -- Scaffold** | **Buildable CLI with config and identity** ✅ |
 | **1 -- Init and Provisioning** | **Create, connect, stop, destroy a VM** ✅ |
-| 2 -- Connectivity and Projects | mosh, tmux, projects, iPad workflow |
+| **2 -- Connectivity and Projects** | **mosh, tmux, projects, iPad workflow** ✅ |
 | 3 -- Lifecycle, Health, and Self-Update | resize, recreate, doctor, update, bootstrap CI |
 | 4 -- Polish and Distribution | Homebrew, docs, production-ready |
 
