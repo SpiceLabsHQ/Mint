@@ -60,7 +60,9 @@ Adopt the following conventions across the Mint CLI:
 
 - `mint project list [--vm <name>]` — Lists projects on a VM. A "project" is a directory on the Project EBS volume, typically containing a devcontainer configuration. Supports `--json` for machine-readable output.
 
-- `mint update` — Self-updates the Mint binary using atomic replacement: downloads the new binary to a temp path, verifies the checksum, then replaces the existing binary via `mv`. No package manager required. Fails and leaves the existing binary untouched if the checksum does not match.
+- `mint update` — Self-updates the Mint binary using atomic replacement: downloads the new binary to a temp path, verifies the checksum, then replaces the existing binary via `mv`. No package manager required. Fails and leaves the existing binary untouched if the checksum does not match. Release artifacts are built via GoReleaser (cross-compilation matrix, checksums, Homebrew formula).
+
+**Version-check notice**: `mint list` and `mint status` check the GitHub Releases API for newer versions and print a one-line notice when the installed version is stale. The result is cached for 24 hours at `~/.config/mint/version-cache.json` to avoid API rate limits. The check fails open — if the API call fails or the cache is unwritable, the notice is silently skipped. The `--json` output includes a `update_available` field (boolean) and `latest_version` field (string, or null if the check failed).
 
 ## Consequences
 - **Predictable behavior.** Developers familiar with XDG conventions and common CLI patterns (`--json`, `--verbose`, `--yes`) can use Mint without reading documentation for basic operations.

@@ -110,11 +110,11 @@ All commands support `--verbose` (progress steps) and `--debug` (AWS SDK call de
 
 **`mint version`** — Prints version information.
 
-**`mint update`** — Self-updates the CLI binary. Downloads the latest release, verifies the checksum, and performs atomic binary replacement. Leaves the existing binary untouched if the checksum does not match.
+**`mint update`** — Self-updates the CLI binary. Downloads the latest release from GitHub Releases (built via GoReleaser for cross-platform matrix), verifies the checksum, and performs atomic binary replacement. Leaves the existing binary untouched if the checksum does not match.
 
-**`mint list [--json]`** — Shows all VMs owned by the current user with their state (running, stopped), IP, uptime, and idle timer status. Running VMs that have exceeded their configured idle timeout are flagged with a warning — this is the primary v1 cost safety net for detecting auto-stop failures.
+**`mint list [--json]`** — Shows all VMs owned by the current user with their state (running, stopped), IP, uptime, and idle timer status. Running VMs that have exceeded their configured idle timeout are flagged with a warning — this is the primary v1 cost safety net for detecting auto-stop failures. Also prints a one-line notice when a newer Mint version is available (checked against GitHub Releases API, cached for 24 hours at `~/.config/mint/version-cache.json`; fails open — if the API call fails, the notice is silently skipped).
 
-**`mint status [--vm <name>] [--json]`** — Detailed status for a VM: state, IP, instance type, volume size, disk usage, running devcontainers, tmux sessions, idle timer remaining.
+**`mint status [--vm <name>] [--json]`** — Detailed status for a VM: state, IP, instance type, volume size, disk usage, running devcontainers, tmux sessions, idle timer remaining. Also prints the stale-version notice (same as `mint list`).
 
 ### Connecting
 
