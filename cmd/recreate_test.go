@@ -13,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2instanceconnect"
 	mintaws "github.com/nicholasgasior/mint/internal/aws"
 	"github.com/nicholasgasior/mint/internal/cli"
+	"github.com/nicholasgasior/mint/internal/provision"
 	"github.com/spf13/cobra"
 )
 
@@ -62,6 +63,116 @@ func (m *mockRecreateRemoteRunner) run(
 		return m.whoOutput, m.whoErr
 	}
 	return nil, fmt.Errorf("unexpected command: %v", command)
+}
+
+// Lifecycle mocks for the 8-step recreate sequence.
+
+type mockDescribeVolumes struct {
+	output *ec2.DescribeVolumesOutput
+	err    error
+}
+
+func (m *mockDescribeVolumes) DescribeVolumes(ctx context.Context, params *ec2.DescribeVolumesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeVolumesOutput, error) {
+	return m.output, m.err
+}
+
+type mockRecreateStopInstances struct {
+	output *ec2.StopInstancesOutput
+	err    error
+}
+
+func (m *mockRecreateStopInstances) StopInstances(ctx context.Context, params *ec2.StopInstancesInput, optFns ...func(*ec2.Options)) (*ec2.StopInstancesOutput, error) {
+	return m.output, m.err
+}
+
+type mockTerminateInstances struct {
+	output *ec2.TerminateInstancesOutput
+	err    error
+}
+
+func (m *mockTerminateInstances) TerminateInstances(ctx context.Context, params *ec2.TerminateInstancesInput, optFns ...func(*ec2.Options)) (*ec2.TerminateInstancesOutput, error) {
+	return m.output, m.err
+}
+
+type mockDetachVolume struct {
+	output *ec2.DetachVolumeOutput
+	err    error
+}
+
+func (m *mockDetachVolume) DetachVolume(ctx context.Context, params *ec2.DetachVolumeInput, optFns ...func(*ec2.Options)) (*ec2.DetachVolumeOutput, error) {
+	return m.output, m.err
+}
+
+type mockAttachVolume struct {
+	output *ec2.AttachVolumeOutput
+	err    error
+}
+
+func (m *mockAttachVolume) AttachVolume(ctx context.Context, params *ec2.AttachVolumeInput, optFns ...func(*ec2.Options)) (*ec2.AttachVolumeOutput, error) {
+	return m.output, m.err
+}
+
+type mockRunInstances struct {
+	output *ec2.RunInstancesOutput
+	err    error
+	// captured stores the last RunInstancesInput for assertions.
+	captured *ec2.RunInstancesInput
+}
+
+func (m *mockRunInstances) RunInstances(ctx context.Context, params *ec2.RunInstancesInput, optFns ...func(*ec2.Options)) (*ec2.RunInstancesOutput, error) {
+	m.captured = params
+	return m.output, m.err
+}
+
+type mockCreateTags struct {
+	calls []*ec2.CreateTagsInput
+	err   error
+	// failOnCall makes the Nth call (1-indexed) return an error.
+	failOnCall int
+	callCount  int
+}
+
+func (m *mockCreateTags) CreateTags(ctx context.Context, params *ec2.CreateTagsInput, optFns ...func(*ec2.Options)) (*ec2.CreateTagsOutput, error) {
+	m.callCount++
+	m.calls = append(m.calls, params)
+	if m.failOnCall > 0 && m.callCount == m.failOnCall {
+		return nil, m.err
+	}
+	if m.failOnCall == 0 && m.err != nil {
+		return nil, m.err
+	}
+	return &ec2.CreateTagsOutput{}, nil
+}
+
+type mockDescribeSubnets struct {
+	output *ec2.DescribeSubnetsOutput
+	err    error
+}
+
+func (m *mockDescribeSubnets) DescribeSubnets(ctx context.Context, params *ec2.DescribeSubnetsInput, optFns ...func(*ec2.Options)) (*ec2.DescribeSubnetsOutput, error) {
+	return m.output, m.err
+}
+
+type mockDescribeSecurityGroups struct {
+	// outputs maps component tag values to their responses.
+	outputs map[string]*ec2.DescribeSecurityGroupsOutput
+	err     error
+}
+
+func (m *mockDescribeSecurityGroups) DescribeSecurityGroups(ctx context.Context, params *ec2.DescribeSecurityGroupsInput, optFns ...func(*ec2.Options)) (*ec2.DescribeSecurityGroupsOutput, error) {
+	if m.err != nil {
+		return nil, m.err
+	}
+	// Find which component is being queried.
+	for _, f := range params.Filters {
+		if aws.ToString(f.Name) == "tag:mint:component" && len(f.Values) > 0 {
+			if out, ok := m.outputs[f.Values[0]]; ok {
+				return out, nil
+			}
+		}
+	}
+	// Fallback: return empty.
+	return &ec2.DescribeSecurityGroupsOutput{}, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -146,18 +257,116 @@ func activeSessionsRunner() *mockRecreateRemoteRunner {
 	}
 }
 
+func defaultLifecycleMocks() lifecycleMocks {
+	return lifecycleMocks{
+		describeVolumes: &mockDescribeVolumes{
+			output: &ec2.DescribeVolumesOutput{
+				Volumes: []ec2types.Volume{{
+					VolumeId:         aws.String("vol-proj123"),
+					AvailabilityZone: aws.String("us-east-1a"),
+				}},
+			},
+		},
+		stop:      &mockRecreateStopInstances{output: &ec2.StopInstancesOutput{}},
+		terminate: &mockTerminateInstances{output: &ec2.TerminateInstancesOutput{}},
+		detach:    &mockDetachVolume{output: &ec2.DetachVolumeOutput{}},
+		attach:    &mockAttachVolume{output: &ec2.AttachVolumeOutput{}},
+		run: &mockRunInstances{
+			output: &ec2.RunInstancesOutput{
+				Instances: []ec2types.Instance{{
+					InstanceId: aws.String("i-new789"),
+				}},
+			},
+		},
+		createTags: &mockCreateTags{},
+		subnets: &mockDescribeSubnets{
+			output: &ec2.DescribeSubnetsOutput{
+				Subnets: []ec2types.Subnet{{
+					SubnetId:         aws.String("subnet-abc"),
+					AvailabilityZone: aws.String("us-east-1a"),
+				}},
+			},
+		},
+		sgs: &mockDescribeSecurityGroups{
+			outputs: map[string]*ec2.DescribeSecurityGroupsOutput{
+				"security-group": {
+					SecurityGroups: []ec2types.SecurityGroup{{
+						GroupId: aws.String("sg-user123"),
+					}},
+				},
+				"admin": {
+					SecurityGroups: []ec2types.SecurityGroup{{
+						GroupId: aws.String("sg-admin456"),
+					}},
+				},
+			},
+		},
+	}
+}
+
+type lifecycleMocks struct {
+	describeVolumes *mockDescribeVolumes
+	stop            *mockRecreateStopInstances
+	terminate       *mockTerminateInstances
+	detach          *mockDetachVolume
+	attach          *mockAttachVolume
+	run             *mockRunInstances
+	createTags      *mockCreateTags
+	subnets         *mockDescribeSubnets
+	sgs             *mockDescribeSecurityGroups
+}
+
 func newHappyRecreateDeps(owner string) *recreateDeps {
 	runner := noSessionsRunner()
+	lm := defaultLifecycleMocks()
 	return &recreateDeps{
-		describe:  &mockRecreateDescribeInstances{output: makeRunningInstanceForRecreate("i-abc123", "default", owner, "1.2.3.4", "us-east-1a")},
-		sendKey:   &mockRecreateSendSSHPublicKey{output: &ec2instanceconnect.SendSSHPublicKeyOutput{}},
-		remoteRun: runner.run,
-		owner:     owner,
+		describe:        &mockRecreateDescribeInstances{output: makeRunningInstanceForRecreate("i-abc123", "default", owner, "1.2.3.4", "us-east-1a")},
+		sendKey:         &mockRecreateSendSSHPublicKey{output: &ec2instanceconnect.SendSSHPublicKeyOutput{}},
+		remoteRun:       runner.run,
+		owner:           owner,
+		ownerARN:        "arn:aws:iam::123456789012:user/" + owner,
+		describeVolumes: lm.describeVolumes,
+		stop:            lm.stop,
+		terminate:       lm.terminate,
+		detachVolume:    lm.detach,
+		attachVolume:    lm.attach,
+		run:             lm.run,
+		createTags:      lm.createTags,
+		describeSubnets: lm.subnets,
+		describeSGs:     lm.sgs,
+		bootstrapScript: []byte("#!/bin/bash\necho hello"),
+		resolveAMI: func(ctx context.Context, client mintaws.GetParameterAPI) (string, error) {
+			return "ami-test123", nil
+		},
+	}
+}
+
+func newHappyRecreateDepsWithMocks(owner string, lm lifecycleMocks) *recreateDeps {
+	runner := noSessionsRunner()
+	return &recreateDeps{
+		describe:        &mockRecreateDescribeInstances{output: makeRunningInstanceForRecreate("i-abc123", "default", owner, "1.2.3.4", "us-east-1a")},
+		sendKey:         &mockRecreateSendSSHPublicKey{output: &ec2instanceconnect.SendSSHPublicKeyOutput{}},
+		remoteRun:       runner.run,
+		owner:           owner,
+		ownerARN:        "arn:aws:iam::123456789012:user/" + owner,
+		describeVolumes: lm.describeVolumes,
+		stop:            lm.stop,
+		terminate:       lm.terminate,
+		detachVolume:    lm.detach,
+		attachVolume:    lm.attach,
+		run:             lm.run,
+		createTags:      lm.createTags,
+		describeSubnets: lm.subnets,
+		describeSGs:     lm.sgs,
+		bootstrapScript: []byte("#!/bin/bash\necho hello"),
+		resolveAMI: func(ctx context.Context, client mintaws.GetParameterAPI) (string, error) {
+			return "ami-test123", nil
+		},
 	}
 }
 
 // ---------------------------------------------------------------------------
-// Tests
+// Tests — Guards (existing scaffold tests)
 // ---------------------------------------------------------------------------
 
 func TestRecreateCommand(t *testing.T) {
@@ -174,14 +383,14 @@ func TestRecreateCommand(t *testing.T) {
 			name:       "successful recreate with --yes and no active sessions",
 			deps:       newHappyRecreateDeps("alice"),
 			args:       []string{"recreate", "--yes"},
-			wantOutput: []string{"Proceeding with recreate", "i-abc123"},
+			wantOutput: []string{"Proceeding with recreate", "i-abc123", "Recreate complete", "i-new789"},
 		},
 		{
 			name:       "successful recreate with confirmation prompt",
 			deps:       newHappyRecreateDeps("alice"),
 			args:       []string{"recreate"},
 			stdin:      "default\n",
-			wantOutput: []string{"Proceeding with recreate"},
+			wantOutput: []string{"Proceeding with recreate", "Recreate complete"},
 		},
 		{
 			name:           "confirmation prompt rejects wrong name",
@@ -259,7 +468,7 @@ func TestRecreateCommand(t *testing.T) {
 				return d
 			}(),
 			args:       []string{"recreate", "--yes", "--force"},
-			wantOutput: []string{"Warning: proceeding despite active sessions", "Proceeding with recreate"},
+			wantOutput: []string{"Warning: proceeding despite active sessions", "Proceeding with recreate", "Recreate complete"},
 		},
 		{
 			name: "describe API error propagates",
@@ -275,48 +484,87 @@ func TestRecreateCommand(t *testing.T) {
 			wantErrContain: "API throttled",
 		},
 		{
-			name:  "verbose shows progress steps",
-			deps:  newHappyRecreateDeps("alice"),
-			args:  []string{"recreate", "--yes", "--verbose"},
+			name: "verbose shows progress steps",
+			deps: newHappyRecreateDeps("alice"),
+			args: []string{"recreate", "--yes", "--verbose"},
 			wantOutput: []string{
 				"Discovering VM",
 				"Checking for active sessions",
 				"Proceeding with recreate",
+				"Step 1/8",
+				"Step 2/8",
+				"Step 3/8",
+				"Step 4/8",
+				"Step 5/8",
+				"Step 6/8",
+				"Step 7/8",
+				"Step 8/8",
+				"Recreate complete",
 			},
 		},
 		{
 			name: "non-default VM name",
 			deps: func() *recreateDeps {
 				runner := noSessionsRunner()
+				lm := defaultLifecycleMocks()
 				return &recreateDeps{
-					describe:  &mockRecreateDescribeInstances{output: makeRunningInstanceForRecreate("i-dev456", "dev", "bob", "5.6.7.8", "us-west-2a")},
-					sendKey:   &mockRecreateSendSSHPublicKey{output: &ec2instanceconnect.SendSSHPublicKeyOutput{}},
-					remoteRun: runner.run,
-					owner:     "bob",
+					describe:        &mockRecreateDescribeInstances{output: makeRunningInstanceForRecreate("i-dev456", "dev", "bob", "5.6.7.8", "us-west-2a")},
+					sendKey:         &mockRecreateSendSSHPublicKey{output: &ec2instanceconnect.SendSSHPublicKeyOutput{}},
+					remoteRun:       runner.run,
+					owner:           "bob",
+					ownerARN:        "arn:aws:iam::123456789012:user/bob",
+					describeVolumes: lm.describeVolumes,
+					stop:            lm.stop,
+					terminate:       lm.terminate,
+					detachVolume:    lm.detach,
+					attachVolume:    lm.attach,
+					run:             lm.run,
+					createTags:      lm.createTags,
+					describeSubnets: lm.subnets,
+					describeSGs:     lm.sgs,
+					bootstrapScript: []byte("#!/bin/bash\necho hello"),
+					resolveAMI: func(ctx context.Context, client mintaws.GetParameterAPI) (string, error) {
+						return "ami-test123", nil
+					},
 				}
 			}(),
 			args:       []string{"recreate", "--vm", "dev", "--yes"},
-			wantOutput: []string{"Proceeding with recreate"},
+			wantOutput: []string{"Proceeding with recreate", "Recreate complete"},
 		},
 		{
 			name: "non-default VM name confirmation requires correct name",
 			deps: func() *recreateDeps {
 				runner := noSessionsRunner()
+				lm := defaultLifecycleMocks()
 				return &recreateDeps{
-					describe:  &mockRecreateDescribeInstances{output: makeRunningInstanceForRecreate("i-dev456", "dev", "bob", "5.6.7.8", "us-west-2a")},
-					sendKey:   &mockRecreateSendSSHPublicKey{output: &ec2instanceconnect.SendSSHPublicKeyOutput{}},
-					remoteRun: runner.run,
-					owner:     "bob",
+					describe:        &mockRecreateDescribeInstances{output: makeRunningInstanceForRecreate("i-dev456", "dev", "bob", "5.6.7.8", "us-west-2a")},
+					sendKey:         &mockRecreateSendSSHPublicKey{output: &ec2instanceconnect.SendSSHPublicKeyOutput{}},
+					remoteRun:       runner.run,
+					owner:           "bob",
+					ownerARN:        "arn:aws:iam::123456789012:user/bob",
+					describeVolumes: lm.describeVolumes,
+					stop:            lm.stop,
+					terminate:       lm.terminate,
+					detachVolume:    lm.detach,
+					attachVolume:    lm.attach,
+					run:             lm.run,
+					createTags:      lm.createTags,
+					describeSubnets: lm.subnets,
+					describeSGs:     lm.sgs,
+					bootstrapScript: []byte("#!/bin/bash\necho hello"),
+					resolveAMI: func(ctx context.Context, client mintaws.GetParameterAPI) (string, error) {
+						return "ami-test123", nil
+					},
 				}
 			}(),
 			args:       []string{"recreate", "--vm", "dev"},
 			stdin:      "dev\n",
-			wantOutput: []string{"Proceeding with recreate"},
+			wantOutput: []string{"Proceeding with recreate", "Recreate complete"},
 		},
 		{
-			name: "shows what will be destroyed before confirming",
-			deps: newHappyRecreateDeps("alice"),
-			args: []string{"recreate"},
+			name:  "shows what will be destroyed before confirming",
+			deps:  newHappyRecreateDeps("alice"),
+			args:  []string{"recreate"},
 			stdin: "default\n",
 			wantOutput: []string{
 				"destroy and re-provision",
@@ -392,3 +640,626 @@ func TestRecreateForceFlag(t *testing.T) {
 		t.Errorf("--force default value = %q, want %q", f.DefValue, "false")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Tests — Lifecycle (8-step recreate sequence)
+// ---------------------------------------------------------------------------
+
+func TestRecreateLifecycleHappyPath(t *testing.T) {
+	lm := defaultLifecycleMocks()
+	deps := newHappyRecreateDepsWithMocks("alice", lm)
+
+	buf := new(bytes.Buffer)
+	cmd := newRecreateCommandWithDeps(deps)
+	root := newRecreateTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"recreate", "--yes"})
+
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := buf.String()
+
+	// Verify lifecycle completed.
+	if !strings.Contains(output, "Recreate complete") {
+		t.Errorf("output missing 'Recreate complete', got: %s", output)
+	}
+	if !strings.Contains(output, "i-new789") {
+		t.Errorf("output missing new instance ID 'i-new789', got: %s", output)
+	}
+
+	// Verify pending-attach tag was set then cleared.
+	if len(lm.createTags.calls) < 2 {
+		t.Fatalf("expected at least 2 CreateTags calls, got %d", len(lm.createTags.calls))
+	}
+
+	// First call: set pending-attach=true on the volume.
+	setCall := lm.createTags.calls[0]
+	if len(setCall.Resources) != 1 || setCall.Resources[0] != "vol-proj123" {
+		t.Errorf("pending-attach set call resource = %v, want [vol-proj123]", setCall.Resources)
+	}
+	foundPendingSet := false
+	for _, tag := range setCall.Tags {
+		if aws.ToString(tag.Key) == "mint:pending-attach" && aws.ToString(tag.Value) == "true" {
+			foundPendingSet = true
+		}
+	}
+	if !foundPendingSet {
+		t.Error("first CreateTags call did not set mint:pending-attach=true")
+	}
+
+	// Second call: clear pending-attach (set to empty).
+	clearCall := lm.createTags.calls[1]
+	if len(clearCall.Resources) != 1 || clearCall.Resources[0] != "vol-proj123" {
+		t.Errorf("pending-attach clear call resource = %v, want [vol-proj123]", clearCall.Resources)
+	}
+	foundPendingClear := false
+	for _, tag := range clearCall.Tags {
+		if aws.ToString(tag.Key) == "mint:pending-attach" && aws.ToString(tag.Value) == "" {
+			foundPendingClear = true
+		}
+	}
+	if !foundPendingClear {
+		t.Error("second CreateTags call did not clear mint:pending-attach")
+	}
+
+	// Verify the RunInstances input has correct AZ (via subnet in same AZ).
+	if lm.run.captured == nil {
+		t.Fatal("RunInstances was not called")
+	}
+	if aws.ToString(lm.run.captured.SubnetId) != "subnet-abc" {
+		t.Errorf("RunInstances subnet = %q, want %q", aws.ToString(lm.run.captured.SubnetId), "subnet-abc")
+	}
+}
+
+func TestRecreateLifecycleVolumeNotFound(t *testing.T) {
+	lm := defaultLifecycleMocks()
+	lm.describeVolumes = &mockDescribeVolumes{
+		output: &ec2.DescribeVolumesOutput{Volumes: []ec2types.Volume{}},
+	}
+	deps := newHappyRecreateDepsWithMocks("alice", lm)
+
+	buf := new(bytes.Buffer)
+	cmd := newRecreateCommandWithDeps(deps)
+	root := newRecreateTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"recreate", "--yes"})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error for missing volume, got nil")
+	}
+	if !strings.Contains(err.Error(), "no project volume found") {
+		t.Errorf("error %q does not contain 'no project volume found'", err.Error())
+	}
+}
+
+func TestRecreateLifecycleDescribeVolumesFails(t *testing.T) {
+	lm := defaultLifecycleMocks()
+	lm.describeVolumes = &mockDescribeVolumes{
+		err: fmt.Errorf("describe volumes throttled"),
+	}
+	deps := newHappyRecreateDepsWithMocks("alice", lm)
+
+	buf := new(bytes.Buffer)
+	cmd := newRecreateCommandWithDeps(deps)
+	root := newRecreateTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"recreate", "--yes"})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "describe volumes throttled") {
+		t.Errorf("error %q does not contain expected message", err.Error())
+	}
+}
+
+func TestRecreateLifecycleStopFails(t *testing.T) {
+	lm := defaultLifecycleMocks()
+	lm.stop = &mockRecreateStopInstances{err: fmt.Errorf("stop instance timeout")}
+	deps := newHappyRecreateDepsWithMocks("alice", lm)
+
+	buf := new(bytes.Buffer)
+	cmd := newRecreateCommandWithDeps(deps)
+	root := newRecreateTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"recreate", "--yes"})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "stopping instance") {
+		t.Errorf("error %q does not contain 'stopping instance'", err.Error())
+	}
+	// Verify pending-attach was already set before the failure.
+	if len(lm.createTags.calls) < 1 {
+		t.Error("pending-attach tag should have been set before stop failed")
+	}
+}
+
+func TestRecreateLifecycleDetachFails(t *testing.T) {
+	lm := defaultLifecycleMocks()
+	lm.detach = &mockDetachVolume{err: fmt.Errorf("volume still in-use")}
+	deps := newHappyRecreateDepsWithMocks("alice", lm)
+
+	buf := new(bytes.Buffer)
+	cmd := newRecreateCommandWithDeps(deps)
+	root := newRecreateTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"recreate", "--yes"})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "detaching project volume") {
+		t.Errorf("error %q does not contain 'detaching project volume'", err.Error())
+	}
+}
+
+func TestRecreateLifecycleTerminateFails(t *testing.T) {
+	lm := defaultLifecycleMocks()
+	lm.terminate = &mockTerminateInstances{err: fmt.Errorf("terminate denied")}
+	deps := newHappyRecreateDepsWithMocks("alice", lm)
+
+	buf := new(bytes.Buffer)
+	cmd := newRecreateCommandWithDeps(deps)
+	root := newRecreateTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"recreate", "--yes"})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "terminating instance") {
+		t.Errorf("error %q does not contain 'terminating instance'", err.Error())
+	}
+}
+
+func TestRecreateLifecycleLaunchFails(t *testing.T) {
+	lm := defaultLifecycleMocks()
+	lm.run = &mockRunInstances{err: fmt.Errorf("insufficient capacity")}
+	deps := newHappyRecreateDepsWithMocks("alice", lm)
+
+	buf := new(bytes.Buffer)
+	cmd := newRecreateCommandWithDeps(deps)
+	root := newRecreateTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"recreate", "--yes"})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "launching new instance") {
+		t.Errorf("error %q does not contain 'launching new instance'", err.Error())
+	}
+}
+
+func TestRecreateLifecycleAttachFails(t *testing.T) {
+	lm := defaultLifecycleMocks()
+	lm.attach = &mockAttachVolume{err: fmt.Errorf("attach volume conflict")}
+	deps := newHappyRecreateDepsWithMocks("alice", lm)
+
+	buf := new(bytes.Buffer)
+	cmd := newRecreateCommandWithDeps(deps)
+	root := newRecreateTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"recreate", "--yes"})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "attaching project volume") {
+		t.Errorf("error %q does not contain 'attaching project volume'", err.Error())
+	}
+}
+
+func TestRecreateLifecyclePendingAttachTagSetBeforeStop(t *testing.T) {
+	// Verify that the pending-attach tag is set BEFORE the stop call.
+	// If stop fails, the pending-attach tag should already be in place.
+	lm := defaultLifecycleMocks()
+	lm.stop = &mockRecreateStopInstances{err: fmt.Errorf("stop failed")}
+	deps := newHappyRecreateDepsWithMocks("alice", lm)
+
+	buf := new(bytes.Buffer)
+	cmd := newRecreateCommandWithDeps(deps)
+	root := newRecreateTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"recreate", "--yes"})
+
+	_ = root.Execute() // Will fail at stop step.
+
+	// The CreateTags call for pending-attach should have happened.
+	if len(lm.createTags.calls) < 1 {
+		t.Fatal("expected CreateTags call for pending-attach before stop")
+	}
+	pendingCall := lm.createTags.calls[0]
+	foundPending := false
+	for _, tag := range pendingCall.Tags {
+		if aws.ToString(tag.Key) == "mint:pending-attach" {
+			foundPending = true
+		}
+	}
+	if !foundPending {
+		t.Error("first CreateTags call should set pending-attach tag")
+	}
+}
+
+func TestRecreateLifecyclePendingAttachTagRemovedAfterAttach(t *testing.T) {
+	lm := defaultLifecycleMocks()
+	deps := newHappyRecreateDepsWithMocks("alice", lm)
+
+	buf := new(bytes.Buffer)
+	cmd := newRecreateCommandWithDeps(deps)
+	root := newRecreateTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"recreate", "--yes"})
+
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify the second CreateTags call clears the pending-attach tag.
+	if len(lm.createTags.calls) < 2 {
+		t.Fatalf("expected at least 2 CreateTags calls, got %d", len(lm.createTags.calls))
+	}
+
+	clearCall := lm.createTags.calls[1]
+	foundClear := false
+	for _, tag := range clearCall.Tags {
+		if aws.ToString(tag.Key) == "mint:pending-attach" && aws.ToString(tag.Value) == "" {
+			foundClear = true
+		}
+	}
+	if !foundClear {
+		t.Error("pending-attach tag was not cleared after attach")
+	}
+}
+
+func TestRecreateLifecycleSameAZ(t *testing.T) {
+	// Verify the new instance is launched in the same AZ as the project volume.
+	lm := defaultLifecycleMocks()
+	lm.describeVolumes = &mockDescribeVolumes{
+		output: &ec2.DescribeVolumesOutput{
+			Volumes: []ec2types.Volume{{
+				VolumeId:         aws.String("vol-proj123"),
+				AvailabilityZone: aws.String("us-west-2b"),
+			}},
+		},
+	}
+	lm.subnets = &mockDescribeSubnets{
+		output: &ec2.DescribeSubnetsOutput{
+			Subnets: []ec2types.Subnet{{
+				SubnetId:         aws.String("subnet-west2b"),
+				AvailabilityZone: aws.String("us-west-2b"),
+			}},
+		},
+	}
+	deps := newHappyRecreateDepsWithMocks("alice", lm)
+
+	buf := new(bytes.Buffer)
+	cmd := newRecreateCommandWithDeps(deps)
+	root := newRecreateTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"recreate", "--yes"})
+
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if lm.run.captured == nil {
+		t.Fatal("RunInstances was not called")
+	}
+	if aws.ToString(lm.run.captured.SubnetId) != "subnet-west2b" {
+		t.Errorf("RunInstances subnet = %q, want %q (same AZ as volume)", aws.ToString(lm.run.captured.SubnetId), "subnet-west2b")
+	}
+}
+
+func TestRecreateLifecycleVerboseOutput(t *testing.T) {
+	deps := newHappyRecreateDeps("alice")
+
+	buf := new(bytes.Buffer)
+	cmd := newRecreateCommandWithDeps(deps)
+	root := newRecreateTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"recreate", "--yes", "--verbose"})
+
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := buf.String()
+	steps := []string{
+		"Step 1/8: Querying project EBS volume",
+		"Found project volume vol-proj123",
+		"Step 2/8: Tagging project volume with pending-attach",
+		"Step 3/8: Stopping instance i-abc123",
+		"Step 4/8: Detaching project volume vol-proj123",
+		"Step 5/8: Terminating instance i-abc123",
+		"Step 6/8: Launching new instance in us-east-1a",
+		"Launched new instance i-new789",
+		"Step 7/8: Attaching project volume vol-proj123 to i-new789",
+		"Step 8/8: Waiting for bootstrap to complete",
+		"Recreate complete. New instance: i-new789",
+	}
+	for _, step := range steps {
+		if !strings.Contains(output, step) {
+			t.Errorf("output missing %q, got:\n%s", step, output)
+		}
+	}
+}
+
+func TestRecreateLifecycleBootstrapPollError(t *testing.T) {
+	lm := defaultLifecycleMocks()
+	deps := newHappyRecreateDepsWithMocks("alice", lm)
+	deps.pollBootstrap = func(ctx context.Context, owner, vmName, instanceID string) error {
+		return fmt.Errorf("bootstrap timed out")
+	}
+
+	buf := new(bytes.Buffer)
+	cmd := newRecreateCommandWithDeps(deps)
+	root := newRecreateTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"recreate", "--yes"})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error from bootstrap poll, got nil")
+	}
+	if !strings.Contains(err.Error(), "bootstrap timed out") {
+		t.Errorf("error %q does not contain 'bootstrap timed out'", err.Error())
+	}
+}
+
+func TestRecreateLifecycleBootstrapPollSuccess(t *testing.T) {
+	lm := defaultLifecycleMocks()
+	deps := newHappyRecreateDepsWithMocks("alice", lm)
+
+	var polledOwner, polledVM, polledInstance string
+	deps.pollBootstrap = func(ctx context.Context, owner, vmName, instanceID string) error {
+		polledOwner = owner
+		polledVM = vmName
+		polledInstance = instanceID
+		return nil
+	}
+
+	buf := new(bytes.Buffer)
+	cmd := newRecreateCommandWithDeps(deps)
+	root := newRecreateTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"recreate", "--yes"})
+
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if polledOwner != "alice" {
+		t.Errorf("pollBootstrap owner = %q, want %q", polledOwner, "alice")
+	}
+	if polledVM != "default" {
+		t.Errorf("pollBootstrap vmName = %q, want %q", polledVM, "default")
+	}
+	if polledInstance != "i-new789" {
+		t.Errorf("pollBootstrap instanceID = %q, want %q", polledInstance, "i-new789")
+	}
+}
+
+func TestRecreateLifecyclePendingAttachClearFailureIsNonFatal(t *testing.T) {
+	// If removing the pending-attach tag fails, the recreate should still succeed
+	// (the volume is attached; the tag is a safety net for crash recovery).
+	lm := defaultLifecycleMocks()
+	lm.createTags = &mockCreateTags{
+		failOnCall: 2, // Second call (the clear) fails.
+		err:        fmt.Errorf("tag cleanup failed"),
+	}
+	deps := newHappyRecreateDepsWithMocks("alice", lm)
+
+	buf := new(bytes.Buffer)
+	cmd := newRecreateCommandWithDeps(deps)
+	root := newRecreateTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"recreate", "--yes"})
+
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("expected no error (tag cleanup is non-fatal), got: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "Warning: could not remove pending-attach tag") {
+		t.Errorf("expected warning about tag cleanup failure, got:\n%s", output)
+	}
+	if !strings.Contains(output, "Recreate complete") {
+		t.Errorf("output missing 'Recreate complete', got:\n%s", output)
+	}
+}
+
+func TestRecreateLifecyclePendingAttachSetFailure(t *testing.T) {
+	// If setting the pending-attach tag fails, the recreate should abort
+	// (the safety net must be in place before destructive actions).
+	lm := defaultLifecycleMocks()
+	lm.createTags = &mockCreateTags{
+		failOnCall: 1, // First call (the set) fails.
+		err:        fmt.Errorf("cannot tag volume"),
+	}
+	deps := newHappyRecreateDepsWithMocks("alice", lm)
+
+	buf := new(bytes.Buffer)
+	cmd := newRecreateCommandWithDeps(deps)
+	root := newRecreateTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"recreate", "--yes"})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error when pending-attach tag set fails, got nil")
+	}
+	if !strings.Contains(err.Error(), "tagging project volume with pending-attach") {
+		t.Errorf("error %q does not contain expected message", err.Error())
+	}
+}
+
+func TestRecreateLifecycleAMIResolutionFails(t *testing.T) {
+	lm := defaultLifecycleMocks()
+	deps := newHappyRecreateDepsWithMocks("alice", lm)
+	deps.resolveAMI = func(ctx context.Context, client mintaws.GetParameterAPI) (string, error) {
+		return "", fmt.Errorf("SSM parameter not found")
+	}
+
+	buf := new(bytes.Buffer)
+	cmd := newRecreateCommandWithDeps(deps)
+	root := newRecreateTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"recreate", "--yes"})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error from AMI resolution, got nil")
+	}
+	if !strings.Contains(err.Error(), "SSM parameter not found") {
+		t.Errorf("error %q does not contain expected message", err.Error())
+	}
+}
+
+func TestRecreateLifecycleSecurityGroupNotFound(t *testing.T) {
+	lm := defaultLifecycleMocks()
+	lm.sgs = &mockDescribeSecurityGroups{
+		outputs: map[string]*ec2.DescribeSecurityGroupsOutput{
+			"security-group": {SecurityGroups: []ec2types.SecurityGroup{}}, // empty
+			"admin":          {SecurityGroups: []ec2types.SecurityGroup{{GroupId: aws.String("sg-admin456")}}},
+		},
+	}
+	deps := newHappyRecreateDepsWithMocks("alice", lm)
+
+	buf := new(bytes.Buffer)
+	cmd := newRecreateCommandWithDeps(deps)
+	root := newRecreateTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"recreate", "--yes"})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error for missing security group, got nil")
+	}
+	if !strings.Contains(err.Error(), "no security group found") {
+		t.Errorf("error %q does not contain expected message", err.Error())
+	}
+}
+
+func TestRecreateLifecycleSubnetNotFound(t *testing.T) {
+	lm := defaultLifecycleMocks()
+	lm.subnets = &mockDescribeSubnets{
+		output: &ec2.DescribeSubnetsOutput{Subnets: []ec2types.Subnet{}},
+	}
+	deps := newHappyRecreateDepsWithMocks("alice", lm)
+
+	buf := new(bytes.Buffer)
+	cmd := newRecreateCommandWithDeps(deps)
+	root := newRecreateTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"recreate", "--yes"})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error for missing subnet, got nil")
+	}
+	if !strings.Contains(err.Error(), "no default subnet found") {
+		t.Errorf("error %q does not contain expected message", err.Error())
+	}
+}
+
+func TestRecreateLifecycleBootstrapVerifyCalled(t *testing.T) {
+	// Verify that verifyBootstrap is invoked during the lifecycle.
+	// If it returns an error, the launch should fail.
+	lm := defaultLifecycleMocks()
+	deps := newHappyRecreateDepsWithMocks("alice", lm)
+
+	verifyCalled := false
+	deps.verifyBootstrap = func(content []byte) error {
+		verifyCalled = true
+		return nil
+	}
+
+	buf := new(bytes.Buffer)
+	cmd := newRecreateCommandWithDeps(deps)
+	root := newRecreateTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"recreate", "--yes"})
+
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !verifyCalled {
+		t.Fatal("verifyBootstrap was not called during lifecycle execution")
+	}
+}
+
+func TestRecreateLifecycleBootstrapVerifyRejectsScript(t *testing.T) {
+	// When verifyBootstrap returns an error, the recreate must abort
+	// before launching a new instance.
+	lm := defaultLifecycleMocks()
+	deps := newHappyRecreateDepsWithMocks("alice", lm)
+	deps.verifyBootstrap = func(content []byte) error {
+		return fmt.Errorf("SHA-256 hash mismatch: script has been tampered with")
+	}
+
+	buf := new(bytes.Buffer)
+	cmd := newRecreateCommandWithDeps(deps)
+	root := newRecreateTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"recreate", "--yes"})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error from bootstrap verification, got nil")
+	}
+	if !strings.Contains(err.Error(), "bootstrap verification failed") {
+		t.Errorf("error %q does not contain 'bootstrap verification failed'", err.Error())
+	}
+	if !strings.Contains(err.Error(), "SHA-256 hash mismatch") {
+		t.Errorf("error %q does not contain original verification error", err.Error())
+	}
+
+	// RunInstances should NOT have been called.
+	if lm.run.captured != nil {
+		t.Error("RunInstances was called despite bootstrap verification failure")
+	}
+}
+
+// Ensure provision.BootstrapPollFunc and provision.AMIResolver types are used correctly.
+var _ provision.BootstrapPollFunc = func(ctx context.Context, owner, vmName, instanceID string) error { return nil }
+var _ provision.AMIResolver = func(ctx context.Context, client mintaws.GetParameterAPI) (string, error) { return "", nil }
