@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -400,5 +401,125 @@ func TestTOFURemoteRunnerMatchingKeyProceeds(t *testing.T) {
 	}
 	if inner.calls != 1 {
 		t.Errorf("inner calls = %d, want 1", inner.calls)
+	}
+}
+
+// --- StreamingRemoteRunner tests ---
+
+func TestStreamingRemoteRunnerType(t *testing.T) {
+	// Verify that defaultStreamingRemoteRunner satisfies the StreamingRemoteRunner type.
+	var runner StreamingRemoteRunner = defaultStreamingRemoteRunner
+	if runner == nil {
+		t.Fatal("defaultStreamingRemoteRunner should not be nil")
+	}
+}
+
+func TestStreamingRemoteRunnerMockInjection(t *testing.T) {
+	tests := []struct {
+		name       string
+		mockRunner StreamingRemoteRunner
+		wantOutput string
+		wantErr    bool
+		wantErrMsg string
+	}{
+		{
+			name: "mock returns stdout",
+			mockRunner: func(ctx context.Context, sendKey mintaws.SendSSHPublicKeyAPI, instanceID, az, host string, port int, user string, command []string, stderr io.Writer) ([]byte, error) {
+				return []byte("clone output"), nil
+			},
+			wantOutput: "clone output",
+		},
+		{
+			name: "mock returns error",
+			mockRunner: func(ctx context.Context, sendKey mintaws.SendSSHPublicKeyAPI, instanceID, az, host string, port int, user string, command []string, stderr io.Writer) ([]byte, error) {
+				return nil, fmt.Errorf("connection refused")
+			},
+			wantErr:    true,
+			wantErrMsg: "connection refused",
+		},
+		{
+			name: "mock writes to stderr",
+			mockRunner: func(ctx context.Context, sendKey mintaws.SendSSHPublicKeyAPI, instanceID, az, host string, port int, user string, command []string, stderr io.Writer) ([]byte, error) {
+				fmt.Fprint(stderr, "Cloning into 'repo'...")
+				return []byte("done"), nil
+			},
+			wantOutput: "done",
+		},
+		{
+			name: "mock receives correct parameters",
+			mockRunner: func(ctx context.Context, sendKey mintaws.SendSSHPublicKeyAPI, instanceID, az, host string, port int, user string, command []string, stderr io.Writer) ([]byte, error) {
+				if instanceID != "i-test123" {
+					return nil, fmt.Errorf("wrong instanceID: %s", instanceID)
+				}
+				if az != "us-east-1a" {
+					return nil, fmt.Errorf("wrong az: %s", az)
+				}
+				if host != "1.2.3.4" {
+					return nil, fmt.Errorf("wrong host: %s", host)
+				}
+				if port != 41122 {
+					return nil, fmt.Errorf("wrong port: %d", port)
+				}
+				if user != "ubuntu" {
+					return nil, fmt.Errorf("wrong user: %s", user)
+				}
+				if len(command) < 2 || command[0] != "git" || command[1] != "clone" {
+					return nil, fmt.Errorf("wrong command: %v", command)
+				}
+				if stderr == nil {
+					return nil, fmt.Errorf("stderr writer should not be nil")
+				}
+				return []byte("ok"), nil
+			},
+			wantOutput: "ok",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			mock := &mockSendKeyForRemote{
+				output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
+			}
+
+			out, err := tt.mockRunner(ctx, mock, "i-test123", "us-east-1a", "1.2.3.4", 41122, "ubuntu", []string{"git", "clone", "https://github.com/org/repo.git"}, io.Discard)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if tt.wantErrMsg != "" && !strings.Contains(err.Error(), tt.wantErrMsg) {
+					t.Errorf("error %q does not contain %q", err.Error(), tt.wantErrMsg)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if string(out) != tt.wantOutput {
+				t.Errorf("output = %q, want %q", string(out), tt.wantOutput)
+			}
+		})
+	}
+}
+
+func TestDefaultStreamingRemoteRunnerSendKeyError(t *testing.T) {
+	// When Instance Connect rejects the key, defaultStreamingRemoteRunner should
+	// propagate the error without attempting to run ssh.
+	ctx := context.Background()
+	mock := &mockSendKeyForRemote{
+		err: fmt.Errorf("access denied"),
+	}
+
+	_, err := defaultStreamingRemoteRunner(ctx, mock, "i-test123", "us-east-1a", "1.2.3.4", 41122, "ubuntu", []string{"whoami"}, io.Discard)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "access denied") {
+		t.Errorf("error %q does not contain 'access denied'", err.Error())
+	}
+	if !mock.called {
+		t.Error("SendSSHPublicKey should have been called")
 	}
 }

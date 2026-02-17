@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"path"
 	"regexp"
 	"strings"
@@ -22,12 +23,13 @@ import (
 
 // projectAddDeps holds the injectable dependencies for the project add command.
 type projectAddDeps struct {
-	describe       mintaws.DescribeInstancesAPI
-	sendKey        mintaws.SendSSHPublicKeyAPI
-	owner          string
-	remote         RemoteCommandRunner
-	hostKeyStore   *sshconfig.HostKeyStore
-	hostKeyScanner HostKeyScanner
+	describe        mintaws.DescribeInstancesAPI
+	sendKey         mintaws.SendSSHPublicKeyAPI
+	owner           string
+	remote          RemoteCommandRunner
+	streamingRunner StreamingRemoteRunner
+	hostKeyStore    *sshconfig.HostKeyStore
+	hostKeyScanner  HostKeyScanner
 }
 
 // projectListDeps holds the injectable dependencies for the project list command.
@@ -40,13 +42,14 @@ type projectListDeps struct {
 
 // projectRebuildDeps holds the injectable dependencies for the project rebuild command.
 type projectRebuildDeps struct {
-	describe       mintaws.DescribeInstancesAPI
-	sendKey        mintaws.SendSSHPublicKeyAPI
-	owner          string
-	remote         RemoteCommandRunner
-	stdin          io.Reader
-	hostKeyStore   *sshconfig.HostKeyStore
-	hostKeyScanner HostKeyScanner
+	describe        mintaws.DescribeInstancesAPI
+	sendKey         mintaws.SendSSHPublicKeyAPI
+	owner           string
+	remote          RemoteCommandRunner
+	streamingRunner StreamingRemoteRunner
+	stdin           io.Reader
+	hostKeyStore    *sshconfig.HostKeyStore
+	hostKeyScanner  HostKeyScanner
 }
 
 // projectInfo represents a project on the VM with its container status.
@@ -133,12 +136,13 @@ func newProjectAddCommandWithDeps(deps *projectAddDeps) *cobra.Command {
 			}
 			configDir := config.DefaultConfigDir()
 			return runProjectAdd(cmd, &projectAddDeps{
-				describe:       clients.ec2Client,
-				sendKey:        clients.icClient,
-				owner:          clients.owner,
-				remote:         defaultRemoteRunner,
-				hostKeyStore:   sshconfig.NewHostKeyStore(configDir),
-				hostKeyScanner: defaultHostKeyScanner,
+				describe:        clients.ec2Client,
+				sendKey:         clients.icClient,
+				owner:           clients.owner,
+				remote:          defaultRemoteRunner,
+				streamingRunner: defaultStreamingRemoteRunner,
+				hostKeyStore:    sshconfig.NewHostKeyStore(configDir),
+				hostKeyScanner:  defaultHostKeyScanner,
 			}, args[0])
 		},
 	}
@@ -205,33 +209,107 @@ func runProjectAdd(cmd *cobra.Command, deps *projectAddDeps, gitURL string) erro
 	w := cmd.OutOrStdout()
 	projectPath := fmt.Sprintf("/mint/projects/%s", projectName)
 
-	// Step 1: Clone repository.
-	fmt.Fprintf(w, "Cloning %s...\n", gitURL)
-	cloneCmd := buildCloneCommand(gitURL, projectPath, branch)
+	// State detection: check what already exists on the VM to enable
+	// resume-from-failure. The first remote command also triggers TOFU
+	// host key verification (ADR-0019).
+	dirExists := false
+	containerID := ""
+	tmuxExists := false
+
+	// Check 1: Does the project directory exist?
+	dirCheckCmd := []string{"test", "-d", projectPath}
 	_, err = remote(ctx, deps.sendKey, found.ID, found.AvailabilityZone,
-		found.PublicIP, defaultSSHPort, defaultSSHUser, cloneCmd)
+		found.PublicIP, defaultSSHPort, defaultSSHUser, dirCheckCmd)
 	if err != nil {
 		if isTOFUError(err) {
 			return err
 		}
-		if strings.Contains(err.Error(), "already exists") {
-			return fmt.Errorf("project directory already exists at %s on the VM", projectPath)
+		// Directory does not exist — fresh start.
+	} else {
+		dirExists = true
+
+		// Check 2: Is a container running for this project?
+		containerCheckCmd := []string{
+			"docker", "ps", "-q",
+			"--filter", fmt.Sprintf("label=devcontainer.local_folder=%s", projectPath),
 		}
-		return fmt.Errorf("cloning repository: %w", err)
+		containerOutput, containerErr := remote(ctx, deps.sendKey, found.ID, found.AvailabilityZone,
+			found.PublicIP, defaultSSHPort, defaultSSHUser, containerCheckCmd)
+		if containerErr == nil {
+			containerID = strings.TrimSpace(string(containerOutput))
+		}
+
+		if containerID != "" {
+			// Check 3: Does a tmux session already exist?
+			tmuxCheckCmd := []string{"tmux", "has-session", "-t", projectName}
+			_, tmuxErr := remote(ctx, deps.sendKey, found.ID, found.AvailabilityZone,
+				found.PublicIP, defaultSSHPort, defaultSSHUser, tmuxCheckCmd)
+			tmuxExists = tmuxErr == nil
+		}
 	}
 
-	// Step 2: Build devcontainer.
-	fmt.Fprintf(w, "Building devcontainer...\n")
-	buildCmd := []string{"devcontainer", "up", "--workspace-folder", projectPath}
-	_, err = remote(ctx, deps.sendKey, found.ID, found.AvailabilityZone,
-		found.PublicIP, defaultSSHPort, defaultSSHUser, buildCmd)
-	if err != nil {
-		return fmt.Errorf("building devcontainer: %w", err)
+	// If everything exists, nothing to do.
+	if dirExists && containerID != "" && tmuxExists {
+		fmt.Fprintf(w, "Project %q is already fully set up.\n", projectName)
+		return nil
 	}
 
-	// Step 3: Create tmux session.
+	// Resolve the streaming runner — use deps.streamingRunner for long-running
+	// commands (git clone, devcontainer up) so users see progress on stderr.
+	// TOFU was verified by the state check above, so StrictHostKeyChecking=no
+	// is safe for subsequent calls in the same invocation.
+	streaming := deps.streamingRunner
+	if streaming == nil {
+		streaming = defaultStreamingRemoteRunner
+	}
+
+	// Clone step: skip if directory already exists.
+	if !dirExists {
+		fmt.Fprintf(w, "Cloning %s...\n", gitURL)
+		cloneCmd := buildCloneCommand(gitURL, projectPath, branch)
+		_, err = streaming(ctx, deps.sendKey, found.ID, found.AvailabilityZone,
+			found.PublicIP, defaultSSHPort, defaultSSHUser, cloneCmd, os.Stderr)
+		if err != nil {
+			return fmt.Errorf("cloning repository: %w", err)
+		}
+	} else if containerID == "" {
+		fmt.Fprintf(w, "Found existing clone for %q, resuming from devcontainer build.\n", projectName)
+	}
+
+	// Build step: skip if container is already running.
+	if containerID == "" {
+		fmt.Fprintf(w, "Building devcontainer...\n")
+		buildCmd := []string{"devcontainer", "up", "--workspace-folder", projectPath}
+		_, err = streaming(ctx, deps.sendKey, found.ID, found.AvailabilityZone,
+			found.PublicIP, defaultSSHPort, defaultSSHUser, buildCmd, os.Stderr)
+		if err != nil {
+			return fmt.Errorf("building devcontainer: %w", err)
+		}
+
+		// Discover the container ID after build.
+		dockerPsCmd := []string{
+			"docker", "ps", "-q",
+			"--filter", fmt.Sprintf("label=devcontainer.local_folder=%s", projectPath),
+		}
+		containerOutput, containerErr := remote(ctx, deps.sendKey, found.ID, found.AvailabilityZone,
+			found.PublicIP, defaultSSHPort, defaultSSHUser, dockerPsCmd)
+		if containerErr == nil {
+			containerID = strings.TrimSpace(string(containerOutput))
+		}
+	} else {
+		fmt.Fprintf(w, "Found running container for %q, resuming from session creation.\n", projectName)
+	}
+
+	// Tmux step: create session.
 	fmt.Fprintf(w, "Creating tmux session...\n")
-	tmuxCmd := []string{"tmux", "new-session", "-d", "-s", projectName}
+	var tmuxCmd []string
+	if containerID == "" {
+		fmt.Fprintf(w, "Warning: Container not found after build. Creating tmux session without docker exec.\n")
+		tmuxCmd = []string{"tmux", "new-session", "-d", "-s", projectName}
+	} else {
+		tmuxCmd = []string{"tmux", "new-session", "-d", "-s", projectName,
+			"docker", "exec", "-it", containerID, "/bin/bash"}
+	}
 	_, err = remote(ctx, deps.sendKey, found.ID, found.AvailabilityZone,
 		found.PublicIP, defaultSSHPort, defaultSSHUser, tmuxCmd)
 	if err != nil {
@@ -539,13 +617,14 @@ func newProjectRebuildCommandWithDeps(deps *projectRebuildDeps) *cobra.Command {
 			}
 			configDir := config.DefaultConfigDir()
 			return runProjectRebuild(cmd, &projectRebuildDeps{
-				describe:       clients.ec2Client,
-				sendKey:        clients.icClient,
-				owner:          clients.owner,
-				remote:         defaultRemoteRunner,
-				stdin:          cmd.InOrStdin(),
-				hostKeyStore:   sshconfig.NewHostKeyStore(configDir),
-				hostKeyScanner: defaultHostKeyScanner,
+				describe:        clients.ec2Client,
+				sendKey:         clients.icClient,
+				owner:           clients.owner,
+				remote:          defaultRemoteRunner,
+				streamingRunner: defaultStreamingRemoteRunner,
+				stdin:           cmd.InOrStdin(),
+				hostKeyStore:    sshconfig.NewHostKeyStore(configDir),
+				hostKeyScanner:  defaultHostKeyScanner,
 			}, args[0])
 		},
 	}
@@ -654,13 +733,52 @@ func runProjectRebuild(cmd *cobra.Command, deps *projectRebuildDeps, projectName
 		return fmt.Errorf("removing container: %w", err)
 	}
 
-	// Step 5: Rebuild devcontainer.
+	// Step 5: Rebuild devcontainer (streaming stderr for progress).
+	// TOFU was verified by the test -d check above, so streaming calls
+	// with StrictHostKeyChecking=no are safe.
+	streaming := deps.streamingRunner
+	if streaming == nil {
+		streaming = defaultStreamingRemoteRunner
+	}
 	fmt.Fprintf(w, "Rebuilding devcontainer...\n")
 	buildCmd := []string{"devcontainer", "up", "--workspace-folder", projectPath}
-	_, err = remote(ctx, deps.sendKey, found.ID, found.AvailabilityZone,
-		found.PublicIP, defaultSSHPort, defaultSSHUser, buildCmd)
+	_, err = streaming(ctx, deps.sendKey, found.ID, found.AvailabilityZone,
+		found.PublicIP, defaultSSHPort, defaultSSHUser, buildCmd, os.Stderr)
 	if err != nil {
 		return fmt.Errorf("rebuilding devcontainer: %w", err)
+	}
+
+	// Step 6: Discover new container ID for docker exec (ADR-0003).
+	fmt.Fprintf(w, "Reconnecting tmux session...\n")
+	dockerPsCmd := []string{
+		"docker", "ps", "-q",
+		"--filter", fmt.Sprintf("label=devcontainer.local_folder=%s", projectPath),
+	}
+	containerOutput, err := remote(ctx, deps.sendKey, found.ID, found.AvailabilityZone,
+		found.PublicIP, defaultSSHPort, defaultSSHUser, dockerPsCmd)
+	if err != nil {
+		containerOutput = nil
+	}
+	containerID := strings.TrimSpace(string(containerOutput))
+
+	// Step 7: Kill existing tmux session (graceful — ignore errors).
+	killCmd := []string{"tmux", "kill-session", "-t", projectName}
+	_, _ = remote(ctx, deps.sendKey, found.ID, found.AvailabilityZone,
+		found.PublicIP, defaultSSHPort, defaultSSHUser, killCmd)
+
+	// Step 8: Create new tmux session with docker exec into container.
+	var tmuxCmd []string
+	if containerID == "" {
+		fmt.Fprintf(w, "Warning: Container not found after build. Creating tmux session without docker exec.\n")
+		tmuxCmd = []string{"tmux", "new-session", "-d", "-s", projectName}
+	} else {
+		tmuxCmd = []string{"tmux", "new-session", "-d", "-s", projectName,
+			"docker", "exec", "-it", containerID, "/bin/bash"}
+	}
+	_, err = remote(ctx, deps.sendKey, found.ID, found.AvailabilityZone,
+		found.PublicIP, defaultSSHPort, defaultSSHUser, tmuxCmd)
+	if err != nil {
+		return fmt.Errorf("creating tmux session: %w", err)
 	}
 
 	fmt.Fprintf(w, "Rebuilt devcontainer for %q\n", projectName)

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 
@@ -167,6 +168,43 @@ func (m *projectMockRemote) run(ctx context.Context, sendKey mintaws.SendSSHPubl
 	return nil, nil
 }
 
+// projectStreamingCall records a single streaming remote command invocation.
+type projectStreamingCall struct {
+	instanceID string
+	az         string
+	host       string
+	port       int
+	user       string
+	command    []string
+}
+
+// projectMockStreamingRemote records streaming calls and returns configurable results.
+type projectMockStreamingRemote struct {
+	calls   []projectStreamingCall
+	outputs [][]byte
+	errors  []error
+}
+
+func (m *projectMockStreamingRemote) run(ctx context.Context, sendKey mintaws.SendSSHPublicKeyAPI, instanceID, az, host string, port int, user string, command []string, stderr io.Writer) ([]byte, error) {
+	idx := len(m.calls)
+	m.calls = append(m.calls, projectStreamingCall{
+		instanceID: instanceID,
+		az:         az,
+		host:       host,
+		port:       port,
+		user:       user,
+		command:    command,
+	})
+
+	if idx < len(m.errors) && m.errors[idx] != nil {
+		return nil, m.errors[idx]
+	}
+	if idx < len(m.outputs) {
+		return m.outputs[idx], nil
+	}
+	return nil, nil
+}
+
 func makeRunningInstanceForProject(id, vmName, owner, ip, az string) *ec2.DescribeInstancesOutput {
 	return &ec2.DescribeInstancesOutput{
 		Reservations: []ec2types.Reservation{{
@@ -230,17 +268,20 @@ func newTestRootForProject() *cobra.Command {
 
 func TestProjectAddCommand(t *testing.T) {
 	tests := []struct {
-		name           string
-		describe       *mockDescribeForProject
-		sendKey        *mockSendKeyForProject
-		remote         *projectMockRemote
-		owner          string
-		args           []string
-		wantErr        bool
-		wantErrContain string
-		wantCalls      int
-		checkCalls     func(t *testing.T, calls []projectRemoteCall)
-		checkOutput    func(t *testing.T, output string)
+		name                string
+		describe            *mockDescribeForProject
+		sendKey             *mockSendKeyForProject
+		remote              *projectMockRemote
+		streaming           *projectMockStreamingRemote
+		owner               string
+		args                []string
+		wantErr             bool
+		wantErrContain      string
+		wantCalls           int
+		wantStreamingCalls  int
+		checkCalls          func(t *testing.T, calls []projectRemoteCall)
+		checkStreamingCalls func(t *testing.T, calls []projectStreamingCall)
+		checkOutput         func(t *testing.T, output string)
 	}{
 		{
 			name: "successful project add with https url",
@@ -250,19 +291,23 @@ func TestProjectAddCommand(t *testing.T) {
 			sendKey: &mockSendKeyForProject{
 				output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
 			},
-			remote:    &projectMockRemote{outputs: [][]byte{nil, nil, nil}, errors: []error{nil, nil, nil}},
-			owner:     "alice",
-			args:      []string{"project", "add", "https://github.com/org/repo.git"},
-			wantCalls: 3,
-			checkCalls: func(t *testing.T, calls []projectRemoteCall) {
+			// remote: test -d (dir doesn't exist), docker ps, tmux new-session
+			remote: &projectMockRemote{
+				outputs: [][]byte{nil, []byte("abc123def456\n"), nil},
+				errors:  []error{fmt.Errorf("exit status 1"), nil, nil},
+			},
+			// streaming: clone, devcontainer up
+			streaming:          &projectMockStreamingRemote{outputs: [][]byte{nil, nil}, errors: []error{nil, nil}},
+			owner:              "alice",
+			args:               []string{"project", "add", "https://github.com/org/repo.git"},
+			wantCalls:          3,
+			wantStreamingCalls: 2,
+			checkStreamingCalls: func(t *testing.T, calls []projectStreamingCall) {
 				t.Helper()
-				// Step 1: git clone
-				if len(calls) < 1 {
-					t.Fatal("expected at least 1 call")
-				}
+				// Streaming call 0: git clone
 				cloneCmd := strings.Join(calls[0].command, " ")
 				if !strings.Contains(cloneCmd, "git clone") {
-					t.Errorf("first call should be git clone, got: %s", cloneCmd)
+					t.Errorf("first streaming call should be git clone, got: %s", cloneCmd)
 				}
 				if !strings.Contains(cloneCmd, "https://github.com/org/repo.git") {
 					t.Errorf("clone should include URL, got: %s", cloneCmd)
@@ -270,29 +315,37 @@ func TestProjectAddCommand(t *testing.T) {
 				if !strings.Contains(cloneCmd, "/mint/projects/repo") {
 					t.Errorf("clone should target /mint/projects/repo, got: %s", cloneCmd)
 				}
-
-				// Step 2: devcontainer up
-				if len(calls) < 2 {
-					t.Fatal("expected at least 2 calls")
-				}
+				// Streaming call 1: devcontainer up
 				buildCmd := strings.Join(calls[1].command, " ")
 				if !strings.Contains(buildCmd, "devcontainer up") {
-					t.Errorf("second call should be devcontainer up, got: %s", buildCmd)
+					t.Errorf("second streaming call should be devcontainer up, got: %s", buildCmd)
 				}
 				if !strings.Contains(buildCmd, "--workspace-folder /mint/projects/repo") {
 					t.Errorf("devcontainer up should target workspace folder, got: %s", buildCmd)
 				}
-
-				// Step 3: tmux session
-				if len(calls) < 3 {
-					t.Fatal("expected 3 calls")
+			},
+			checkCalls: func(t *testing.T, calls []projectRemoteCall) {
+				t.Helper()
+				// Remote call 0: state check (test -d, fails because dir doesn't exist)
+				preCheck := strings.Join(calls[0].command, " ")
+				if !strings.Contains(preCheck, "test -d") {
+					t.Errorf("first remote call should be dir check, got: %s", preCheck)
 				}
+				// Remote call 1: docker ps to discover container
+				dockerCmd := strings.Join(calls[1].command, " ")
+				if !strings.Contains(dockerCmd, "docker ps -q") {
+					t.Errorf("second remote call should be docker ps, got: %s", dockerCmd)
+				}
+				// Remote call 2: tmux new-session with docker exec
 				tmuxCmd := strings.Join(calls[2].command, " ")
 				if !strings.Contains(tmuxCmd, "tmux new-session") {
-					t.Errorf("third call should be tmux new-session, got: %s", tmuxCmd)
+					t.Errorf("third remote call should be tmux new-session, got: %s", tmuxCmd)
 				}
 				if !strings.Contains(tmuxCmd, "-s repo") {
 					t.Errorf("tmux session should use project name, got: %s", tmuxCmd)
+				}
+				if !strings.Contains(tmuxCmd, "docker exec -it abc123def456 /bin/bash") {
+					t.Errorf("tmux session should docker exec into container, got: %s", tmuxCmd)
 				}
 			},
 			checkOutput: func(t *testing.T, output string) {
@@ -316,11 +369,13 @@ func TestProjectAddCommand(t *testing.T) {
 			sendKey: &mockSendKeyForProject{
 				output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
 			},
-			remote:    &projectMockRemote{outputs: [][]byte{nil, nil, nil}, errors: []error{nil, nil, nil}},
-			owner:     "alice",
-			args:      []string{"project", "add", "git@github.com:org/my-app.git"},
-			wantCalls: 3,
-			checkCalls: func(t *testing.T, calls []projectRemoteCall) {
+			remote:             &projectMockRemote{outputs: [][]byte{nil, []byte("container789\n"), nil}, errors: []error{fmt.Errorf("exit status 1"), nil, nil}},
+			streaming:          &projectMockStreamingRemote{outputs: [][]byte{nil, nil}, errors: []error{nil, nil}},
+			owner:              "alice",
+			args:               []string{"project", "add", "git@github.com:org/my-app.git"},
+			wantCalls:          3,
+			wantStreamingCalls: 2,
+			checkStreamingCalls: func(t *testing.T, calls []projectStreamingCall) {
 				t.Helper()
 				cloneCmd := strings.Join(calls[0].command, " ")
 				if !strings.Contains(cloneCmd, "/mint/projects/my-app") {
@@ -336,19 +391,24 @@ func TestProjectAddCommand(t *testing.T) {
 			sendKey: &mockSendKeyForProject{
 				output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
 			},
-			remote:    &projectMockRemote{outputs: [][]byte{nil, nil, nil}, errors: []error{nil, nil, nil}},
-			owner:     "alice",
-			args:      []string{"project", "add", "--name", "custom-name", "https://github.com/org/repo.git"},
-			wantCalls: 3,
+			remote:             &projectMockRemote{outputs: [][]byte{nil, []byte("ctr1\n"), nil}, errors: []error{fmt.Errorf("exit status 1"), nil, nil}},
+			streaming:          &projectMockStreamingRemote{outputs: [][]byte{nil, nil}, errors: []error{nil, nil}},
+			owner:              "alice",
+			args:               []string{"project", "add", "--name", "custom-name", "https://github.com/org/repo.git"},
+			wantCalls:          3,
+			wantStreamingCalls: 2,
 			checkCalls: func(t *testing.T, calls []projectRemoteCall) {
+				t.Helper()
+				tmuxCmd := strings.Join(calls[2].command, " ")
+				if !strings.Contains(tmuxCmd, "-s custom-name") {
+					t.Errorf("tmux session should use custom name, got: %s", tmuxCmd)
+				}
+			},
+			checkStreamingCalls: func(t *testing.T, calls []projectStreamingCall) {
 				t.Helper()
 				cloneCmd := strings.Join(calls[0].command, " ")
 				if !strings.Contains(cloneCmd, "/mint/projects/custom-name") {
 					t.Errorf("clone should use custom name, got: %s", cloneCmd)
-				}
-				tmuxCmd := strings.Join(calls[2].command, " ")
-				if !strings.Contains(tmuxCmd, "-s custom-name") {
-					t.Errorf("tmux session should use custom name, got: %s", tmuxCmd)
 				}
 			},
 		},
@@ -360,11 +420,13 @@ func TestProjectAddCommand(t *testing.T) {
 			sendKey: &mockSendKeyForProject{
 				output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
 			},
-			remote:    &projectMockRemote{outputs: [][]byte{nil, nil, nil}, errors: []error{nil, nil, nil}},
-			owner:     "alice",
-			args:      []string{"project", "add", "--branch", "develop", "https://github.com/org/repo.git"},
-			wantCalls: 3,
-			checkCalls: func(t *testing.T, calls []projectRemoteCall) {
+			remote:             &projectMockRemote{outputs: [][]byte{nil, []byte("ctr1\n"), nil}, errors: []error{fmt.Errorf("exit status 1"), nil, nil}},
+			streaming:          &projectMockStreamingRemote{outputs: [][]byte{nil, nil}, errors: []error{nil, nil}},
+			owner:              "alice",
+			args:               []string{"project", "add", "--branch", "develop", "https://github.com/org/repo.git"},
+			wantCalls:          3,
+			wantStreamingCalls: 2,
+			checkStreamingCalls: func(t *testing.T, calls []projectStreamingCall) {
 				t.Helper()
 				cloneCmd := strings.Join(calls[0].command, " ")
 				if !strings.Contains(cloneCmd, "--branch develop") {
@@ -379,6 +441,7 @@ func TestProjectAddCommand(t *testing.T) {
 			},
 			sendKey:        &mockSendKeyForProject{},
 			remote:         &projectMockRemote{},
+			streaming:      &projectMockStreamingRemote{},
 			owner:          "alice",
 			args:           []string{"project", "add", "https://github.com/org/repo.git"},
 			wantErr:        true,
@@ -391,27 +454,128 @@ func TestProjectAddCommand(t *testing.T) {
 			},
 			sendKey:        &mockSendKeyForProject{},
 			remote:         &projectMockRemote{},
+			streaming:      &projectMockStreamingRemote{},
 			owner:          "alice",
 			args:           []string{"project", "add", "https://github.com/org/repo.git"},
 			wantErr:        true,
 			wantErrContain: "not running",
 		},
 		{
-			name: "clone failure with exists error",
+			name: "resume from build when dir exists but no container",
 			describe: &mockDescribeForProject{
 				output: makeRunningInstanceForProject("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
 			},
 			sendKey: &mockSendKeyForProject{
 				output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
 			},
+			// remote: test -d (exists), docker ps check (empty),
+			//         docker ps for ID after build, tmux new-session
 			remote: &projectMockRemote{
-				errors: []error{fmt.Errorf("fatal: destination path '/mint/projects/repo' already exists")},
+				outputs: [][]byte{nil, []byte(""), []byte("ctr999\n"), nil},
+				errors:  []error{nil, nil, nil, nil},
 			},
-			owner:          "alice",
-			args:           []string{"project", "add", "https://github.com/org/repo.git"},
-			wantErr:        true,
-			wantErrContain: "already exists",
-			wantCalls:      1,
+			// streaming: devcontainer up only (clone skipped)
+			streaming:          &projectMockStreamingRemote{outputs: [][]byte{nil}, errors: []error{nil}},
+			owner:              "alice",
+			args:               []string{"project", "add", "https://github.com/org/repo.git"},
+			wantCalls:          4,
+			wantStreamingCalls: 1,
+			checkStreamingCalls: func(t *testing.T, calls []projectStreamingCall) {
+				t.Helper()
+				// Only devcontainer up should be called (no clone)
+				buildCmd := strings.Join(calls[0].command, " ")
+				if !strings.Contains(buildCmd, "devcontainer up") {
+					t.Errorf("streaming call should be devcontainer up, got: %s", buildCmd)
+				}
+			},
+			checkOutput: func(t *testing.T, output string) {
+				t.Helper()
+				if !strings.Contains(output, "Found existing clone") {
+					t.Errorf("output should indicate resume from existing clone, got: %s", output)
+				}
+				if strings.Contains(output, "Cloning") {
+					t.Errorf("output should NOT show cloning (skipped), got: %s", output)
+				}
+			},
+		},
+		{
+			name: "resume from tmux when dir and container exist",
+			describe: &mockDescribeForProject{
+				output: makeRunningInstanceForProject("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
+			},
+			sendKey: &mockSendKeyForProject{
+				output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
+			},
+			// remote: test -d (exists), docker ps check (container running), tmux has-session (error),
+			//         tmux new-session
+			remote: &projectMockRemote{
+				outputs: [][]byte{nil, []byte("abc123\n"), nil, nil},
+				errors:  []error{nil, nil, fmt.Errorf("exit status 1"), nil},
+			},
+			// streaming: nothing (both clone and devcontainer skipped)
+			streaming:          &projectMockStreamingRemote{},
+			owner:              "alice",
+			args:               []string{"project", "add", "https://github.com/org/repo.git"},
+			wantCalls:          4,
+			wantStreamingCalls: 0,
+			checkCalls: func(t *testing.T, calls []projectRemoteCall) {
+				t.Helper()
+				// Last call should be tmux new-session with docker exec
+				tmuxCmd := strings.Join(calls[3].command, " ")
+				if !strings.Contains(tmuxCmd, "tmux new-session") {
+					t.Errorf("last call should be tmux new-session, got: %s", tmuxCmd)
+				}
+				if !strings.Contains(tmuxCmd, "docker exec -it abc123 /bin/bash") {
+					t.Errorf("tmux should docker exec into container, got: %s", tmuxCmd)
+				}
+			},
+			checkOutput: func(t *testing.T, output string) {
+				t.Helper()
+				if !strings.Contains(output, "Found running container") {
+					t.Errorf("output should indicate resume from running container, got: %s", output)
+				}
+				if strings.Contains(output, "Cloning") {
+					t.Errorf("output should NOT show cloning (skipped), got: %s", output)
+				}
+				if strings.Contains(output, "Building devcontainer") {
+					t.Errorf("output should NOT show building (skipped), got: %s", output)
+				}
+			},
+		},
+		{
+			name: "already complete when dir container and tmux all exist",
+			describe: &mockDescribeForProject{
+				output: makeRunningInstanceForProject("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
+			},
+			sendKey: &mockSendKeyForProject{
+				output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
+			},
+			// remote: test -d (exists), docker ps check (container running), tmux has-session (success)
+			remote: &projectMockRemote{
+				outputs: [][]byte{nil, []byte("abc123\n"), nil},
+				errors:  []error{nil, nil, nil},
+			},
+			// streaming: nothing
+			streaming:          &projectMockStreamingRemote{},
+			owner:              "alice",
+			args:               []string{"project", "add", "https://github.com/org/repo.git"},
+			wantCalls:          3,
+			wantStreamingCalls: 0,
+			checkOutput: func(t *testing.T, output string) {
+				t.Helper()
+				if !strings.Contains(output, "already fully set up") {
+					t.Errorf("output should indicate already set up, got: %s", output)
+				}
+				if strings.Contains(output, "Cloning") {
+					t.Errorf("output should NOT show cloning, got: %s", output)
+				}
+				if strings.Contains(output, "Building devcontainer") {
+					t.Errorf("output should NOT show building, got: %s", output)
+				}
+				if strings.Contains(output, "Creating tmux session") {
+					t.Errorf("output should NOT show session creation, got: %s", output)
+				}
+			},
 		},
 		{
 			name: "devcontainer build failure returns clear error",
@@ -423,24 +587,30 @@ func TestProjectAddCommand(t *testing.T) {
 			},
 			remote: &projectMockRemote{
 				outputs: [][]byte{nil},
+				errors:  []error{fmt.Errorf("exit status 1")},
+			},
+			streaming: &projectMockStreamingRemote{
+				outputs: [][]byte{nil},
 				errors:  []error{nil, fmt.Errorf("devcontainer build failed: Dockerfile syntax error")},
 			},
-			owner:          "alice",
-			args:           []string{"project", "add", "https://github.com/org/repo.git"},
-			wantErr:        true,
-			wantErrContain: "devcontainer",
-			wantCalls:      2,
+			owner:              "alice",
+			args:               []string{"project", "add", "https://github.com/org/repo.git"},
+			wantErr:            true,
+			wantErrContain:     "devcontainer",
+			wantCalls:          1,
+			wantStreamingCalls: 2,
 		},
 		{
 			name: "missing git url argument",
 			describe: &mockDescribeForProject{
 				output: makeRunningInstanceForProject("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
 			},
-			sendKey: &mockSendKeyForProject{},
-			remote:  &projectMockRemote{},
-			owner:   "alice",
-			args:    []string{"project", "add"},
-			wantErr: true,
+			sendKey:   &mockSendKeyForProject{},
+			remote:    &projectMockRemote{},
+			streaming: &projectMockStreamingRemote{},
+			owner:     "alice",
+			args:      []string{"project", "add"},
+			wantErr:   true,
 		},
 		{
 			name: "non-default vm name",
@@ -450,10 +620,12 @@ func TestProjectAddCommand(t *testing.T) {
 			sendKey: &mockSendKeyForProject{
 				output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
 			},
-			remote:    &projectMockRemote{outputs: [][]byte{nil, nil, nil}, errors: []error{nil, nil, nil}},
-			owner:     "alice",
-			args:      []string{"--vm", "dev", "project", "add", "https://github.com/org/repo.git"},
-			wantCalls: 3,
+			remote:             &projectMockRemote{outputs: [][]byte{nil, []byte("ctr1\n"), nil}, errors: []error{fmt.Errorf("exit status 1"), nil, nil}},
+			streaming:          &projectMockStreamingRemote{outputs: [][]byte{nil, nil}, errors: []error{nil, nil}},
+			owner:              "alice",
+			args:               []string{"--vm", "dev", "project", "add", "https://github.com/org/repo.git"},
+			wantCalls:          3,
+			wantStreamingCalls: 2,
 			checkCalls: func(t *testing.T, calls []projectRemoteCall) {
 				t.Helper()
 				if calls[0].host != "10.0.0.1" {
@@ -473,6 +645,7 @@ func TestProjectAddCommand(t *testing.T) {
 				output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
 			},
 			remote:         &projectMockRemote{},
+			streaming:      &projectMockStreamingRemote{},
 			owner:          "alice",
 			args:           []string{"project", "add", "--name", "foo;rm -rf /", "https://github.com/org/repo.git"},
 			wantErr:        true,
@@ -488,6 +661,7 @@ func TestProjectAddCommand(t *testing.T) {
 				output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
 			},
 			remote:         &projectMockRemote{},
+			streaming:      &projectMockStreamingRemote{},
 			owner:          "alice",
 			args:           []string{"project", "add", "--name", "foo`whoami`", "https://github.com/org/repo.git"},
 			wantErr:        true,
@@ -501,6 +675,7 @@ func TestProjectAddCommand(t *testing.T) {
 			},
 			sendKey:        &mockSendKeyForProject{},
 			remote:         &projectMockRemote{},
+			streaming:      &projectMockStreamingRemote{},
 			owner:          "alice",
 			args:           []string{"project", "add", "https://github.com/org/repo.git"},
 			wantErr:        true,
@@ -514,10 +689,12 @@ func TestProjectAddCommand(t *testing.T) {
 			sendKey: &mockSendKeyForProject{
 				output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
 			},
-			remote:    &projectMockRemote{outputs: [][]byte{nil, nil, nil}, errors: []error{nil, nil, nil}},
-			owner:     "alice",
-			args:      []string{"project", "add", "https://github.com/org/repo.git"},
-			wantCalls: 3,
+			remote:             &projectMockRemote{outputs: [][]byte{nil, []byte("ctr1\n"), nil}, errors: []error{fmt.Errorf("exit status 1"), nil, nil}},
+			streaming:          &projectMockStreamingRemote{outputs: [][]byte{nil, nil}, errors: []error{nil, nil}},
+			owner:              "alice",
+			args:               []string{"project", "add", "https://github.com/org/repo.git"},
+			wantCalls:          3,
+			wantStreamingCalls: 2,
 			checkCalls: func(t *testing.T, calls []projectRemoteCall) {
 				t.Helper()
 				for i, call := range calls {
@@ -539,6 +716,41 @@ func TestProjectAddCommand(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "tmux session created as bare session without docker exec",
+			describe: &mockDescribeForProject{
+				output: makeRunningInstanceForProject("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
+			},
+			sendKey: &mockSendKeyForProject{
+				output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
+			},
+			// remote: test -d (dir doesn't exist), docker ps (empty), tmux new-session (bare)
+			remote: &projectMockRemote{
+				outputs: [][]byte{nil, []byte(""), nil},
+				errors:  []error{fmt.Errorf("exit status 1"), nil, nil},
+			},
+			streaming:          &projectMockStreamingRemote{outputs: [][]byte{nil, nil}, errors: []error{nil, nil}},
+			owner:              "alice",
+			args:               []string{"project", "add", "https://github.com/org/repo.git"},
+			wantCalls:          3,
+			wantStreamingCalls: 2,
+			checkCalls: func(t *testing.T, calls []projectRemoteCall) {
+				t.Helper()
+				// Remote call 1: docker ps (returns empty)
+				dockerCmd := strings.Join(calls[1].command, " ")
+				if !strings.Contains(dockerCmd, "docker ps -q") {
+					t.Errorf("second remote call should be docker ps, got: %s", dockerCmd)
+				}
+				// Remote call 2: bare tmux session (no docker exec)
+				tmuxCmd := strings.Join(calls[2].command, " ")
+				if !strings.Contains(tmuxCmd, "tmux new-session") {
+					t.Errorf("third remote call should be tmux new-session, got: %s", tmuxCmd)
+				}
+				if strings.Contains(tmuxCmd, "docker exec") {
+					t.Errorf("tmux session should NOT have docker exec when container not found, got: %s", tmuxCmd)
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -546,10 +758,11 @@ func TestProjectAddCommand(t *testing.T) {
 			buf := new(bytes.Buffer)
 
 			deps := &projectAddDeps{
-				describe: tt.describe,
-				sendKey:  tt.sendKey,
-				owner:    tt.owner,
-				remote:   tt.remote.run,
+				describe:        tt.describe,
+				sendKey:         tt.sendKey,
+				owner:           tt.owner,
+				remote:          tt.remote.run,
+				streamingRunner: tt.streaming.run,
 			}
 
 			projectCmd := newProjectCommandWithDeps(deps)
@@ -571,6 +784,9 @@ func TestProjectAddCommand(t *testing.T) {
 				if tt.wantCalls > 0 && len(tt.remote.calls) != tt.wantCalls {
 					t.Errorf("expected %d remote calls, got %d", tt.wantCalls, len(tt.remote.calls))
 				}
+				if tt.wantStreamingCalls > 0 && len(tt.streaming.calls) != tt.wantStreamingCalls {
+					t.Errorf("expected %d streaming calls, got %d", tt.wantStreamingCalls, len(tt.streaming.calls))
+				}
 				return
 			}
 
@@ -582,8 +798,16 @@ func TestProjectAddCommand(t *testing.T) {
 				t.Errorf("expected %d remote calls, got %d", tt.wantCalls, len(tt.remote.calls))
 			}
 
+			if tt.wantStreamingCalls > 0 && len(tt.streaming.calls) != tt.wantStreamingCalls {
+				t.Errorf("expected %d streaming calls, got %d", tt.wantStreamingCalls, len(tt.streaming.calls))
+			}
+
 			if tt.checkCalls != nil {
 				tt.checkCalls(t, tt.remote.calls)
+			}
+
+			if tt.checkStreamingCalls != nil {
+				tt.checkStreamingCalls(t, tt.streaming.calls)
 			}
 
 			if tt.checkOutput != nil {
@@ -973,16 +1197,22 @@ func TestProjectAddTOFUKeyscanTriggered(t *testing.T) {
 	}
 
 	remote := &projectMockRemote{
-		outputs: [][]byte{nil, nil, nil},
-		errors:  []error{nil, nil, nil},
+		// remote: test -d (dir doesn't exist), docker ps, tmux new-session
+		outputs: [][]byte{nil, []byte("ctr1\n"), nil},
+		errors:  []error{fmt.Errorf("exit status 1"), nil, nil},
+	}
+	streaming := &projectMockStreamingRemote{
+		outputs: [][]byte{nil, nil},
+		errors:  []error{nil, nil},
 	}
 	deps := &projectAddDeps{
-		describe:       &mockDescribeForProject{output: makeRunningInstanceForProject("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a")},
-		sendKey:        &mockSendKeyForProject{output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true}},
-		owner:          "alice",
-		remote:         remote.run,
-		hostKeyStore:   sshconfig.NewHostKeyStore(t.TempDir()),
-		hostKeyScanner: scanner,
+		describe:        &mockDescribeForProject{output: makeRunningInstanceForProject("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a")},
+		sendKey:         &mockSendKeyForProject{output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true}},
+		owner:           "alice",
+		remote:          remote.run,
+		streamingRunner: streaming.run,
+		hostKeyStore:    sshconfig.NewHostKeyStore(t.TempDir()),
+		hostKeyScanner:  scanner,
 	}
 
 	projectCmd := newProjectCommandWithDeps(deps)
@@ -999,9 +1229,12 @@ func TestProjectAddTOFUKeyscanTriggered(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// 3 remote calls (clone, devcontainer up, tmux), keyscan once.
+	// 3 remote calls (test -d, docker ps, tmux) + 2 streaming (clone, devcontainer up), keyscan once.
 	if len(remote.calls) != 3 {
 		t.Fatalf("expected 3 remote calls, got %d", len(remote.calls))
+	}
+	if len(streaming.calls) != 2 {
+		t.Fatalf("expected 2 streaming calls, got %d", len(streaming.calls))
 	}
 	if scanCalls != 1 {
 		t.Errorf("keyscan should be called exactly once (cached), got %d calls", scanCalls)
@@ -1060,17 +1293,23 @@ func TestProjectRebuildTOFUKeyscanTriggered(t *testing.T) {
 	}
 
 	remote := &projectMockRemote{
-		outputs: [][]byte{nil, nil, nil, nil},
-		errors:  []error{nil, nil, nil, nil},
+		// remote: test -d, stop, rm, docker ps, tmux kill, tmux new
+		outputs: [][]byte{nil, nil, nil, []byte("newctr\n"), nil, nil},
+		errors:  []error{nil, nil, nil, nil, nil, nil},
+	}
+	streaming := &projectMockStreamingRemote{
+		outputs: [][]byte{nil},
+		errors:  []error{nil},
 	}
 	deps := &projectRebuildDeps{
-		describe:       &mockDescribeForProject{output: makeRunningInstanceForProject("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a")},
-		sendKey:        &mockSendKeyForProject{output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true}},
-		owner:          "alice",
-		remote:         remote.run,
-		stdin:          strings.NewReader(""),
-		hostKeyStore:   sshconfig.NewHostKeyStore(t.TempDir()),
-		hostKeyScanner: scanner,
+		describe:        &mockDescribeForProject{output: makeRunningInstanceForProject("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a")},
+		sendKey:         &mockSendKeyForProject{output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true}},
+		owner:           "alice",
+		remote:          remote.run,
+		streamingRunner: streaming.run,
+		stdin:           strings.NewReader(""),
+		hostKeyStore:    sshconfig.NewHostKeyStore(t.TempDir()),
+		hostKeyScanner:  scanner,
 	}
 
 	projectCmd := newProjectCommandWithRebuildDeps(deps)
@@ -1087,9 +1326,12 @@ func TestProjectRebuildTOFUKeyscanTriggered(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// 4 remote calls (test, stop, rm, devcontainer up), keyscan once.
-	if len(remote.calls) != 4 {
-		t.Fatalf("expected 4 remote calls, got %d", len(remote.calls))
+	// 6 remote calls (test -d, stop, rm, docker ps, tmux kill, tmux new) + 1 streaming (devcontainer up), keyscan once.
+	if len(remote.calls) != 6 {
+		t.Fatalf("expected 6 remote calls, got %d", len(remote.calls))
+	}
+	if len(streaming.calls) != 1 {
+		t.Fatalf("expected 1 streaming call, got %d", len(streaming.calls))
 	}
 	if scanCalls != 1 {
 		t.Errorf("keyscan should be called exactly once (cached), got %d calls", scanCalls)
@@ -1140,18 +1382,20 @@ func TestProjectRebuildTOFUHostKeyMismatch(t *testing.T) {
 
 func TestProjectRebuildCommand(t *testing.T) {
 	tests := []struct {
-		name           string
-		describe       *mockDescribeForProject
-		sendKey        *mockSendKeyForProject
-		remote         *projectMockRemote
-		owner          string
-		args           []string
-		stdinInput     string
-		wantErr        bool
-		wantErrContain string
-		wantCalls      int
-		checkCalls     func(t *testing.T, calls []projectRemoteCall)
-		checkOutput    func(t *testing.T, output string)
+		name               string
+		describe           *mockDescribeForProject
+		sendKey            *mockSendKeyForProject
+		remote             *projectMockRemote
+		streaming          *projectMockStreamingRemote
+		owner              string
+		args               []string
+		stdinInput         string
+		wantErr            bool
+		wantErrContain     string
+		wantCalls          int
+		wantStreamingCalls int
+		checkCalls         func(t *testing.T, calls []projectRemoteCall)
+		checkOutput        func(t *testing.T, output string)
 	}{
 		{
 			name: "successful rebuild with yes flag",
@@ -1161,13 +1405,17 @@ func TestProjectRebuildCommand(t *testing.T) {
 			sendKey: &mockSendKeyForProject{
 				output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
 			},
+			// remote: test -d, stop, rm, docker ps, tmux kill, tmux new
 			remote: &projectMockRemote{
-				outputs: [][]byte{nil, nil, nil, nil},
-				errors:  []error{nil, nil, nil, nil},
+				outputs: [][]byte{nil, nil, nil, []byte("newctr789\n"), nil, nil},
+				errors:  []error{nil, nil, nil, nil, nil, nil},
 			},
-			owner:     "alice",
-			args:      []string{"--yes", "project", "rebuild", "myproject"},
-			wantCalls: 4,
+			// streaming: devcontainer up
+			streaming:          &projectMockStreamingRemote{outputs: [][]byte{nil}, errors: []error{nil}},
+			owner:              "alice",
+			args:               []string{"--yes", "project", "rebuild", "myproject"},
+			wantCalls:          6,
+			wantStreamingCalls: 1,
 			checkCalls: func(t *testing.T, calls []projectRemoteCall) {
 				t.Helper()
 				// Call 0: test -d /mint/projects/myproject
@@ -1188,13 +1436,32 @@ func TestProjectRebuildCommand(t *testing.T) {
 				if !strings.Contains(rmCmd, "docker rm") {
 					t.Errorf("third call should remove container, got: %s", rmCmd)
 				}
-				// Call 3: devcontainer up
-				buildCmd := strings.Join(calls[3].command, " ")
-				if !strings.Contains(buildCmd, "devcontainer up") {
-					t.Errorf("fourth call should rebuild, got: %s", buildCmd)
+				// Call 3: docker ps to discover new container
+				dockerCmd := strings.Join(calls[3].command, " ")
+				if !strings.Contains(dockerCmd, "docker ps -q") {
+					t.Errorf("fourth call should be docker ps, got: %s", dockerCmd)
 				}
-				if !strings.Contains(buildCmd, "--workspace-folder /mint/projects/myproject") {
-					t.Errorf("rebuild should target workspace folder, got: %s", buildCmd)
+				if !strings.Contains(dockerCmd, "devcontainer.local_folder=/mint/projects/myproject") {
+					t.Errorf("docker ps should filter by project path, got: %s", dockerCmd)
+				}
+				// Call 4: tmux kill-session
+				killCmd := strings.Join(calls[4].command, " ")
+				if !strings.Contains(killCmd, "tmux kill-session") {
+					t.Errorf("fifth call should kill tmux session, got: %s", killCmd)
+				}
+				if !strings.Contains(killCmd, "-t myproject") {
+					t.Errorf("kill-session should target project name, got: %s", killCmd)
+				}
+				// Call 5: tmux new-session with docker exec
+				tmuxCmd := strings.Join(calls[5].command, " ")
+				if !strings.Contains(tmuxCmd, "tmux new-session") {
+					t.Errorf("sixth call should be tmux new-session, got: %s", tmuxCmd)
+				}
+				if !strings.Contains(tmuxCmd, "-s myproject") {
+					t.Errorf("tmux session should use project name, got: %s", tmuxCmd)
+				}
+				if !strings.Contains(tmuxCmd, "docker exec -it newctr789 /bin/bash") {
+					t.Errorf("tmux session should docker exec into container, got: %s", tmuxCmd)
 				}
 			},
 			checkOutput: func(t *testing.T, output string) {
@@ -1225,13 +1492,15 @@ func TestProjectRebuildCommand(t *testing.T) {
 				output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
 			},
 			remote: &projectMockRemote{
-				outputs: [][]byte{nil, nil, nil, nil},
-				errors:  []error{nil, nil, nil, nil},
+				outputs: [][]byte{nil, nil, nil, []byte("ctr123\n"), nil, nil},
+				errors:  []error{nil, nil, nil, nil, nil, nil},
 			},
-			owner:      "alice",
-			args:       []string{"project", "rebuild", "myproject"},
-			stdinInput: "myproject\n",
-			wantCalls:  4,
+			streaming:          &projectMockStreamingRemote{outputs: [][]byte{nil}, errors: []error{nil}},
+			owner:              "alice",
+			args:               []string{"project", "rebuild", "myproject"},
+			stdinInput:         "myproject\n",
+			wantCalls:          6,
+			wantStreamingCalls: 1,
 			checkOutput: func(t *testing.T, output string) {
 				t.Helper()
 				if !strings.Contains(output, "Type the project name to confirm") {
@@ -1254,6 +1523,7 @@ func TestProjectRebuildCommand(t *testing.T) {
 				outputs: [][]byte{nil},
 				errors:  []error{nil},
 			},
+			streaming:      &projectMockStreamingRemote{},
 			owner:          "alice",
 			args:           []string{"project", "rebuild", "myproject"},
 			stdinInput:     "wrong-name\n",
@@ -1273,6 +1543,7 @@ func TestProjectRebuildCommand(t *testing.T) {
 				outputs: [][]byte{nil},
 				errors:  []error{nil},
 			},
+			streaming:      &projectMockStreamingRemote{},
 			owner:          "alice",
 			args:           []string{"project", "rebuild", "myproject"},
 			stdinInput:     "",
@@ -1291,6 +1562,7 @@ func TestProjectRebuildCommand(t *testing.T) {
 			remote: &projectMockRemote{
 				errors: []error{fmt.Errorf("exit status 1")},
 			},
+			streaming:      &projectMockStreamingRemote{},
 			owner:          "alice",
 			args:           []string{"--yes", "project", "rebuild", "nonexistent"},
 			wantErr:        true,
@@ -1306,6 +1578,7 @@ func TestProjectRebuildCommand(t *testing.T) {
 				output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
 			},
 			remote:         &projectMockRemote{},
+			streaming:      &projectMockStreamingRemote{},
 			owner:          "alice",
 			args:           []string{"--yes", "project", "rebuild", "foo$(whoami)"},
 			wantErr:        true,
@@ -1321,6 +1594,7 @@ func TestProjectRebuildCommand(t *testing.T) {
 				output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
 			},
 			remote:         &projectMockRemote{},
+			streaming:      &projectMockStreamingRemote{},
 			owner:          "alice",
 			args:           []string{"--yes", "project", "rebuild", "foo|cat /etc/passwd"},
 			wantErr:        true,
@@ -1334,6 +1608,7 @@ func TestProjectRebuildCommand(t *testing.T) {
 			},
 			sendKey:        &mockSendKeyForProject{},
 			remote:         &projectMockRemote{},
+			streaming:      &projectMockStreamingRemote{},
 			owner:          "alice",
 			args:           []string{"--yes", "project", "rebuild", "myproject"},
 			wantErr:        true,
@@ -1346,6 +1621,7 @@ func TestProjectRebuildCommand(t *testing.T) {
 			},
 			sendKey:        &mockSendKeyForProject{},
 			remote:         &projectMockRemote{},
+			streaming:      &projectMockStreamingRemote{},
 			owner:          "alice",
 			args:           []string{"--yes", "project", "rebuild", "myproject"},
 			wantErr:        true,
@@ -1361,24 +1637,29 @@ func TestProjectRebuildCommand(t *testing.T) {
 			},
 			remote: &projectMockRemote{
 				outputs: [][]byte{nil, nil, nil},
-				errors:  []error{nil, nil, nil, fmt.Errorf("Dockerfile syntax error")},
+				errors:  []error{nil, nil, nil},
 			},
-			owner:          "alice",
-			args:           []string{"--yes", "project", "rebuild", "myproject"},
-			wantErr:        true,
-			wantErrContain: "rebuilding devcontainer",
-			wantCalls:      4,
+			streaming: &projectMockStreamingRemote{
+				errors: []error{fmt.Errorf("Dockerfile syntax error")},
+			},
+			owner:              "alice",
+			args:               []string{"--yes", "project", "rebuild", "myproject"},
+			wantErr:            true,
+			wantErrContain:     "rebuilding devcontainer",
+			wantCalls:          3,
+			wantStreamingCalls: 1,
 		},
 		{
 			name: "missing project name argument",
 			describe: &mockDescribeForProject{
 				output: makeRunningInstanceForProject("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
 			},
-			sendKey: &mockSendKeyForProject{},
-			remote:  &projectMockRemote{},
-			owner:   "alice",
-			args:    []string{"project", "rebuild"},
-			wantErr: true,
+			sendKey:   &mockSendKeyForProject{},
+			remote:    &projectMockRemote{},
+			streaming: &projectMockStreamingRemote{},
+			owner:     "alice",
+			args:      []string{"project", "rebuild"},
+			wantErr:   true,
 		},
 		{
 			name: "remote commands use correct SSH params",
@@ -1389,12 +1670,14 @@ func TestProjectRebuildCommand(t *testing.T) {
 				output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
 			},
 			remote: &projectMockRemote{
-				outputs: [][]byte{nil, nil, nil, nil},
-				errors:  []error{nil, nil, nil, nil},
+				outputs: [][]byte{nil, nil, nil, []byte("ctr1\n"), nil, nil},
+				errors:  []error{nil, nil, nil, nil, nil, nil},
 			},
-			owner:     "alice",
-			args:      []string{"--yes", "project", "rebuild", "myproject"},
-			wantCalls: 4,
+			streaming:          &projectMockStreamingRemote{outputs: [][]byte{nil}, errors: []error{nil}},
+			owner:              "alice",
+			args:               []string{"--yes", "project", "rebuild", "myproject"},
+			wantCalls:          6,
+			wantStreamingCalls: 1,
 			checkCalls: func(t *testing.T, calls []projectRemoteCall) {
 				t.Helper()
 				for i, call := range calls {
@@ -1428,6 +1711,7 @@ func TestProjectRebuildCommand(t *testing.T) {
 				outputs: [][]byte{nil},
 				errors:  []error{nil, fmt.Errorf("connection reset")},
 			},
+			streaming:      &projectMockStreamingRemote{},
 			owner:          "alice",
 			args:           []string{"--yes", "project", "rebuild", "myproject"},
 			wantErr:        true,
@@ -1446,6 +1730,7 @@ func TestProjectRebuildCommand(t *testing.T) {
 				outputs: [][]byte{nil, nil},
 				errors:  []error{nil, nil, fmt.Errorf("permission denied")},
 			},
+			streaming: &projectMockStreamingRemote{},
 			owner:          "alice",
 			args:           []string{"--yes", "project", "rebuild", "myproject"},
 			wantErr:        true,
@@ -1459,11 +1744,12 @@ func TestProjectRebuildCommand(t *testing.T) {
 			buf := new(bytes.Buffer)
 
 			deps := &projectRebuildDeps{
-				describe: tt.describe,
-				sendKey:  tt.sendKey,
-				owner:    tt.owner,
-				remote:   tt.remote.run,
-				stdin:    strings.NewReader(tt.stdinInput),
+				describe:        tt.describe,
+				sendKey:         tt.sendKey,
+				owner:           tt.owner,
+				remote:          tt.remote.run,
+				streamingRunner: tt.streaming.run,
+				stdin:           strings.NewReader(tt.stdinInput),
 			}
 
 			projectCmd := newProjectCommandWithRebuildDeps(deps)
@@ -1485,6 +1771,9 @@ func TestProjectRebuildCommand(t *testing.T) {
 				if tt.wantCalls > 0 && len(tt.remote.calls) != tt.wantCalls {
 					t.Errorf("expected %d remote calls, got %d", tt.wantCalls, len(tt.remote.calls))
 				}
+				if tt.wantStreamingCalls > 0 && len(tt.streaming.calls) != tt.wantStreamingCalls {
+					t.Errorf("expected %d streaming calls, got %d", tt.wantStreamingCalls, len(tt.streaming.calls))
+				}
 				return
 			}
 
@@ -1494,6 +1783,10 @@ func TestProjectRebuildCommand(t *testing.T) {
 
 			if tt.wantCalls > 0 && len(tt.remote.calls) != tt.wantCalls {
 				t.Errorf("expected %d remote calls, got %d", tt.wantCalls, len(tt.remote.calls))
+			}
+
+			if tt.wantStreamingCalls > 0 && len(tt.streaming.calls) != tt.wantStreamingCalls {
+				t.Errorf("expected %d streaming calls, got %d", tt.wantStreamingCalls, len(tt.streaming.calls))
 			}
 
 			if tt.checkCalls != nil {

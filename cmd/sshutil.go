@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -108,6 +109,77 @@ func defaultRemoteRunner(
 	}
 
 	return stdout.Bytes(), nil
+}
+
+// StreamingRemoteRunner executes a remote command while streaming stderr to the
+// provided writer. Returns captured stdout. Used for long-running commands where
+// users need progress feedback (e.g., git clone, devcontainer up).
+type StreamingRemoteRunner func(
+	ctx context.Context,
+	sendKey mintaws.SendSSHPublicKeyAPI,
+	instanceID string,
+	az string,
+	host string,
+	port int,
+	user string,
+	command []string,
+	stderr io.Writer,
+) ([]byte, error)
+
+// defaultStreamingRemoteRunner is the production implementation of
+// StreamingRemoteRunner. It generates an ephemeral key pair, pushes the public
+// key via Instance Connect, and runs the command over SSH — streaming stderr to
+// the provided writer while capturing stdout for programmatic use.
+func defaultStreamingRemoteRunner(
+	ctx context.Context,
+	sendKey mintaws.SendSSHPublicKeyAPI,
+	instanceID string,
+	az string,
+	host string,
+	port int,
+	user string,
+	command []string,
+	stderr io.Writer,
+) ([]byte, error) {
+	// Generate ephemeral key pair.
+	pubKey, privKeyPath, cleanup, err := generateEphemeralKeyPair()
+	if err != nil {
+		return nil, fmt.Errorf("generating ephemeral SSH key: %w", err)
+	}
+	defer cleanup()
+
+	// Push public key via Instance Connect.
+	_, err = sendKey.SendSSHPublicKey(ctx, &ec2instanceconnect.SendSSHPublicKeyInput{
+		InstanceId:       aws.String(instanceID),
+		InstanceOSUser:   aws.String(user),
+		SSHPublicKey:     aws.String(pubKey),
+		AvailabilityZone: aws.String(az),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("pushing SSH key via Instance Connect: %w", err)
+	}
+
+	// Build ssh command for non-interactive execution.
+	sshArgs := []string{
+		"-i", privKeyPath,
+		"-p", fmt.Sprintf("%d", port),
+		"-o", "StrictHostKeyChecking=no",
+		"-o", "UserKnownHostsFile=/dev/null",
+		"-o", "BatchMode=yes",
+		"-o", "ConnectTimeout=10",
+		fmt.Sprintf("%s@%s", user, host),
+	}
+	sshArgs = append(sshArgs, command...)
+
+	cmd := exec.CommandContext(ctx, "ssh", sshArgs...)
+	cmd.Stderr = stderr
+
+	stdout, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("remote command failed: %w", err)
+	}
+
+	return stdout, nil
 }
 
 // TOFURemoteRunner wraps a RemoteCommandRunner with TOFU host key
