@@ -1,0 +1,34 @@
+# Claude Code
+.claude/plans/
+
+# Go build artifacts
+/mint
+/dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test artifacts
+*.test
+*.out
+cover.html
+coverage.txt
+
+# GoReleaser
+/dist/
+
+# Dependency
+vendor/
+
+# IDE / Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
