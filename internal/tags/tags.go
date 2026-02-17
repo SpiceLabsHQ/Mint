@@ -47,6 +47,11 @@ const (
 
 	// TagProjectVolumeGB stores the project EBS volume size in GB (ADR-0004).
 	TagProjectVolumeGB = "mint:project-volume-gb"
+
+	// TagPendingAttach marks a project EBS volume during mint recreate for
+	// failure recovery. Tag existence signals pending reattachment; cleared
+	// after successful attach.
+	TagPendingAttach = "mint:pending-attach"
 )
 
 // ---------------------------------------------------------------------------

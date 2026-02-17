@@ -65,6 +65,9 @@ func NewRootCommand() *cobra.Command {
 	rootCmd.AddCommand(newProjectCommand())
 	rootCmd.AddCommand(newExtendCommand())
 
+	// Phase 3: Lifecycle & health commands
+	rootCmd.AddCommand(newResizeCommand())
+
 	return rootCmd
 }
 
