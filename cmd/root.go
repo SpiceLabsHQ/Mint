@@ -40,6 +40,8 @@ func NewRootCommand() *cobra.Command {
 	rootCmd.AddCommand(newSSHConfigCommand())
 	rootCmd.AddCommand(newListCommand())
 	rootCmd.AddCommand(newStatusCommand())
+	rootCmd.AddCommand(newSSHCommand())
+	rootCmd.AddCommand(newCodeCommand())
 
 	return rootCmd
 }
