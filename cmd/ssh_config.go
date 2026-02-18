@@ -92,8 +92,8 @@ func runSSHConfig(cmd *cobra.Command, args []string) error {
 	if !cfg.SSHConfigApproved {
 		if !yes {
 			return fmt.Errorf(
-				"mint needs permission to write to %s (ADR-0015). "+
-					"Run with --yes to approve, or set ssh_config_approved=true in mint config",
+				"mint needs permission to write to %s (ADR-0015) — "+
+					"run with --yes to approve, or set ssh_config_approved=true in mint config",
 				sshConfigPath,
 			)
 		}

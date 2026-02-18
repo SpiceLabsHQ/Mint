@@ -1649,6 +1649,70 @@ func TestProvisionerCrashAfterTerminateRecovery(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Tests: Volume IOPS configuration
+// ---------------------------------------------------------------------------
+
+func TestProvisionerDefaultVolumeIOPS(t *testing.T) {
+	// When VolumeIOPS is 0 in ProvisionConfig, the AWS call should use the
+	// gp3 AWS default (3000). We verify by checking that Iops is set to 3000.
+	m := newUpHappyMocks()
+	p := m.build()
+
+	cfg := defaultConfig()
+	cfg.VolumeIOPS = 0 // should default to 3000
+
+	_, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !m.createVolume.called {
+		t.Fatal("CreateVolume was not called")
+	}
+	if aws.ToInt32(m.createVolume.input.Iops) != 3000 {
+		t.Errorf("volume Iops = %d, want 3000 (default)", aws.ToInt32(m.createVolume.input.Iops))
+	}
+}
+
+func TestProvisionerCustomVolumeIOPS(t *testing.T) {
+	// When VolumeIOPS is explicitly set, it should be passed to CreateVolume.
+	m := newUpHappyMocks()
+	p := m.build()
+
+	cfg := defaultConfig()
+	cfg.VolumeIOPS = 6000
+
+	_, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !m.createVolume.called {
+		t.Fatal("CreateVolume was not called")
+	}
+	if aws.ToInt32(m.createVolume.input.Iops) != 6000 {
+		t.Errorf("volume Iops = %d, want 6000", aws.ToInt32(m.createVolume.input.Iops))
+	}
+}
+
+func TestProvisionerMaxVolumeIOPS(t *testing.T) {
+	m := newUpHappyMocks()
+	p := m.build()
+
+	cfg := defaultConfig()
+	cfg.VolumeIOPS = 16000
+
+	_, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if aws.ToInt32(m.createVolume.input.Iops) != 16000 {
+		t.Errorf("volume Iops = %d, want 16000", aws.ToInt32(m.createVolume.input.Iops))
+	}
+}
+
 func TestProvisionerNoPollOnRunningVM(t *testing.T) {
 	m := newUpHappyMocks()
 	m.describeInstances.output = &ec2.DescribeInstancesOutput{

@@ -246,14 +246,14 @@ func pickSession(ctx context.Context, cmd *cobra.Command, deps *connectDeps, fou
 	)
 	if err != nil {
 		if isTmuxNoSessionsError(err) {
-			return "", fmt.Errorf("No active sessions. Create one with: mint project add <git-url>")
+			return "", fmt.Errorf("no active sessions — create one with: mint project add <git-url>")
 		}
 		return "", fmt.Errorf("listing tmux sessions: %w", err)
 	}
 
 	sessions := parseTmuxSessions(string(output))
 	if len(sessions) == 0 {
-		return "", fmt.Errorf("No active sessions. Create one with: mint project add <git-url>")
+		return "", fmt.Errorf("no active sessions — create one with: mint project add <git-url>")
 	}
 
 	// Single session: auto-select.

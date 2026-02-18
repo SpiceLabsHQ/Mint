@@ -348,12 +348,18 @@ func (u *Updater) Apply(newBinaryPath, currentBinaryPath string) error {
 //
 //	mint_<version>_<os>_<arch>.tar.gz (linux/darwin)
 //	mint_<version>_<os>_<arch>.zip    (windows)
+//
+// GoReleaser's name_template uses {{ .Version }}, which strips the leading
+// "v" from a tag (e.g. tag "v1.2.0" → version "1.2.0"). tagName here is
+// the raw GitHub tag (e.g. "v1.2.0"), so we strip the prefix before
+// interpolating to produce a name that matches the actual release asset.
 func assetNameForPlatform(tagName string) string {
 	ext := ".tar.gz"
 	if runtime.GOOS == "windows" {
 		ext = ".zip"
 	}
-	return fmt.Sprintf("mint_%s_%s_%s%s", tagName, runtime.GOOS, runtime.GOARCH, ext)
+	version := strings.TrimPrefix(tagName, "v")
+	return fmt.Sprintf("mint_%s_%s_%s%s", version, runtime.GOOS, runtime.GOARCH, ext)
 }
 
 // extractBinaryFromTarGz reads a tar.gz stream and extracts the file named

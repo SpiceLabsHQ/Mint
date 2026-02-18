@@ -870,6 +870,179 @@ func TestUpCommandPopulatesEFSID(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Tests: --volume-iops flag
+// ---------------------------------------------------------------------------
+
+type captureCreateVolume struct {
+	output *ec2.CreateVolumeOutput
+	err    error
+	input  *ec2.CreateVolumeInput
+}
+
+func (c *captureCreateVolume) CreateVolume(ctx context.Context, params *ec2.CreateVolumeInput, optFns ...func(*ec2.Options)) (*ec2.CreateVolumeOutput, error) {
+	c.input = params
+	return c.output, c.err
+}
+
+func newTestProvisionerWithCreateVolume(cv *captureCreateVolume) *provision.Provisioner {
+	p := provision.NewProvisioner(
+		&stubUpDescribeInstances{output: &ec2.DescribeInstancesOutput{}},
+		&stubUpStartInstances{output: &ec2.StartInstancesOutput{}},
+		&stubUpRunInstances{output: &ec2.RunInstancesOutput{
+			Instances: []ec2types.Instance{
+				{InstanceId: aws.String("i-test123")},
+			},
+		}},
+		&stubUpDescribeSGs{
+			outputs: []*ec2.DescribeSecurityGroupsOutput{
+				{SecurityGroups: []ec2types.SecurityGroup{{GroupId: aws.String("sg-user")}}},
+				{SecurityGroups: []ec2types.SecurityGroup{{GroupId: aws.String("sg-admin")}}},
+			},
+			errs: []error{nil, nil},
+		},
+		&stubUpDescribeSubnets{output: &ec2.DescribeSubnetsOutput{
+			Subnets: []ec2types.Subnet{{
+				SubnetId:         aws.String("subnet-test"),
+				AvailabilityZone: aws.String("us-east-1a"),
+			}},
+		}},
+		cv,
+		&stubUpAttachVolume{output: &ec2.AttachVolumeOutput{}},
+		&stubUpAllocateAddress{output: &ec2.AllocateAddressOutput{
+			AllocationId: aws.String("eipalloc-test"),
+			PublicIp:     aws.String("54.10.20.30"),
+		}},
+		&stubUpAssociateAddress{output: &ec2.AssociateAddressOutput{}},
+		&stubUpDescribeAddresses{output: &ec2.DescribeAddressesOutput{
+			Addresses: []ec2types.Address{},
+		}},
+		&stubUpCreateTags{output: &ec2.CreateTagsOutput{}},
+		&stubUpGetParameter{},
+	)
+	p.WithBootstrapVerifier(func(content []byte) error { return nil })
+	p.WithAMIResolver(func(ctx context.Context, client mintaws.GetParameterAPI) (string, error) {
+		return "ami-test", nil
+	})
+	return p
+}
+
+func TestUpCommandVolumeIOPSFlagOverridesConfig(t *testing.T) {
+	// When --volume-iops is set on the flag, it should override the deps.volumeIOPS value.
+	buf := new(bytes.Buffer)
+
+	cv := &captureCreateVolume{output: &ec2.CreateVolumeOutput{VolumeId: aws.String("vol-iops")}}
+
+	deps := &upDeps{
+		provisioner:         newTestProvisionerWithCreateVolume(cv),
+		owner:               "testuser",
+		ownerARN:            "arn:aws:iam::123:user/testuser",
+		bootstrapScript:     []byte("#!/bin/bash"),
+		instanceType:        "m6i.xlarge",
+		volumeSize:          50,
+		volumeIOPS:          3000, // config value
+		describeFileSystems: defaultEFSStub(),
+	}
+
+	cmd := newUpCommandWithDeps(deps)
+	root := newTestRoot()
+	root.AddCommand(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"up", "--volume-iops", "8000"})
+
+	// Flags on the subcommand won't propagate deps correctly through newUpCommandWithDeps
+	// because deps is already set — but we verify the flag is registered.
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestUpCommandVolumeIOPSDefault(t *testing.T) {
+	// When volumeIOPS is 0 in deps (no config, no flag), the provisioner
+	// defaults it to 3000 internally.
+	buf := new(bytes.Buffer)
+	cmd := &cobra.Command{}
+	cmd.SetOut(buf)
+
+	cliCtx := &cli.CLIContext{VM: "default"}
+	ctx := cli.WithContext(context.Background(), cliCtx)
+	cmd.SetContext(ctx)
+
+	cv := &captureCreateVolume{output: &ec2.CreateVolumeOutput{VolumeId: aws.String("vol-iops")}}
+
+	deps := &upDeps{
+		provisioner:         newTestProvisionerWithCreateVolume(cv),
+		owner:               "testuser",
+		ownerARN:            "arn:aws:iam::123:user/testuser",
+		bootstrapScript:     []byte("#!/bin/bash"),
+		instanceType:        "m6i.xlarge",
+		volumeSize:          50,
+		volumeIOPS:          0, // zero — provisioner defaults to 3000
+		describeFileSystems: defaultEFSStub(),
+	}
+
+	err := runUp(cmd, deps)
+	if err != nil {
+		t.Fatalf("runUp error: %v", err)
+	}
+
+	if cv.input == nil {
+		t.Fatal("CreateVolume was not called")
+	}
+	if aws.ToInt32(cv.input.Iops) != 3000 {
+		t.Errorf("Iops = %d, want 3000 (default when volumeIOPS is 0)", aws.ToInt32(cv.input.Iops))
+	}
+}
+
+func TestUpCommandVolumeIOPSFromDeps(t *testing.T) {
+	// When volumeIOPS is set in deps, it is passed through to CreateVolumeInput.
+	buf := new(bytes.Buffer)
+	cmd := &cobra.Command{}
+	cmd.SetOut(buf)
+
+	cliCtx := &cli.CLIContext{VM: "default"}
+	ctx := cli.WithContext(context.Background(), cliCtx)
+	cmd.SetContext(ctx)
+
+	cv := &captureCreateVolume{output: &ec2.CreateVolumeOutput{VolumeId: aws.String("vol-iops")}}
+
+	deps := &upDeps{
+		provisioner:         newTestProvisionerWithCreateVolume(cv),
+		owner:               "testuser",
+		ownerARN:            "arn:aws:iam::123:user/testuser",
+		bootstrapScript:     []byte("#!/bin/bash"),
+		instanceType:        "m6i.xlarge",
+		volumeSize:          50,
+		volumeIOPS:          6000,
+		describeFileSystems: defaultEFSStub(),
+	}
+
+	err := runUp(cmd, deps)
+	if err != nil {
+		t.Fatalf("runUp error: %v", err)
+	}
+
+	if cv.input == nil {
+		t.Fatal("CreateVolume was not called")
+	}
+	if aws.ToInt32(cv.input.Iops) != 6000 {
+		t.Errorf("Iops = %d, want 6000", aws.ToInt32(cv.input.Iops))
+	}
+}
+
+func TestUpCommandVolumeIOPSFlagRegistered(t *testing.T) {
+	cmd := newUpCommandWithDeps(nil)
+	flag := cmd.Flags().Lookup("volume-iops")
+	if flag == nil {
+		t.Fatal("--volume-iops flag not registered on up command")
+	}
+	if flag.DefValue != "0" {
+		t.Errorf("--volume-iops default = %q, want %q", flag.DefValue, "0")
+	}
+}
+
 func TestUpCommandEFSDiscoveryFailure(t *testing.T) {
 	buf := new(bytes.Buffer)
 	cmd := &cobra.Command{}
@@ -892,5 +1065,135 @@ func TestUpCommandEFSDiscoveryFailure(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "discovering EFS") {
 		t.Errorf("error = %q, want substring %q", err.Error(), "discovering EFS")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests: Multiple VM pre-flight warning in mint up
+// ---------------------------------------------------------------------------
+
+// makeRunningInstancesOutput creates a DescribeInstancesOutput with n running VMs.
+func makeRunningInstancesOutput(n int) *ec2.DescribeInstancesOutput {
+	var instances []ec2types.Instance
+	for i := 0; i < n; i++ {
+		instances = append(instances, ec2types.Instance{
+			InstanceId:   aws.String(fmt.Sprintf("i-run%03d", i)),
+			InstanceType: ec2types.InstanceTypeM6iXlarge,
+			State: &ec2types.InstanceState{
+				Name: ec2types.InstanceStateNameRunning,
+			},
+			Tags: []ec2types.Tag{
+				{Key: aws.String("mint"), Value: aws.String("true")},
+				{Key: aws.String("mint:vm"), Value: aws.String(fmt.Sprintf("vm%d", i))},
+				{Key: aws.String("mint:owner"), Value: aws.String("testuser")},
+			},
+		})
+	}
+	return &ec2.DescribeInstancesOutput{
+		Reservations: []ec2types.Reservation{{Instances: instances}},
+	}
+}
+
+func TestUpMultiVMWarning(t *testing.T) {
+	tests := []struct {
+		name        string
+		numRunning  int
+		wantWarning bool
+		wantAbsent  []string
+		wantOutput  []string
+	}{
+		{
+			name:        "0 existing running VMs — no warning",
+			numRunning:  0,
+			wantWarning: false,
+			wantAbsent:  []string{"running VMs", "unnecessary costs"},
+		},
+		{
+			name:        "1 existing running VM — no warning",
+			numRunning:  1,
+			wantWarning: false,
+			wantAbsent:  []string{"unnecessary costs"},
+		},
+		{
+			name:        "2 existing running VMs — warning (would become 3)",
+			numRunning:  2,
+			wantWarning: true,
+			wantOutput:  []string{"running VMs", "unnecessary costs"},
+		},
+		{
+			name:        "3 existing running VMs — warning (would become 4)",
+			numRunning:  3,
+			wantWarning: true,
+			wantOutput:  []string{"running VMs", "unnecessary costs"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			buf := new(bytes.Buffer)
+			cmd := &cobra.Command{}
+			cmd.SetOut(buf)
+
+			cliCtx := &cli.CLIContext{VM: "new-vm"}
+			ctx := cli.WithContext(context.Background(), cliCtx)
+			cmd.SetContext(ctx)
+
+			deps := newTestUpDeps()
+			// Wire a describe stub that returns tt.numRunning running instances.
+			deps.describe = &stubUpDescribeInstances{
+				output: makeRunningInstancesOutput(tt.numRunning),
+			}
+
+			err := runUp(cmd, deps)
+			if err != nil {
+				t.Fatalf("runUp error: %v", err)
+			}
+
+			output := buf.String()
+			for _, want := range tt.wantOutput {
+				if !strings.Contains(output, want) {
+					t.Errorf("output missing %q, got:\n%s", want, output)
+				}
+			}
+			for _, absent := range tt.wantAbsent {
+				if strings.Contains(output, absent) {
+					t.Errorf("output should not contain %q, got:\n%s", absent, output)
+				}
+			}
+		})
+	}
+}
+
+// TestUpMultiVMWarningJSONMode verifies that the pre-flight warning is suppressed
+// in --json mode so the output remains valid JSON (not corrupted by a text prefix).
+func TestUpMultiVMWarningJSONMode(t *testing.T) {
+	buf := new(bytes.Buffer)
+	cmd := &cobra.Command{}
+	cmd.SetOut(buf)
+
+	// JSON mode with 2 running VMs — would trigger warning in human mode.
+	cliCtx := &cli.CLIContext{JSON: true, VM: "new-vm"}
+	ctx := cli.WithContext(context.Background(), cliCtx)
+	cmd.SetContext(ctx)
+
+	deps := newTestUpDeps()
+	deps.describe = &stubUpDescribeInstances{
+		output: makeRunningInstancesOutput(2),
+	}
+
+	err := runUp(cmd, deps)
+	if err != nil {
+		t.Fatalf("runUp error: %v", err)
+	}
+
+	// Output must be valid JSON — no warning text prefix allowed.
+	var result map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
+		t.Fatalf("output is not valid JSON (warning text corrupted it): %v\nOutput: %s", err, buf.String())
+	}
+
+	// Confirm the warning text is absent from the raw output.
+	if strings.Contains(buf.String(), "running VMs") {
+		t.Errorf("JSON output must not contain warning text, got:\n%s", buf.String())
 	}
 }

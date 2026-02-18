@@ -365,9 +365,10 @@ func TestStatusAppendsVersionNoticeInHumanMode(t *testing.T) {
 	}
 }
 
-func TestStatusDoesNotAppendVersionNoticeInJSONMode(t *testing.T) {
+func TestStatusDoesNotAppendVersionBannerInJSONMode(t *testing.T) {
 	// Seed a version cache file with a newer version. In JSON mode,
-	// appendVersionNotice must NOT be called, so the output stays valid JSON.
+	// the human-readable version banner must NOT be appended after the JSON
+	// object — version info is instead embedded in the JSON fields.
 	tmpDir := t.TempDir()
 	cacheJSON := `{"latest_version":"v99.0.0","checked_at":"` +
 		time.Now().UTC().Format(time.RFC3339) + `"}`
@@ -402,13 +403,14 @@ func TestStatusDoesNotAppendVersionNoticeInJSONMode(t *testing.T) {
 	}
 
 	output := buf.String()
-	// JSON output must remain a valid object — no version banner appended.
+	// JSON output must remain a valid object — the human banner must NOT be appended.
 	var result map[string]interface{}
 	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &result); err != nil {
-		t.Errorf("JSON output is not valid (version notice may have been appended): %v\nOutput: %s", err, output)
+		t.Errorf("JSON output is not valid (banner may have been appended): %v\nOutput: %s", err, output)
 	}
-	if strings.Contains(output, "v99.0.0") {
-		t.Errorf("version notice must NOT appear in JSON output; got:\n%s", output)
+	// The human-readable banner separator must not appear.
+	if strings.Contains(output, "A new version of mint is available") {
+		t.Errorf("human-readable version banner must NOT appear in JSON output; got:\n%s", output)
 	}
 }
 
@@ -681,6 +683,135 @@ func TestStatusNoDiskCheckWhenStopped(t *testing.T) {
 	output := buf.String()
 	if strings.Contains(output, "Disk:") {
 		t.Errorf("stopped VM should NOT show Disk line, got:\n%s", output)
+	}
+}
+
+func TestStatusJSONIncludesVersionCheckFields(t *testing.T) {
+	recentLaunch := time.Now().Add(-30 * time.Minute)
+	buf := new(bytes.Buffer)
+
+	deps := &statusDeps{
+		describe: &mockDescribeInstances{
+			output: makeInstanceWithTime("i-vc1", "default", "alice", "running", "1.2.3.4", "m6i.xlarge", "complete", recentLaunch),
+		},
+		owner:          "alice",
+		versionChecker: stubVersionChecker(true, strPtr("v2.0.0")),
+	}
+
+	cmd := newStatusCommandWithDeps(deps)
+	root := newTestRoot()
+	root.AddCommand(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"status", "--json"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+
+	// update_available must be true.
+	if v, ok := result["update_available"]; !ok {
+		t.Error("JSON missing update_available field")
+	} else if v.(bool) != true {
+		t.Errorf("update_available = %v, want true", v)
+	}
+
+	// latest_version must be the string returned by the checker.
+	if v, ok := result["latest_version"]; !ok {
+		t.Error("JSON missing latest_version field")
+	} else if v.(string) != "v2.0.0" {
+		t.Errorf("latest_version = %q, want %q", v, "v2.0.0")
+	}
+}
+
+func TestStatusJSONVersionFieldsFailOpen(t *testing.T) {
+	// When the version checker fails, update_available must be false and
+	// latest_version must be null. The command must still succeed.
+	recentLaunch := time.Now().Add(-30 * time.Minute)
+	buf := new(bytes.Buffer)
+
+	deps := &statusDeps{
+		describe: &mockDescribeInstances{
+			output: makeInstanceWithTime("i-vc2", "default", "alice", "running", "1.2.3.4", "m6i.xlarge", "complete", recentLaunch),
+		},
+		owner:          "alice",
+		versionChecker: stubVersionChecker(false, nil),
+	}
+
+	cmd := newStatusCommandWithDeps(deps)
+	root := newTestRoot()
+	root.AddCommand(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"status", "--json"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+
+	if v, ok := result["update_available"]; !ok {
+		t.Error("JSON missing update_available field")
+	} else if v.(bool) != false {
+		t.Errorf("update_available = %v, want false", v)
+	}
+
+	if v, ok := result["latest_version"]; !ok {
+		t.Error("JSON missing latest_version field")
+	} else if v != nil {
+		t.Errorf("latest_version = %v, want null", v)
+	}
+}
+
+func TestStatusJSONVersionFieldsOnLatestVersion(t *testing.T) {
+	// When running on the latest version, update_available must be false
+	// and latest_version must be the current version.
+	recentLaunch := time.Now().Add(-30 * time.Minute)
+	buf := new(bytes.Buffer)
+
+	deps := &statusDeps{
+		describe: &mockDescribeInstances{
+			output: makeInstanceWithTime("i-vc3", "default", "alice", "running", "1.2.3.4", "m6i.xlarge", "complete", recentLaunch),
+		},
+		owner:          "alice",
+		versionChecker: stubVersionChecker(false, strPtr("v1.0.0")),
+	}
+
+	cmd := newStatusCommandWithDeps(deps)
+	root := newTestRoot()
+	root.AddCommand(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"status", "--json"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+
+	if v, ok := result["update_available"]; !ok {
+		t.Error("JSON missing update_available field")
+	} else if v.(bool) != false {
+		t.Errorf("update_available = %v, want false (already on latest)", v)
+	}
+
+	if v, ok := result["latest_version"]; !ok {
+		t.Error("JSON missing latest_version field")
+	} else if v.(string) != "v1.0.0" {
+		t.Errorf("latest_version = %q, want %q", v, "v1.0.0")
 	}
 }
 

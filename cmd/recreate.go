@@ -18,6 +18,7 @@ import (
 	"github.com/nicholasgasior/mint/internal/bootstrap"
 	"github.com/nicholasgasior/mint/internal/cli"
 	"github.com/nicholasgasior/mint/internal/config"
+	"github.com/nicholasgasior/mint/internal/progress"
 	"github.com/nicholasgasior/mint/internal/provision"
 	"github.com/nicholasgasior/mint/internal/session"
 	"github.com/nicholasgasior/mint/internal/sshconfig"
@@ -132,14 +133,14 @@ func runRecreate(cmd *cobra.Command, deps *recreateDeps) error {
 
 	force, _ := cmd.Flags().GetBool("force")
 	w := cmd.OutOrStdout()
+	sp := newCommandSpinner(w, verbose)
 
 	// Discover VM.
-	if verbose {
-		fmt.Fprintf(w, "Discovering VM %q for owner %q...\n", vmName, deps.owner)
-	}
+	sp.Start(fmt.Sprintf("Discovering VM %q for owner %q...", vmName, deps.owner))
 
 	found, err := vm.FindVM(ctx, deps.describe, deps.owner, vmName)
 	if err != nil {
+		sp.Fail(err.Error())
 		return fmt.Errorf("discovering VM: %w", err)
 	}
 	if found == nil {
@@ -153,17 +154,13 @@ func runRecreate(cmd *cobra.Command, deps *recreateDeps) error {
 	}
 
 	// Active session detection: check for tmux clients and SSH/mosh sessions.
-	if verbose {
-		fmt.Fprintf(w, "Checking for active sessions on VM %q...\n", vmName)
-	}
+	sp.Update(fmt.Sprintf("Checking for active sessions on VM %q...", vmName))
 
 	activeSessions, err := detectActiveSessions(ctx, deps, found)
 	if err != nil {
 		// Non-fatal: if we can't detect sessions, warn but continue with
 		// confirmation. This avoids blocking recreate when SSH is flaky.
-		if verbose {
-			fmt.Fprintf(w, "Warning: could not detect active sessions: %v\n", err)
-		}
+		sp.Update(fmt.Sprintf("Warning: could not detect active sessions: %v", err))
 	}
 
 	if activeSessions != "" && !force {
@@ -197,7 +194,7 @@ func runRecreate(cmd *cobra.Command, deps *recreateDeps) error {
 	// Guards passed — execute the 9-step recreate lifecycle.
 	fmt.Fprintf(w, "Proceeding with recreate of VM %q (%s)...\n", vmName, found.ID)
 
-	return executeRecreateLifecycle(ctx, deps, found, vmName, verbose, w)
+	return executeRecreateLifecycle(ctx, deps, found, vmName, sp, w)
 }
 
 // executeRecreateLifecycle runs the 9-step recreate sequence:
@@ -215,44 +212,44 @@ func executeRecreateLifecycle(
 	deps *recreateDeps,
 	found *vm.VM,
 	vmName string,
-	verbose bool,
+	sp *progress.Spinner,
 	w io.Writer,
 ) error {
-	volumeID, volumeAZ, err := stepQueryProjectVolume(ctx, deps, vmName, verbose, w)
+	volumeID, volumeAZ, err := stepQueryProjectVolume(ctx, deps, vmName, sp, w)
 	if err != nil {
 		return fmt.Errorf("querying project volume: %w", err)
 	}
 
-	if err := stepTagPendingAttach(ctx, deps, volumeID, verbose, w); err != nil {
+	if err := stepTagPendingAttach(ctx, deps, volumeID, sp); err != nil {
 		return fmt.Errorf("tagging project volume with pending-attach: %w", err)
 	}
 
-	if err := stepStopInstance(ctx, deps, found.ID, verbose, w); err != nil {
+	if err := stepStopInstance(ctx, deps, found.ID, sp); err != nil {
 		return fmt.Errorf("stopping instance %s: %w", found.ID, err)
 	}
 
-	if err := stepDetachVolume(ctx, deps, volumeID, found.ID, verbose, w); err != nil {
+	if err := stepDetachVolume(ctx, deps, volumeID, found.ID, sp); err != nil {
 		return fmt.Errorf("detaching project volume %s: %w", volumeID, err)
 	}
 
-	if err := stepTerminateInstance(ctx, deps, found.ID, verbose, w); err != nil {
+	if err := stepTerminateInstance(ctx, deps, found.ID, sp); err != nil {
 		return fmt.Errorf("terminating instance %s: %w", found.ID, err)
 	}
 
-	newInstanceID, err := stepLaunchInstance(ctx, deps, found, vmName, volumeAZ, verbose, w)
+	newInstanceID, err := stepLaunchInstance(ctx, deps, found, vmName, volumeAZ, sp)
 	if err != nil {
 		return fmt.Errorf("launching new instance: %w", err)
 	}
 
-	if err := stepAttachVolume(ctx, deps, volumeID, newInstanceID, verbose, w); err != nil {
+	if err := stepAttachVolume(ctx, deps, volumeID, newInstanceID, sp, w); err != nil {
 		return fmt.Errorf("attaching project volume %s to %s: %w", volumeID, newInstanceID, err)
 	}
 
-	if err := stepReassociateEIP(ctx, deps, vmName, newInstanceID, verbose, w); err != nil {
+	if err := stepReassociateEIP(ctx, deps, vmName, newInstanceID, sp, w); err != nil {
 		return fmt.Errorf("reassociating Elastic IP: %w", err)
 	}
 
-	if err := stepBootstrapPoll(ctx, deps, vmName, newInstanceID, verbose, w); err != nil {
+	if err := stepBootstrapPoll(ctx, deps, vmName, newInstanceID, sp); err != nil {
 		return fmt.Errorf("bootstrap polling: %w", err)
 	}
 
@@ -264,6 +261,9 @@ func executeRecreateLifecycle(
 		}
 	}
 
+	// Print the final success message to the command output unconditionally.
+	// sp.Stop clears the spinner line in interactive mode before we print.
+	sp.Stop("")
 	fmt.Fprintf(w, "Recreate complete. New instance: %s\n", newInstanceID)
 	return nil
 }
@@ -273,21 +273,17 @@ func stepQueryProjectVolume(
 	ctx context.Context,
 	deps *recreateDeps,
 	vmName string,
-	verbose bool,
+	sp *progress.Spinner,
 	w io.Writer,
 ) (volumeID, volumeAZ string, err error) {
-	if verbose {
-		fmt.Fprintf(w, "Step 1/9: Querying project EBS volume...\n")
-	}
+	sp.Update("Step 1/9: Querying project EBS volume...")
 
 	volumeID, volumeAZ, err = findProjectVolume(ctx, deps, vmName)
 	if err != nil {
 		return "", "", err
 	}
 
-	if verbose {
-		fmt.Fprintf(w, "  Found project volume %s in %s\n", volumeID, volumeAZ)
-	}
+	sp.Update(fmt.Sprintf("  Found project volume %s in %s", volumeID, volumeAZ))
 
 	return volumeID, volumeAZ, nil
 }
@@ -298,12 +294,9 @@ func stepTagPendingAttach(
 	ctx context.Context,
 	deps *recreateDeps,
 	volumeID string,
-	verbose bool,
-	w io.Writer,
+	sp *progress.Spinner,
 ) error {
-	if verbose {
-		fmt.Fprintf(w, "Step 2/9: Tagging project volume with pending-attach...\n")
-	}
+	sp.Update("Step 2/9: Tagging project volume with pending-attach...")
 
 	_, err := deps.createTags.CreateTags(ctx, &ec2.CreateTagsInput{
 		Resources: []string{volumeID},
@@ -319,12 +312,9 @@ func stepStopInstance(
 	ctx context.Context,
 	deps *recreateDeps,
 	instanceID string,
-	verbose bool,
-	w io.Writer,
+	sp *progress.Spinner,
 ) error {
-	if verbose {
-		fmt.Fprintf(w, "Step 3/9: Stopping instance %s...\n", instanceID)
-	}
+	sp.Update(fmt.Sprintf("Step 3/9: Stopping instance %s...", instanceID))
 
 	_, err := deps.stop.StopInstances(ctx, &ec2.StopInstancesInput{
 		InstanceIds: []string{instanceID},
@@ -337,12 +327,9 @@ func stepDetachVolume(
 	ctx context.Context,
 	deps *recreateDeps,
 	volumeID, instanceID string,
-	verbose bool,
-	w io.Writer,
+	sp *progress.Spinner,
 ) error {
-	if verbose {
-		fmt.Fprintf(w, "Step 4/9: Detaching project volume %s...\n", volumeID)
-	}
+	sp.Update(fmt.Sprintf("Step 4/9: Detaching project volume %s...", volumeID))
 
 	_, err := deps.detachVolume.DetachVolume(ctx, &ec2.DetachVolumeInput{
 		VolumeId:   aws.String(volumeID),
@@ -357,12 +344,9 @@ func stepTerminateInstance(
 	ctx context.Context,
 	deps *recreateDeps,
 	instanceID string,
-	verbose bool,
-	w io.Writer,
+	sp *progress.Spinner,
 ) error {
-	if verbose {
-		fmt.Fprintf(w, "Step 5/9: Terminating instance %s...\n", instanceID)
-	}
+	sp.Update(fmt.Sprintf("Step 5/9: Terminating instance %s...", instanceID))
 
 	_, err := deps.terminate.TerminateInstances(ctx, &ec2.TerminateInstancesInput{
 		InstanceIds: []string{instanceID},
@@ -377,21 +361,16 @@ func stepLaunchInstance(
 	deps *recreateDeps,
 	original *vm.VM,
 	vmName, volumeAZ string,
-	verbose bool,
-	w io.Writer,
+	sp *progress.Spinner,
 ) (string, error) {
-	if verbose {
-		fmt.Fprintf(w, "Step 6/9: Launching new instance in %s...\n", volumeAZ)
-	}
+	sp.Update(fmt.Sprintf("Step 6/9: Launching new instance in %s...", volumeAZ))
 
 	newInstanceID, err := launchRecreateInstance(ctx, deps, original, vmName, volumeAZ)
 	if err != nil {
 		return "", err
 	}
 
-	if verbose {
-		fmt.Fprintf(w, "  Launched new instance %s\n", newInstanceID)
-	}
+	sp.Update(fmt.Sprintf("  Launched new instance %s", newInstanceID))
 
 	return newInstanceID, nil
 }
@@ -402,12 +381,10 @@ func stepAttachVolume(
 	ctx context.Context,
 	deps *recreateDeps,
 	volumeID, newInstanceID string,
-	verbose bool,
+	sp *progress.Spinner,
 	w io.Writer,
 ) error {
-	if verbose {
-		fmt.Fprintf(w, "Step 7/9: Attaching project volume %s to %s...\n", volumeID, newInstanceID)
-	}
+	sp.Update(fmt.Sprintf("Step 7/9: Attaching project volume %s to %s...", volumeID, newInstanceID))
 
 	_, err := deps.attachVolume.AttachVolume(ctx, &ec2.AttachVolumeInput{
 		VolumeId:   aws.String(volumeID),
@@ -441,14 +418,12 @@ func stepReassociateEIP(
 	ctx context.Context,
 	deps *recreateDeps,
 	vmName, newInstanceID string,
-	verbose bool,
+	sp *progress.Spinner,
 	w io.Writer,
 ) error {
-	if verbose {
-		fmt.Fprintf(w, "Step 8/9: Reassociating Elastic IP...\n")
-	}
+	sp.Update("Step 8/9: Reassociating Elastic IP...")
 
-	return reassociateElasticIP(ctx, deps, vmName, newInstanceID, verbose, w)
+	return reassociateElasticIP(ctx, deps, vmName, newInstanceID, sp, w)
 }
 
 // stepBootstrapPoll waits for the bootstrap process to complete on the new
@@ -457,12 +432,9 @@ func stepBootstrapPoll(
 	ctx context.Context,
 	deps *recreateDeps,
 	vmName, newInstanceID string,
-	verbose bool,
-	w io.Writer,
+	sp *progress.Spinner,
 ) error {
-	if verbose {
-		fmt.Fprintf(w, "Step 9/9: Waiting for bootstrap to complete...\n")
-	}
+	sp.Update("Step 9/9: Waiting for bootstrap to complete...")
 
 	if deps.pollBootstrap != nil {
 		return deps.pollBootstrap(ctx, deps.owner, vmName, newInstanceID)
@@ -504,13 +476,11 @@ func reassociateElasticIP(
 	ctx context.Context,
 	deps *recreateDeps,
 	vmName, newInstanceID string,
-	verbose bool,
+	sp *progress.Spinner,
 	w io.Writer,
 ) error {
 	if deps.describeAddrs == nil {
-		if verbose {
-			fmt.Fprintf(w, "  Warning: no Elastic IP client configured, skipping EIP reassociation\n")
-		}
+		sp.Update("  Warning: no Elastic IP client configured, skipping EIP reassociation")
 		return nil
 	}
 
@@ -530,19 +500,15 @@ func reassociateElasticIP(
 	}
 
 	if len(out.Addresses) == 0 {
-		if verbose {
-			fmt.Fprintf(w, "  Warning: no Elastic IP found for VM %q — using auto-assigned public IP\n", vmName)
-		}
+		sp.Update(fmt.Sprintf("  Warning: no Elastic IP found for VM %q — using auto-assigned public IP", vmName))
 		return nil
 	}
 
 	addr := out.Addresses[0]
 	allocID := aws.ToString(addr.AllocationId)
 
-	if verbose {
-		fmt.Fprintf(w, "  Found Elastic IP %s (%s), reassociating with %s\n",
-			aws.ToString(addr.PublicIp), allocID, newInstanceID)
-	}
+	sp.Update(fmt.Sprintf("  Found Elastic IP %s (%s), reassociating with %s",
+		aws.ToString(addr.PublicIp), allocID, newInstanceID))
 
 	if deps.associateAddr == nil {
 		return fmt.Errorf("no AssociateAddress client configured")
@@ -556,9 +522,7 @@ func reassociateElasticIP(
 		return fmt.Errorf("associating EIP %s with instance %s: %w", allocID, newInstanceID, err)
 	}
 
-	if verbose {
-		fmt.Fprintf(w, "  Elastic IP reassociated successfully\n")
-	}
+	sp.Update("  Elastic IP reassociated successfully")
 
 	return nil
 }
