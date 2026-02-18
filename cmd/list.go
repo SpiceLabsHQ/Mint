@@ -19,16 +19,39 @@ import (
 	"github.com/nicholasgasior/mint/internal/vm"
 )
 
+// VersionCheckerFunc is a function that checks for an available update.
+// It returns whether an update is available and the latest version string
+// (nil if the check failed or the version is unknown).
+type VersionCheckerFunc func() (updateAvailable bool, latestVersion *string)
+
 // listDeps holds the injectable dependencies for the list command.
 type listDeps struct {
-	describe    mintaws.DescribeInstancesAPI
-	owner       string
-	idleTimeout time.Duration
+	describe       mintaws.DescribeInstancesAPI
+	owner          string
+	idleTimeout    time.Duration
+	versionChecker VersionCheckerFunc
 }
 
 // newListCommand creates the production list command.
 func newListCommand() *cobra.Command {
 	return newListCommandWithDeps(nil)
+}
+
+// defaultVersionChecker returns a VersionCheckerFunc that calls the real
+// version check with a short timeout, failing open on any error.
+func defaultVersionChecker() VersionCheckerFunc {
+	return func() (bool, *string) {
+		cacheDir := config.DefaultConfigDir()
+		info, err := versioncheck.Check(version, cacheDir)
+		if err != nil || info == nil {
+			return false, nil
+		}
+		if info.LatestVersion == "" {
+			return false, nil
+		}
+		latest := info.LatestVersion
+		return info.UpdateAvailable, &latest
+	}
 }
 
 // newListCommandWithDeps creates the list command with explicit dependencies
@@ -41,6 +64,9 @@ func newListCommandWithDeps(deps *listDeps) *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if deps != nil {
+				if deps.versionChecker == nil {
+					deps.versionChecker = defaultVersionChecker()
+				}
 				return runList(cmd, deps)
 			}
 			clients := awsClientsFromContext(cmd.Context())
@@ -48,9 +74,10 @@ func newListCommandWithDeps(deps *listDeps) *cobra.Command {
 				return fmt.Errorf("AWS clients not configured")
 			}
 			return runList(cmd, &listDeps{
-				describe:    clients.ec2Client,
-				owner:       clients.owner,
-				idleTimeout: clients.idleTimeout(),
+				describe:       clients.ec2Client,
+				owner:          clients.owner,
+				idleTimeout:    clients.idleTimeout(),
+				versionChecker: defaultVersionChecker(),
 			})
 		},
 	}
@@ -67,6 +94,13 @@ type vmJSON struct {
 	Uptime          string            `json:"uptime"`
 	BootstrapStatus string            `json:"bootstrap_status"`
 	Tags            map[string]string `json:"tags,omitempty"`
+}
+
+// listJSON is the top-level JSON envelope for the list command output.
+type listJSON struct {
+	VMs             []vmJSON `json:"vms"`
+	UpdateAvailable bool     `json:"update_available"`
+	LatestVersion   *string  `json:"latest_version"`
 }
 
 // runList executes the list command logic.
@@ -90,7 +124,7 @@ func runList(cmd *cobra.Command, deps *listDeps) error {
 	w := cmd.OutOrStdout()
 
 	if jsonOutput {
-		return writeListJSON(w, vms)
+		return writeListJSON(w, vms, deps.versionChecker)
 	}
 
 	writeListTable(w, vms, deps.idleTimeout)
@@ -101,8 +135,8 @@ func runList(cmd *cobra.Command, deps *listDeps) error {
 	return nil
 }
 
-// writeListJSON outputs VMs as a JSON array.
-func writeListJSON(w io.Writer, vms []*vm.VM) error {
+// writeListJSON outputs VMs as a JSON object with version check fields.
+func writeListJSON(w io.Writer, vms []*vm.VM, checker VersionCheckerFunc) error {
 	items := make([]vmJSON, 0, len(vms))
 	for _, v := range vms {
 		items = append(items, vmJSON{
@@ -118,9 +152,21 @@ func writeListJSON(w io.Writer, vms []*vm.VM) error {
 		})
 	}
 
+	updateAvailable := false
+	var latestVersion *string
+	if checker != nil {
+		updateAvailable, latestVersion = checker()
+	}
+
+	out := listJSON{
+		VMs:             items,
+		UpdateAvailable: updateAvailable,
+		LatestVersion:   latestVersion,
+	}
+
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
-	return enc.Encode(items)
+	return enc.Encode(out)
 }
 
 // writeListTable outputs VMs in a human-readable table.
