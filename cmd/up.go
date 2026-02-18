@@ -118,16 +118,11 @@ func runUp(cmd *cobra.Command, deps *upDeps) error {
 
 	// Pre-flight: warn when provisioning would result in 3+ running VMs (SPEC).
 	// Warning is informational only — never blocks the operation.
-	if deps.describe != nil {
+	// Skip in JSON mode to avoid corrupting machine-readable output.
+	if deps.describe != nil && !jsonOutput {
 		existingVMs, err := vm.ListVMs(ctx, deps.describe, deps.owner)
 		if err == nil {
-			runningCount := 0
-			for _, v := range existingVMs {
-				if v.State == "running" {
-					runningCount++
-				}
-			}
-			if runningCount >= 2 {
+			if runningCount := countRunningVMs(existingVMs); runningCount >= 2 {
 				fmt.Fprintf(cmd.OutOrStdout(),
 					"⚠  You have %d running VMs. Consider stopping unused VMs to avoid unnecessary costs.\n",
 					runningCount)

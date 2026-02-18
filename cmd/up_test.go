@@ -990,3 +990,37 @@ func TestUpMultiVMWarning(t *testing.T) {
 		})
 	}
 }
+
+// TestUpMultiVMWarningJSONMode verifies that the pre-flight warning is suppressed
+// in --json mode so the output remains valid JSON (not corrupted by a text prefix).
+func TestUpMultiVMWarningJSONMode(t *testing.T) {
+	buf := new(bytes.Buffer)
+	cmd := &cobra.Command{}
+	cmd.SetOut(buf)
+
+	// JSON mode with 2 running VMs — would trigger warning in human mode.
+	cliCtx := &cli.CLIContext{JSON: true, VM: "new-vm"}
+	ctx := cli.WithContext(context.Background(), cliCtx)
+	cmd.SetContext(ctx)
+
+	deps := newTestUpDeps()
+	deps.describe = &stubUpDescribeInstances{
+		output: makeRunningInstancesOutput(2),
+	}
+
+	err := runUp(cmd, deps)
+	if err != nil {
+		t.Fatalf("runUp error: %v", err)
+	}
+
+	// Output must be valid JSON — no warning text prefix allowed.
+	var result map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
+		t.Fatalf("output is not valid JSON (warning text corrupted it): %v\nOutput: %s", err, buf.String())
+	}
+
+	// Confirm the warning text is absent from the raw output.
+	if strings.Contains(buf.String(), "running VMs") {
+		t.Errorf("JSON output must not contain warning text, got:\n%s", buf.String())
+	}
+}
