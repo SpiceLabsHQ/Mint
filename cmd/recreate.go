@@ -218,99 +218,204 @@ func executeRecreateLifecycle(
 	verbose bool,
 	w io.Writer,
 ) error {
-	// Step 1: Query project EBS volume.
+	volumeID, volumeAZ, err := stepQueryProjectVolume(ctx, deps, vmName, verbose, w)
+	if err != nil {
+		return fmt.Errorf("querying project volume: %w", err)
+	}
+
+	if err := stepTagPendingAttach(ctx, deps, volumeID, verbose, w); err != nil {
+		return fmt.Errorf("tagging project volume with pending-attach: %w", err)
+	}
+
+	if err := stepStopInstance(ctx, deps, found.ID, verbose, w); err != nil {
+		return fmt.Errorf("stopping instance %s: %w", found.ID, err)
+	}
+
+	if err := stepDetachVolume(ctx, deps, volumeID, found.ID, verbose, w); err != nil {
+		return fmt.Errorf("detaching project volume %s: %w", volumeID, err)
+	}
+
+	if err := stepTerminateInstance(ctx, deps, found.ID, verbose, w); err != nil {
+		return fmt.Errorf("terminating instance %s: %w", found.ID, err)
+	}
+
+	newInstanceID, err := stepLaunchInstance(ctx, deps, found, vmName, volumeAZ, verbose, w)
+	if err != nil {
+		return fmt.Errorf("launching new instance: %w", err)
+	}
+
+	if err := stepAttachVolume(ctx, deps, volumeID, newInstanceID, verbose, w); err != nil {
+		return fmt.Errorf("attaching project volume %s to %s: %w", volumeID, newInstanceID, err)
+	}
+
+	if err := stepReassociateEIP(ctx, deps, vmName, newInstanceID, verbose, w); err != nil {
+		return fmt.Errorf("reassociating Elastic IP: %w", err)
+	}
+
+	if err := stepBootstrapPoll(ctx, deps, vmName, newInstanceID, verbose, w); err != nil {
+		return fmt.Errorf("bootstrap polling: %w", err)
+	}
+
+	// Clear cached TOFU host key so the next connection triggers fresh
+	// key recording instead of a scary change-detection warning (ADR-0019).
+	if deps.removeHostKey != nil {
+		if keyErr := deps.removeHostKey(vmName); keyErr != nil {
+			return fmt.Errorf("clearing cached host key for %s: %w", vmName, keyErr)
+		}
+	}
+
+	fmt.Fprintf(w, "Recreate complete. New instance: %s\n", newInstanceID)
+	return nil
+}
+
+// stepQueryProjectVolume discovers the project EBS volume for the VM (Step 1/9).
+func stepQueryProjectVolume(
+	ctx context.Context,
+	deps *recreateDeps,
+	vmName string,
+	verbose bool,
+	w io.Writer,
+) (volumeID, volumeAZ string, err error) {
 	if verbose {
 		fmt.Fprintf(w, "Step 1/9: Querying project EBS volume...\n")
 	}
 
-	volumeID, volumeAZ, err := findProjectVolume(ctx, deps, vmName)
+	volumeID, volumeAZ, err = findProjectVolume(ctx, deps, vmName)
 	if err != nil {
-		return fmt.Errorf("querying project volume: %w", err)
+		return "", "", err
 	}
 
 	if verbose {
 		fmt.Fprintf(w, "  Found project volume %s in %s\n", volumeID, volumeAZ)
 	}
 
-	// Step 2: Tag project EBS with pending-attach (safety net for crash recovery).
+	return volumeID, volumeAZ, nil
+}
+
+// stepTagPendingAttach tags the project volume with pending-attach as a safety
+// net for crash recovery (Step 2/9).
+func stepTagPendingAttach(
+	ctx context.Context,
+	deps *recreateDeps,
+	volumeID string,
+	verbose bool,
+	w io.Writer,
+) error {
 	if verbose {
 		fmt.Fprintf(w, "Step 2/9: Tagging project volume with pending-attach...\n")
 	}
 
-	_, err = deps.createTags.CreateTags(ctx, &ec2.CreateTagsInput{
+	_, err := deps.createTags.CreateTags(ctx, &ec2.CreateTagsInput{
 		Resources: []string{volumeID},
 		Tags: []ec2types.Tag{
 			{Key: aws.String(tags.TagPendingAttach), Value: aws.String("true")},
 		},
 	})
-	if err != nil {
-		return fmt.Errorf("tagging project volume with pending-attach: %w", err)
-	}
+	return err
+}
 
-	// Step 3: Stop instance.
+// stepStopInstance stops the EC2 instance (Step 3/9).
+func stepStopInstance(
+	ctx context.Context,
+	deps *recreateDeps,
+	instanceID string,
+	verbose bool,
+	w io.Writer,
+) error {
 	if verbose {
-		fmt.Fprintf(w, "Step 3/9: Stopping instance %s...\n", found.ID)
+		fmt.Fprintf(w, "Step 3/9: Stopping instance %s...\n", instanceID)
 	}
 
-	_, err = deps.stop.StopInstances(ctx, &ec2.StopInstancesInput{
-		InstanceIds: []string{found.ID},
+	_, err := deps.stop.StopInstances(ctx, &ec2.StopInstancesInput{
+		InstanceIds: []string{instanceID},
 	})
-	if err != nil {
-		return fmt.Errorf("stopping instance %s: %w", found.ID, err)
-	}
+	return err
+}
 
-	// Step 4: Detach project EBS.
+// stepDetachVolume detaches the project EBS volume from the instance (Step 4/9).
+func stepDetachVolume(
+	ctx context.Context,
+	deps *recreateDeps,
+	volumeID, instanceID string,
+	verbose bool,
+	w io.Writer,
+) error {
 	if verbose {
 		fmt.Fprintf(w, "Step 4/9: Detaching project volume %s...\n", volumeID)
 	}
 
-	_, err = deps.detachVolume.DetachVolume(ctx, &ec2.DetachVolumeInput{
+	_, err := deps.detachVolume.DetachVolume(ctx, &ec2.DetachVolumeInput{
 		VolumeId:   aws.String(volumeID),
-		InstanceId: aws.String(found.ID),
+		InstanceId: aws.String(instanceID),
 		Force:      aws.Bool(true),
 	})
-	if err != nil {
-		return fmt.Errorf("detaching project volume %s: %w", volumeID, err)
-	}
+	return err
+}
 
-	// Step 5: Terminate instance.
+// stepTerminateInstance terminates the EC2 instance (Step 5/9).
+func stepTerminateInstance(
+	ctx context.Context,
+	deps *recreateDeps,
+	instanceID string,
+	verbose bool,
+	w io.Writer,
+) error {
 	if verbose {
-		fmt.Fprintf(w, "Step 5/9: Terminating instance %s...\n", found.ID)
+		fmt.Fprintf(w, "Step 5/9: Terminating instance %s...\n", instanceID)
 	}
 
-	_, err = deps.terminate.TerminateInstances(ctx, &ec2.TerminateInstancesInput{
-		InstanceIds: []string{found.ID},
+	_, err := deps.terminate.TerminateInstances(ctx, &ec2.TerminateInstancesInput{
+		InstanceIds: []string{instanceID},
 	})
-	if err != nil {
-		return fmt.Errorf("terminating instance %s: %w", found.ID, err)
-	}
+	return err
+}
 
-	// Step 6: Launch new instance in same AZ as project volume.
+// stepLaunchInstance launches a new EC2 instance in the same AZ as the project
+// volume (Step 6/9).
+func stepLaunchInstance(
+	ctx context.Context,
+	deps *recreateDeps,
+	original *vm.VM,
+	vmName, volumeAZ string,
+	verbose bool,
+	w io.Writer,
+) (string, error) {
 	if verbose {
 		fmt.Fprintf(w, "Step 6/9: Launching new instance in %s...\n", volumeAZ)
 	}
 
-	newInstanceID, err := launchRecreateInstance(ctx, deps, found, vmName, volumeAZ)
+	newInstanceID, err := launchRecreateInstance(ctx, deps, original, vmName, volumeAZ)
 	if err != nil {
-		return fmt.Errorf("launching new instance: %w", err)
+		return "", err
 	}
 
 	if verbose {
 		fmt.Fprintf(w, "  Launched new instance %s\n", newInstanceID)
 	}
 
-	// Step 7: Attach project EBS + remove pending-attach tag.
+	return newInstanceID, nil
+}
+
+// stepAttachVolume attaches the project EBS volume to the new instance and
+// removes the pending-attach safety tag (Step 7/9).
+func stepAttachVolume(
+	ctx context.Context,
+	deps *recreateDeps,
+	volumeID, newInstanceID string,
+	verbose bool,
+	w io.Writer,
+) error {
 	if verbose {
 		fmt.Fprintf(w, "Step 7/9: Attaching project volume %s to %s...\n", volumeID, newInstanceID)
 	}
 
-	_, err = deps.attachVolume.AttachVolume(ctx, &ec2.AttachVolumeInput{
+	_, err := deps.attachVolume.AttachVolume(ctx, &ec2.AttachVolumeInput{
 		VolumeId:   aws.String(volumeID),
 		InstanceId: aws.String(newInstanceID),
 		Device:     aws.String("/dev/xvdf"),
 	})
 	if err != nil {
-		return fmt.Errorf("attaching project volume %s to %s: %w", volumeID, newInstanceID, err)
+		return err
 	}
 
 	// Remove the pending-attach tag via DeleteTags (fully removes the key).
@@ -328,35 +433,41 @@ func executeRecreateLifecycle(
 		}
 	}
 
-	// Step 8: Reassociate Elastic IP with the new instance.
+	return nil
+}
+
+// stepReassociateEIP reassociates the Elastic IP with the new instance (Step 8/9).
+func stepReassociateEIP(
+	ctx context.Context,
+	deps *recreateDeps,
+	vmName, newInstanceID string,
+	verbose bool,
+	w io.Writer,
+) error {
 	if verbose {
 		fmt.Fprintf(w, "Step 8/9: Reassociating Elastic IP...\n")
 	}
 
-	if err := reassociateElasticIP(ctx, deps, vmName, newInstanceID, verbose, w); err != nil {
-		return fmt.Errorf("reassociating Elastic IP: %w", err)
-	}
+	return reassociateElasticIP(ctx, deps, vmName, newInstanceID, verbose, w)
+}
 
-	// Step 9: Poll for bootstrap complete.
+// stepBootstrapPoll waits for the bootstrap process to complete on the new
+// instance (Step 9/9).
+func stepBootstrapPoll(
+	ctx context.Context,
+	deps *recreateDeps,
+	vmName, newInstanceID string,
+	verbose bool,
+	w io.Writer,
+) error {
 	if verbose {
 		fmt.Fprintf(w, "Step 9/9: Waiting for bootstrap to complete...\n")
 	}
 
 	if deps.pollBootstrap != nil {
-		if pollErr := deps.pollBootstrap(ctx, deps.owner, vmName, newInstanceID); pollErr != nil {
-			return fmt.Errorf("bootstrap polling: %w", pollErr)
-		}
+		return deps.pollBootstrap(ctx, deps.owner, vmName, newInstanceID)
 	}
 
-	// Clear cached TOFU host key so the next connection triggers fresh
-	// key recording instead of a scary change-detection warning (ADR-0019).
-	if deps.removeHostKey != nil {
-		if keyErr := deps.removeHostKey(vmName); keyErr != nil {
-			return fmt.Errorf("clearing cached host key for %s: %w", vmName, keyErr)
-		}
-	}
-
-	fmt.Fprintf(w, "Recreate complete. New instance: %s\n", newInstanceID)
 	return nil
 }
 
