@@ -78,14 +78,14 @@ func runResize(cmd *cobra.Command, deps *resizeDeps, newType string) error {
 	}
 
 	w := cmd.OutOrStdout()
+	sp := newCommandSpinner(w, verbose)
 
 	// Discover VM.
-	if verbose {
-		fmt.Fprintf(w, "Discovering VM %q for owner %q...\n", vmName, deps.owner)
-	}
+	sp.Start(fmt.Sprintf("Discovering VM %q for owner %q...", vmName, deps.owner))
 
 	found, err := vm.FindVM(ctx, deps.describe, deps.owner, vmName)
 	if err != nil {
+		sp.Fail(err.Error())
 		return fmt.Errorf("discovering VM: %w", err)
 	}
 	if found == nil {
@@ -104,12 +104,11 @@ func runResize(cmd *cobra.Command, deps *resizeDeps, newType string) error {
 	}
 
 	// Validate instance type against AWS API.
-	if verbose {
-		fmt.Fprintf(w, "Validating instance type %q...\n", newType)
-	}
+	sp.Update(fmt.Sprintf("Validating instance type %q...", newType))
 
 	validator := mintaws.NewInstanceTypeValidator(deps.describeTypes)
 	if err := validator.Validate(ctx, newType, deps.region); err != nil {
+		sp.Fail(err.Error())
 		return fmt.Errorf("invalid instance type: %w", err)
 	}
 
@@ -117,21 +116,18 @@ func runResize(cmd *cobra.Command, deps *resizeDeps, newType string) error {
 
 	// Stop instance if running.
 	if wasRunning {
-		if verbose {
-			fmt.Fprintf(w, "Stopping instance %s...\n", found.ID)
-		}
+		sp.Update(fmt.Sprintf("Stopping instance %s...", found.ID))
 		_, err := deps.stop.StopInstances(ctx, &ec2.StopInstancesInput{
 			InstanceIds: []string{found.ID},
 		})
 		if err != nil {
+			sp.Fail(err.Error())
 			return fmt.Errorf("stopping instance %s: %w", found.ID, err)
 		}
 	}
 
 	// Modify instance type.
-	if verbose {
-		fmt.Fprintf(w, "Modifying instance type to %s...\n", newType)
-	}
+	sp.Update(fmt.Sprintf("Modifying instance type to %s...", newType))
 
 	_, err = deps.modify.ModifyInstanceAttribute(ctx, &ec2.ModifyInstanceAttributeInput{
 		InstanceId: aws.String(found.ID),
@@ -140,22 +136,25 @@ func runResize(cmd *cobra.Command, deps *resizeDeps, newType string) error {
 		},
 	})
 	if err != nil {
+		sp.Fail(err.Error())
 		return fmt.Errorf("modifying instance type: %w", err)
 	}
 
 	// Restart instance if it was running before.
 	if wasRunning {
-		if verbose {
-			fmt.Fprintf(w, "Starting instance %s...\n", found.ID)
-		}
+		sp.Update(fmt.Sprintf("Starting instance %s...", found.ID))
 		_, err := deps.start.StartInstances(ctx, &ec2.StartInstancesInput{
 			InstanceIds: []string{found.ID},
 		})
 		if err != nil {
+			sp.Fail(err.Error())
 			return fmt.Errorf("starting instance %s: %w", found.ID, err)
 		}
 	}
 
+	// Print the final success message to the command output unconditionally.
+	// sp.Stop clears the spinner line in interactive mode before we print.
+	sp.Stop("")
 	fmt.Fprintf(w, "VM %q (%s) resized to %s.\n", vmName, found.ID, newType)
 	return nil
 }
