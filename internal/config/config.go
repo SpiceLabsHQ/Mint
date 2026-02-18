@@ -27,6 +27,7 @@ type Config struct {
 	Region             string `mapstructure:"region"              toml:"region"`
 	InstanceType       string `mapstructure:"instance_type"       toml:"instance_type"`
 	VolumeSizeGB       int    `mapstructure:"volume_size_gb"      toml:"volume_size_gb"`
+	VolumeIOPS         int    `mapstructure:"volume_iops"         toml:"volume_iops"`
 	IdleTimeoutMinutes int    `mapstructure:"idle_timeout_minutes" toml:"idle_timeout_minutes"`
 	SSHConfigApproved  bool   `mapstructure:"ssh_config_approved" toml:"ssh_config_approved"`
 
@@ -43,6 +44,7 @@ var validators = map[string]validator{
 	"region":               validateRegion,
 	"instance_type":        validateInstanceType,
 	"volume_size_gb":       validateVolumeSizeGB,
+	"volume_iops":          validateVolumeIOPS,
 	"idle_timeout_minutes": validateIdleTimeoutMinutes,
 	"ssh_config_approved":  validateSSHConfigApproved,
 }
@@ -83,6 +85,7 @@ func Load(configDir string) (*Config, error) {
 	v.SetDefault("region", "")
 	v.SetDefault("instance_type", "m6i.xlarge")
 	v.SetDefault("volume_size_gb", 50)
+	v.SetDefault("volume_iops", 3000)
 	v.SetDefault("idle_timeout_minutes", 60)
 	v.SetDefault("ssh_config_approved", false)
 
@@ -114,6 +117,7 @@ func Save(cfg *Config, configDir string) error {
 	v.Set("region", cfg.Region)
 	v.Set("instance_type", cfg.InstanceType)
 	v.Set("volume_size_gb", cfg.VolumeSizeGB)
+	v.Set("volume_iops", cfg.VolumeIOPS)
 	v.Set("idle_timeout_minutes", cfg.IdleTimeoutMinutes)
 	v.Set("ssh_config_approved", cfg.SSHConfigApproved)
 
@@ -153,6 +157,9 @@ func (c *Config) Set(key, value string) error {
 	case "volume_size_gb":
 		n, _ := strconv.Atoi(value) // already validated
 		c.VolumeSizeGB = n
+	case "volume_iops":
+		n, _ := strconv.Atoi(value) // already validated
+		c.VolumeIOPS = n
 	case "idle_timeout_minutes":
 		n, _ := strconv.Atoi(value) // already validated
 		c.IdleTimeoutMinutes = n
@@ -190,6 +197,20 @@ func validateVolumeSizeGB(value string) error {
 	}
 	if n < 50 {
 		return fmt.Errorf("must be >= 50 (got %d)", n)
+	}
+	return nil
+}
+
+func validateVolumeIOPS(value string) error {
+	n, err := strconv.Atoi(value)
+	if err != nil {
+		return fmt.Errorf("%q is not a valid integer", value)
+	}
+	if n < 3000 {
+		return fmt.Errorf("must be >= 3000 (got %d)", n)
+	}
+	if n > 16000 {
+		return fmt.Errorf("must be <= 16000 (got %d)", n)
 	}
 	return nil
 }

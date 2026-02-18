@@ -246,6 +246,7 @@ func TestValidKeys(t *testing.T) {
 		"region":               true,
 		"instance_type":        true,
 		"volume_size_gb":       true,
+		"volume_iops":          true,
 		"idle_timeout_minutes": true,
 		"ssh_config_approved":  true,
 	}
@@ -258,6 +259,86 @@ func TestValidKeys(t *testing.T) {
 		if !expected[k] {
 			t.Errorf("unexpected key %q in ValidKeys()", k)
 		}
+	}
+}
+
+func TestLoadDefaultVolumeIOPS(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load() unexpected error: %v", err)
+	}
+	if cfg.VolumeIOPS != 3000 {
+		t.Errorf("VolumeIOPS = %d, want 3000 (default)", cfg.VolumeIOPS)
+	}
+}
+
+func TestSetValidatesVolumeIOPS(t *testing.T) {
+	dir := t.TempDir()
+	cfg, _ := Load(dir)
+
+	tests := []struct {
+		name    string
+		value   string
+		wantErr bool
+	}{
+		{"minimum 3000", "3000", false},
+		{"maximum 16000", "16000", false},
+		{"mid-range 8000", "8000", false},
+		{"below minimum 2999", "2999", true},
+		{"below minimum 1000", "1000", true},
+		{"above maximum 16001", "16001", true},
+		{"above maximum 20000", "20000", true},
+		{"not a number", "fast", true},
+		{"negative", "-1", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := cfg.Set("volume_iops", tt.value)
+			if tt.wantErr && err == nil {
+				t.Errorf("Set(volume_iops, %q) expected error, got nil", tt.value)
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("Set(volume_iops, %q) unexpected error: %v", tt.value, err)
+			}
+		})
+	}
+}
+
+func TestSetVolumeIOPSUpdatesConfig(t *testing.T) {
+	dir := t.TempDir()
+	cfg, _ := Load(dir)
+
+	if err := cfg.Set("volume_iops", "6000"); err != nil {
+		t.Fatalf("Set(volume_iops, 6000) unexpected error: %v", err)
+	}
+	if cfg.VolumeIOPS != 6000 {
+		t.Errorf("VolumeIOPS = %d, want 6000", cfg.VolumeIOPS)
+	}
+}
+
+func TestSaveAndLoadVolumeIOPS(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &Config{
+		Region:             "us-west-2",
+		InstanceType:       "m6i.xlarge",
+		VolumeSizeGB:       50,
+		VolumeIOPS:         6000,
+		IdleTimeoutMinutes: 60,
+	}
+
+	if err := Save(cfg, dir); err != nil {
+		t.Fatalf("Save() unexpected error: %v", err)
+	}
+
+	loaded, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load() unexpected error: %v", err)
+	}
+
+	if loaded.VolumeIOPS != 6000 {
+		t.Errorf("VolumeIOPS = %d, want 6000", loaded.VolumeIOPS)
 	}
 }
 

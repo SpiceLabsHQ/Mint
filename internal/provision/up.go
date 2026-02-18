@@ -28,6 +28,7 @@ const DefaultEIPLimit = 5
 type ProvisionConfig struct {
 	InstanceType    string
 	VolumeSize      int32
+	VolumeIOPS      int32  // IOPS for the project gp3 EBS volume (0 defaults to 3000)
 	BootstrapScript []byte
 	EFSID           string // EFS filesystem ID for user storage
 	IdleTimeout     int    // Idle timeout in minutes (0 defaults to 60)
@@ -257,8 +258,12 @@ func (p *Provisioner) Run(ctx context.Context, owner, ownerARN, vmName string, c
 		volumeID = pendingVolID
 	} else {
 		// No pending-attach volume — create a new one.
+		volumeIOPS := cfg.VolumeIOPS
+		if volumeIOPS == 0 {
+			volumeIOPS = 3000
+		}
 		var createErr error
-		volumeID, createErr = p.createAndAttachVolume(ctx, instanceID, az, volumeSize, owner, ownerARN, vmName)
+		volumeID, createErr = p.createAndAttachVolume(ctx, instanceID, az, volumeSize, volumeIOPS, owner, ownerARN, vmName)
 		if createErr != nil {
 			return nil, fmt.Errorf("creating project volume: %w", createErr)
 		}
@@ -553,6 +558,7 @@ func (p *Provisioner) createAndAttachVolume(
 	ctx context.Context,
 	instanceID, az string,
 	sizeGB int32,
+	iops int32,
 	owner, ownerARN, vmName string,
 ) (string, error) {
 	volumeTags := tags.NewTagBuilder(owner, ownerARN, vmName).
@@ -562,6 +568,7 @@ func (p *Provisioner) createAndAttachVolume(
 	createOut, err := p.createVolume.CreateVolume(ctx, &ec2.CreateVolumeInput{
 		AvailabilityZone: aws.String(az),
 		Size:             aws.Int32(sizeGB),
+		Iops:             aws.Int32(iops),
 		VolumeType:       ec2types.VolumeTypeGp3,
 		TagSpecifications: []ec2types.TagSpecification{
 			{
