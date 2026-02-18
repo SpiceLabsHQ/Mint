@@ -16,7 +16,7 @@ These flags are available on all commands.
 | `--yes` | bool | `false` | Skip confirmation prompts on destructive operations |
 | `--vm <name>` | string | `"default"` | Target VM name. Can be omitted for single-VM users |
 
-The `--json` flag follows [ADR-0012](adr/0012-cli-ux-conventions.md). The `--vm` flag enables multi-VM workflows per [ADR-0002](adr/0002-single-vm-multiple-projects.md).
+The `--json` flag follows [ADR-0012](adr/0012-cli-ux-conventions.md). The `--vm` flag enables multi-VM workflows per [ADR-0002](adr/0002-single-vm-hosts-multiple-projects.md).
 
 ---
 
@@ -194,7 +194,7 @@ mint recreate --vm dev --yes
 
 Commands for connecting to VMs via SSH, mosh, VS Code, and managing sessions.
 
-All connectivity commands use **EC2 Instance Connect** for ephemeral SSH key management ([ADR-0007](adr/0007-ec2-instance-connect.md)). No SSH keys are stored locally. SSH runs on **port 41122** (non-standard port per [ADR-0016](adr/0016-non-standard-ports.md)). Host key verification uses trust-on-first-use (TOFU) per [ADR-0019](adr/0019-ssh-host-key-tofu.md).
+All connectivity commands use **EC2 Instance Connect** for ephemeral SSH key management ([ADR-0007](adr/0007-ec2-instance-connect-ssh.md)). No SSH keys are stored locally. SSH runs on **port 41122** (non-standard port per [ADR-0016](adr/0016-non-standard-ports-replace-ip-scoping.md)). Host key verification uses trust-on-first-use (TOFU) per [ADR-0019](adr/0019-ssh-host-key-tofu.md).
 
 ### `mint ssh`
 
@@ -234,7 +234,7 @@ Open a mosh session to the VM using ephemeral keys.
 mint mosh [flags]
 ```
 
-Connects via mosh for roaming, intermittent-connectivity sessions. Ideal for iPads and unreliable networks. Requires `mosh` to be installed locally (`brew install mosh` on macOS, `apt install mosh` on Linux). Mosh uses UDP ports 60000-61000 per [ADR-0016](adr/0016-non-standard-ports.md).
+Connects via mosh for roaming, intermittent-connectivity sessions. Ideal for iPads and unreliable networks. Requires `mosh` to be installed locally (`brew install mosh` on macOS, `apt install mosh` on Linux). Mosh uses UDP ports 60000-61000 per [ADR-0016](adr/0016-non-standard-ports-replace-ip-scoping.md).
 
 **Flags:** Global flags only.
 
@@ -260,7 +260,7 @@ mint connect [session] [flags]
 
 Combines mosh with tmux for persistent, roaming sessions. If a session name is provided, creates or attaches to that session. If no session name is given, lists available sessions and presents an interactive picker. When only one session exists, it is auto-selected.
 
-Requires `mosh` to be installed locally. Tmux runs on the host (not inside containers) per [ADR-0003](adr/0003-tmux-on-host.md).
+Requires `mosh` to be installed locally. Tmux runs on the host (not inside containers) per [ADR-0003](adr/0003-tmux-on-host-not-in-containers.md).
 
 **Arguments:**
 
@@ -383,7 +383,7 @@ Add an SSH public key to the VM.
 mint key add <public-key> [flags]
 ```
 
-Adds an SSH public key to the VM's `~/.ssh/authorized_keys`. This is the escape hatch for clients that cannot use EC2 Instance Connect (e.g., some mobile apps). See [ADR-0007](adr/0007-ec2-instance-connect.md).
+Adds an SSH public key to the VM's `~/.ssh/authorized_keys`. This is the escape hatch for clients that cannot use EC2 Instance Connect (e.g., some mobile apps). See [ADR-0007](adr/0007-ec2-instance-connect-ssh.md).
 
 The argument can be:
 - A file path (e.g., `~/.ssh/id_ed25519.pub`)
@@ -571,7 +571,7 @@ Update mint to the latest version.
 mint update [flags]
 ```
 
-Downloads the latest release from GitHub, verifies its SHA256 checksum, and replaces the current binary. Checksum verification follows [ADR-0020](adr/0020-binary-signing-deferred.md).
+Downloads the latest release from GitHub, verifies its SHA256 checksum, and replaces the current binary. Checksum verification follows [ADR-0020](adr/0020-binary-signing-deferred-to-v2.md).
 
 **Flags:** Global flags only.
 
@@ -739,7 +739,7 @@ Validates prerequisites and creates per-user resources. This command must be run
 
 **What it does:**
 
-1. Validates the default VPC exists ([ADR-0010](adr/0010-default-vpc.md))
+1. Validates the default VPC exists ([ADR-0010](adr/0010-default-vpc-no-custom-networking.md))
 2. Discovers the admin EFS filesystem
 3. Verifies the `mint-instance-profile` IAM instance profile exists
 4. Creates a per-user security group (if not present)
