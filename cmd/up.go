@@ -28,6 +28,7 @@ type upDeps struct {
 	bootstrapScript     []byte
 	instanceType        string
 	volumeSize          int32
+	volumeIOPS          int32
 	sshConfigApproved   bool
 	sshConfigPath       string
 	describe            mintaws.DescribeInstancesAPI
@@ -41,7 +42,7 @@ func newUpCommand() *cobra.Command {
 
 // newUpCommandWithDeps creates the up command with explicit dependencies for testing.
 func newUpCommandWithDeps(deps *upDeps) *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "up",
 		Short: "Provision or start the VM",
 		Long: "Provision a new VM or start a stopped one. Creates EC2 instance, " +
@@ -68,8 +69,14 @@ func newUpCommandWithDeps(deps *upDeps) *cobra.Command {
 				cmd.InOrStdin(),
 			)
 			sshApproved := false
+			volumeIOPS := int32(0)
 			if clients.mintConfig != nil {
 				sshApproved = clients.mintConfig.SSHConfigApproved
+				volumeIOPS = int32(clients.mintConfig.VolumeIOPS)
+			}
+			// --volume-iops flag overrides config value when provided (> 0).
+			if flagIOPS, _ := cmd.Flags().GetInt32("volume-iops"); flagIOPS > 0 {
+				volumeIOPS = flagIOPS
 			}
 			return runUp(cmd, &upDeps{
 				provisioner: provision.NewProvisioner(
@@ -91,12 +98,18 @@ func newUpCommandWithDeps(deps *upDeps) *cobra.Command {
 				bootstrapScript:     GetBootstrapScript(),
 				instanceType:        clients.mintConfig.InstanceType,
 				volumeSize:          int32(clients.mintConfig.VolumeSizeGB),
+				volumeIOPS:          volumeIOPS,
 				sshConfigApproved:   sshApproved,
 				describe:            clients.ec2Client,
 				describeFileSystems: clients.efsClient,
 			})
 		},
 	}
+
+	// --volume-iops overrides the config value. 0 means "use config value".
+	cmd.Flags().Int32("volume-iops", 0, "IOPS for the project EBS volume (gp3, range 3000-16000; 0 uses config value)")
+
+	return cmd
 }
 
 // runUp executes the up command logic.
@@ -129,6 +142,7 @@ func runUp(cmd *cobra.Command, deps *upDeps) error {
 	cfg := provision.ProvisionConfig{
 		InstanceType:    deps.instanceType,
 		VolumeSize:      deps.volumeSize,
+		VolumeIOPS:      deps.volumeIOPS,
 		BootstrapScript: deps.bootstrapScript,
 		EFSID:           efsID,
 	}
@@ -270,6 +284,7 @@ func upWithProvisioner(ctx context.Context, cmd *cobra.Command, cliCtx *cli.CLIC
 	cfg := provision.ProvisionConfig{
 		InstanceType:    deps.instanceType,
 		VolumeSize:      deps.volumeSize,
+		VolumeIOPS:      deps.volumeIOPS,
 		BootstrapScript: deps.bootstrapScript,
 	}
 
