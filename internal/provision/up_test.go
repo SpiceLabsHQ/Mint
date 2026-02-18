@@ -1579,6 +1579,76 @@ func TestProvisionerPendingAttachDeleteTagError(t *testing.T) {
 	}
 }
 
+func TestProvisionerCrashAfterTerminateRecovery(t *testing.T) {
+	// Scenario: mint recreate crashed after terminating the old instance.
+	// The old instance no longer exists but the project volume is orphaned
+	// with a mint:pending-attach=true tag. Running mint up should recover
+	// by attaching the existing volume instead of creating a new one.
+	//
+	// Timeline:
+	//   1. User runs "mint recreate" on VM "default"
+	//   2. Recreate stops instance, detaches volume, tags it pending-attach, terminates instance
+	//   3. CRASH — recreate dies after terminate but before launching a replacement
+	//   4. User runs "mint up" — DescribeInstances finds NO instance (it was terminated)
+	//   5. mint up provisions a fresh instance
+	//   6. findPendingAttachVolume discovers the orphaned volume
+	//   7. The volume is attached to the new instance (skip CreateVolume)
+	//   8. The mint:pending-attach tag is removed
+	//   9. User's data is preserved
+
+	m := newUpHappyMocks()
+
+	// No existing instance (it was terminated before the crash).
+	// newUpHappyMocks() already defaults to empty DescribeInstancesOutput.
+
+	// The orphaned volume from the crashed recreate:
+	m.describeVolumes = &mockUpDescribeVolumes{
+		output: &ec2.DescribeVolumesOutput{
+			Volumes: []ec2types.Volume{{
+				VolumeId:         aws.String("vol-orphaned"),
+				AvailabilityZone: aws.String("us-east-1a"),
+			}},
+		},
+	}
+	m.deleteTags = &mockUpDeleteTags{
+		output: &ec2.DeleteTagsOutput{},
+	}
+	p := m.build()
+
+	result, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", defaultConfig())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// The orphaned volume should be recovered, not a new one created.
+	if result.VolumeID != "vol-orphaned" {
+		t.Errorf("VolumeID = %q, want %q (orphaned volume should be recovered)", result.VolumeID, "vol-orphaned")
+	}
+
+	// CreateVolume should NOT be called — the orphaned volume replaces it.
+	if m.createVolume.called {
+		t.Error("CreateVolume called — should reuse orphaned pending-attach volume")
+	}
+
+	// AttachVolume should attach the orphaned volume.
+	if !m.attachVolume.called {
+		t.Fatal("AttachVolume not called — orphaned volume should be attached to new instance")
+	}
+	if aws.ToString(m.attachVolume.input.VolumeId) != "vol-orphaned" {
+		t.Errorf("AttachVolume VolumeId = %q, want %q", aws.ToString(m.attachVolume.input.VolumeId), "vol-orphaned")
+	}
+
+	// DeleteTags should remove the pending-attach tag.
+	if !m.deleteTags.called {
+		t.Fatal("DeleteTags not called — pending-attach tag should be removed after recovery")
+	}
+
+	// A new instance should have been launched (not a restart).
+	if result.InstanceID != "i-new123" {
+		t.Errorf("InstanceID = %q, want %q (fresh instance should be launched)", result.InstanceID, "i-new123")
+	}
+}
+
 func TestProvisionerNoPollOnRunningVM(t *testing.T) {
 	m := newUpHappyMocks()
 	m.describeInstances.output = &ec2.DescribeInstancesOutput{
