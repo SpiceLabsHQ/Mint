@@ -125,10 +125,14 @@ func (s *stubDescribeSubnets) DescribeSubnets(ctx context.Context, params *ec2.D
 	}, nil
 }
 
-// stubCreateVolume returns a volume with the configured ID.
-type stubCreateVolume struct{ volumeID string }
+// stubCreateVolume returns a volume with the configured ID and records the last input.
+type stubCreateVolume struct {
+	volumeID  string
+	lastInput *ec2.CreateVolumeInput
+}
 
 func (s *stubCreateVolume) CreateVolume(ctx context.Context, params *ec2.CreateVolumeInput, optFns ...func(*ec2.Options)) (*ec2.CreateVolumeOutput, error) {
+	s.lastInput = params
 	return &ec2.CreateVolumeOutput{VolumeId: aws.String(s.volumeID)}, nil
 }
 
@@ -193,6 +197,13 @@ func (s *stubDescribeFileSystems) DescribeFileSystems(ctx context.Context, param
 			},
 		}},
 	}, nil
+}
+
+// stubDescribeFileSystemsWithError always returns the configured error.
+type stubDescribeFileSystemsWithError struct{ err error }
+
+func (s *stubDescribeFileSystemsWithError) DescribeFileSystems(ctx context.Context, params *efs.DescribeFileSystemsInput, optFns ...func(*efs.Options)) (*efs.DescribeFileSystemsOutput, error) {
+	return nil, s.err
 }
 
 // ---------------------------------------------------------------------------
@@ -275,6 +286,31 @@ func newRestartProvisioner(instanceID, vmName, owner, publicIP string) *provisio
 		&stubCreateVolume{volumeID: "vol-restart-e2e"},
 		&stubAttachVolume{},
 		&stubAllocateAddress{allocationID: "eipalloc-restart-e2e", publicIP: publicIP},
+		&stubAssociateAddress{},
+		&stubDescribeAddresses{},
+		&stubCreateTags{},
+		&stubGetParameter{},
+	)
+	p.WithBootstrapVerifier(func(content []byte) error { return nil })
+	p.WithAMIResolver(func(ctx context.Context, client mintaws.GetParameterAPI) (string, error) {
+		return "ami-e2e-test", nil
+	})
+	return p
+}
+
+// newFreshProvisionerWithVolume is like newFreshProvisioner but accepts a
+// caller-owned stubCreateVolume so the caller can inspect lastInput after the
+// provision completes (e.g., to assert IOPS values).
+func newFreshProvisionerWithVolume(instanceID string, volume *stubCreateVolume, allocationID, publicIP string) *provision.Provisioner {
+	p := provision.NewProvisioner(
+		&stubDescribeInstances{output: &ec2.DescribeInstancesOutput{}},
+		&stubStartInstances{},
+		&stubRunInstances{instanceID: instanceID},
+		&stubDescribeSGsDouble{},
+		&stubDescribeSubnets{},
+		volume,
+		&stubAttachVolume{},
+		&stubAllocateAddress{allocationID: allocationID, publicIP: publicIP},
 		&stubAssociateAddress{},
 		&stubDescribeAddresses{},
 		&stubCreateTags{},
@@ -389,9 +425,11 @@ func newE2EUpCommand(cfg *e2eConfig) *cobra.Command {
 			efsID := aws.ToString(efsOut.FileSystems[0].FileSystemId)
 
 			// Run the real provision logic with injected stubs
+			volumeIOPS, _ := cmd.Flags().GetInt32("volume-iops")
 			provCfg := provision.ProvisionConfig{
 				InstanceType:    "m6i.xlarge",
 				VolumeSize:      50,
+				VolumeIOPS:      volumeIOPS,
 				BootstrapScript: []byte("#!/bin/bash\necho test"),
 				EFSID:           efsID,
 			}

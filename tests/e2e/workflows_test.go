@@ -2,9 +2,11 @@ package e2e_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/nicholasgasior/mint/cmd"
 )
 
@@ -333,6 +335,148 @@ func TestWorkflow_ConfigRoundTrip(t *testing.T) {
 
 	if result["instance_type"] != "t3.large" {
 		t.Errorf("config --json instance_type = %v, want t3.large", result["instance_type"])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Workflow 5: EFS discovery error propagation
+//
+// mint up (with stubbed EFS returning an error)
+//
+// Verifies: when EFS discovery fails, the up command returns a non-zero exit
+// code and the output contains a human-readable error message (not a Go stack
+// trace or empty string).
+// ---------------------------------------------------------------------------
+
+func TestWorkflow_ProvisionErrorPropagates(t *testing.T) {
+	const (
+		instanceID   = "i-e2e-errprop"
+		volumeID     = "vol-e2e-errprop"
+		allocationID = "eipalloc-e2e-errprop"
+		publicIP     = "54.100.200.5"
+		vmName       = "default"
+		owner        = "e2e-user"
+	)
+
+	efsErr := fmt.Errorf("RequestExpired: request timestamp expired")
+	cfg := &e2eConfig{
+		provisioner:         newFreshProvisioner(instanceID, volumeID, allocationID, publicIP),
+		describeFileSystems: &stubDescribeFileSystemsWithError{err: efsErr},
+		describeForDown: &stubDescribeInstances{
+			output: makeE2EDescribeOutput(
+				makeE2EInstance(instanceID, vmName, owner, "running", publicIP, "m6i.xlarge"),
+			),
+		},
+		describeForList: &stubDescribeInstances{
+			output: makeE2EDescribeOutput(
+				makeE2EInstance(instanceID, vmName, owner, "running", publicIP, "m6i.xlarge"),
+			),
+		},
+		describeForStatus: &stubDescribeInstances{
+			output: makeE2EDescribeOutput(
+				makeE2EInstance(instanceID, vmName, owner, "running", publicIP, "m6i.xlarge"),
+			),
+		},
+		stopInstances: &stubStopInstances{},
+		owner:         owner,
+		ownerARN:      "arn:aws:iam::123456789012:user/" + owner,
+	}
+
+	root := newE2ERoot(t, cfg)
+	// Disable SilenceErrors so cobra prints the error message to stderr,
+	// giving us something to assert on in the combined output.
+	root.SilenceErrors = false
+
+	env := &testEnv{t: t, root: root}
+	stdout, stderr, err := env.RunCommand([]string{"up"})
+
+	// The command must fail.
+	if err == nil {
+		t.Fatalf("expected mint up to return an error when EFS discovery fails, got nil; stdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+
+	// The combined output must contain a human-readable message — not empty,
+	// not a Go stack trace.
+	combined := stdout + stderr
+	if combined == "" {
+		t.Fatalf("expected non-empty output when EFS discovery fails; stdout=%q stderr=%q", stdout, stderr)
+	}
+
+	wantOneOf := []string{"EFS", "discovering", "RequestExpired"}
+	found := false
+	for _, want := range wantOneOf {
+		if strings.Contains(combined, want) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("error output does not contain any of %v\ncombined output:\n%s", wantOneOf, combined)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Workflow 6: Custom IOPS provisioning
+//
+// mint up --volume-iops 6000
+//
+// Verifies: the IOPS flag is threaded through to CreateVolume and the
+// provision completes successfully with the instance ID in the output.
+// ---------------------------------------------------------------------------
+
+func TestWorkflow_ProvisionWithCustomIOPS(t *testing.T) {
+	const (
+		instanceID   = "i-e2e-iops"
+		allocationID = "eipalloc-e2e-iops"
+		publicIP     = "54.100.200.6"
+		vmName       = "default"
+		owner        = "e2e-user"
+	)
+
+	volumeStub := &stubCreateVolume{volumeID: "vol-e2e-iops"}
+
+	p := newFreshProvisionerWithVolume(instanceID, volumeStub, allocationID, publicIP)
+	cfg := &e2eConfig{
+		provisioner:         p,
+		describeFileSystems: &stubDescribeFileSystems{filesystemID: "fs-e2e-iops"},
+		describeForDown: &stubDescribeInstances{
+			output: makeE2EDescribeOutput(
+				makeE2EInstance(instanceID, vmName, owner, "running", publicIP, "m6i.xlarge"),
+			),
+		},
+		describeForList: &stubDescribeInstances{
+			output: makeE2EDescribeOutput(
+				makeE2EInstance(instanceID, vmName, owner, "running", publicIP, "m6i.xlarge"),
+			),
+		},
+		describeForStatus: &stubDescribeInstances{
+			output: makeE2EDescribeOutput(
+				makeE2EInstance(instanceID, vmName, owner, "running", publicIP, "m6i.xlarge"),
+			),
+		},
+		stopInstances: &stubStopInstances{},
+		owner:         owner,
+		ownerARN:      "arn:aws:iam::123456789012:user/" + owner,
+	}
+
+	env := &testEnv{t: t, root: newE2ERoot(t, cfg)}
+	stdout, _, err := env.RunCommand([]string{"up", "--volume-iops", "6000"})
+	requireNoError(t, err)
+
+	// Provision must complete and include the instance ID.
+	if !strings.Contains(stdout, instanceID) {
+		t.Errorf("mint up --volume-iops 6000: output missing instance ID %q\noutput:\n%s", instanceID, stdout)
+	}
+
+	// The CreateVolume stub must have been called with Iops = 6000.
+	if volumeStub.lastInput == nil {
+		t.Fatal("CreateVolume was not called — cannot verify IOPS")
+	}
+	if volumeStub.lastInput.Iops == nil {
+		t.Fatal("CreateVolumeInput.Iops is nil; expected aws.Int32(6000)")
+	}
+	if got := aws.ToInt32(volumeStub.lastInput.Iops); got != 6000 {
+		t.Errorf("CreateVolumeInput.Iops = %d, want 6000", got)
 	}
 }
 

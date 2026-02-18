@@ -248,7 +248,7 @@ main() {
     INSTALL_PATH="${INSTALL_DIR}/${BINARY_NAME}"
 
     info "Installing to ${INSTALL_PATH}..."
-    cp "${BINARY_PATH}" "${INSTALL_PATH}" \
+    mv "${BINARY_PATH}" "${INSTALL_PATH}" \
         || die "failed to install binary to ${INSTALL_PATH}.
   Try running with sudo:  curl -fsSL <url> | sudo sh
   Or set MINT_INSTALL_DIR to a writable directory."
