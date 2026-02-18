@@ -794,6 +794,8 @@ mint list --json
 
 **JSON output fields (per VM):** `id`, `name`, `state`, `public_ip`, `instance_type`, `launch_time`, `uptime`, `bootstrap_status`, `tags`.
 
+**Note:** When `--json` is used, informational warnings (such as the multi-VM cost warning) are omitted; machine-readable output contains structured fields only.
+
 ---
 
 ### `mint status`

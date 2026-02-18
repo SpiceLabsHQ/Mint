@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/efs"
@@ -19,6 +20,20 @@ import (
 	"github.com/nicholasgasior/mint/internal/vm"
 	"github.com/spf13/cobra"
 )
+
+// spinnerWriter is an io.Writer that routes writes through the spinner's
+// Update method. This prevents garbled output when --verbose is active:
+// the spinner goroutine and the bootstrap poller would otherwise both write
+// to the same fd concurrently.
+type spinnerWriter struct{ sp *progress.Spinner }
+
+func (sw *spinnerWriter) Write(p []byte) (int, error) {
+	msg := strings.TrimRight(string(p), "\n")
+	if msg != "" {
+		sw.sp.Update(msg)
+	}
+	return len(p), nil
+}
 
 // upDeps holds the injectable dependencies for the up command.
 type upDeps struct {
@@ -60,12 +75,21 @@ func newUpCommandWithDeps(deps *upDeps) *cobra.Command {
 			cliCtx := cli.FromCommand(cmd)
 			verbose := cliCtx != nil && cliCtx.Verbose
 			sp := newCommandSpinner(cmd.OutOrStdout(), verbose)
+			// When --verbose is active, route poller output through the spinner's
+			// mutex-protected Update method to prevent concurrent writes to the
+			// same fd from the spinner goroutine and the poller.
+			var pollerWriter io.Writer
+			if verbose {
+				pollerWriter = &spinnerWriter{sp: sp}
+			} else {
+				pollerWriter = sp.Writer
+			}
 			poller := provision.NewBootstrapPoller(
 				clients.ec2Client, // DescribeInstancesAPI
 				clients.ec2Client, // StopInstancesAPI
 				clients.ec2Client, // TerminateInstancesAPI
 				clients.ec2Client, // CreateTagsAPI
-				sp.Writer,
+				pollerWriter,
 				cmd.InOrStdin(),
 			)
 			sshApproved := false
