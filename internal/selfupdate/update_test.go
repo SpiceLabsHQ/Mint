@@ -28,7 +28,7 @@ func TestCheckLatest_ReturnsRelease(t *testing.T) {
 		release := githubRelease{
 			TagName: "v1.2.0",
 			Assets: []githubAsset{
-				{Name: "mint_v1.2.0_linux_amd64.tar.gz", BrowserDownloadURL: "https://example.com/mint.tar.gz"},
+				{Name: "mint_1.2.0_linux_amd64.tar.gz", BrowserDownloadURL: "https://example.com/mint.tar.gz"},
 				{Name: "checksums.txt", BrowserDownloadURL: "https://example.com/checksums.txt"},
 			},
 		}
@@ -123,7 +123,7 @@ func TestVerifyChecksum_Match(t *testing.T) {
 	dir := t.TempDir()
 	// Simulate a .tar.gz archive file.
 	archiveContent := []byte("fake-tar-gz-archive-content")
-	archivePath := filepath.Join(dir, fmt.Sprintf("mint_v1.0.0_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH))
+	archivePath := filepath.Join(dir, fmt.Sprintf("mint_1.0.0_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH))
 	if err := os.WriteFile(archivePath, archiveContent, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +131,7 @@ func TestVerifyChecksum_Match(t *testing.T) {
 	h := sha256.Sum256(archiveContent)
 	expectedHash := fmt.Sprintf("%x", h)
 
-	checksumContent := fmt.Sprintf("%s  mint_v1.0.0_%s_%s.tar.gz\n", expectedHash, runtime.GOOS, runtime.GOARCH)
+	checksumContent := fmt.Sprintf("%s  mint_1.0.0_%s_%s.tar.gz\n", expectedHash, runtime.GOOS, runtime.GOARCH)
 
 	u := &Updater{}
 	err := u.VerifyChecksum(archivePath, checksumContent)
@@ -148,7 +148,7 @@ func TestVerifyChecksum_Mismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	checksumContent := fmt.Sprintf("0000000000000000000000000000000000000000000000000000000000000000  mint_v1.0.0_%s_%s.tar.gz\n", runtime.GOOS, runtime.GOARCH)
+	checksumContent := fmt.Sprintf("0000000000000000000000000000000000000000000000000000000000000000  mint_1.0.0_%s_%s.tar.gz\n", runtime.GOOS, runtime.GOARCH)
 
 	u := &Updater{}
 	err := u.VerifyChecksum(archivePath, checksumContent)
@@ -168,7 +168,7 @@ func TestVerifyChecksum_MissingEntry(t *testing.T) {
 	}
 
 	// Checksums for a different OS/arch.
-	checksumContent := "abc123  mint_v1.0.0_windows_arm64.tar.gz\n"
+	checksumContent := "abc123  mint_1.0.0_windows_arm64.tar.gz\n"
 
 	u := &Updater{}
 	err := u.VerifyChecksum(archivePath, checksumContent)
@@ -191,7 +191,7 @@ func TestDownload_Success(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	assetName := fmt.Sprintf("mint_v1.2.0_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)
+	assetName := fmt.Sprintf("mint_1.2.0_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)
 	release := &Release{
 		TagName: "v1.2.0",
 		Assets: []githubAsset{
@@ -227,7 +227,7 @@ func TestDownload_MissingAsset(t *testing.T) {
 	release := &Release{
 		TagName: "v1.2.0",
 		Assets: []githubAsset{
-			{Name: "mint_v1.2.0_windows_arm64.zip", BrowserDownloadURL: "https://example.com/mint.zip"},
+			{Name: "mint_1.2.0_windows_arm64.zip", BrowserDownloadURL: "https://example.com/mint.zip"},
 		},
 	}
 
@@ -248,7 +248,7 @@ func TestDownload_MissingAsset(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestDownload_RejectsHTTPURL(t *testing.T) {
-	assetName := fmt.Sprintf("mint_v1.2.0_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)
+	assetName := fmt.Sprintf("mint_1.2.0_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)
 	release := &Release{
 		TagName: "v1.2.0",
 		Assets: []githubAsset{
@@ -438,7 +438,7 @@ func TestApply_FailsOnMissingSource(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestDownloadChecksums_Success(t *testing.T) {
-	checksumContent := "abc123  mint_v1.0.0_linux_amd64.tar.gz\ndef456  mint_v1.0.0_darwin_arm64.tar.gz\n"
+	checksumContent := "abc123  mint_1.0.0_linux_amd64.tar.gz\ndef456  mint_1.0.0_darwin_arm64.tar.gz\n"
 
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		io.WriteString(w, checksumContent)
