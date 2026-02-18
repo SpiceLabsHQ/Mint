@@ -229,7 +229,7 @@ This roadmap breaks the Mint CLI into five phases, ordered by dependency and shi
 
 ---
 
-## Phase 4: Polish and Distribution
+## Phase 4: Polish and Distribution ✅
 
 **Goal**: Ship-ready CLI with Homebrew distribution, documentation, and the remaining UX polish items.
 
@@ -258,7 +258,7 @@ This roadmap breaks the Mint CLI into five phases, ordered by dependency and shi
 | **1 -- Init and Provisioning** | **Create, connect, stop, destroy a VM** ✅ |
 | **2 -- Connectivity and Projects** | **mosh, tmux, projects, iPad workflow** ✅ |
 | **3 -- Lifecycle, Health, and Self-Update** | **resize, recreate, doctor, update, bootstrap CI** ✅ |
-| 4 -- Polish and Distribution | Homebrew, docs, production-ready |
+| **4 -- Polish and Distribution** | **Homebrew, docs, production-ready** ✅ |
 
 ---
 
