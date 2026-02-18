@@ -83,7 +83,7 @@ detect_arch() {
 archive_ext() {
     _os="$1"
     case "${_os}" in
-        darwin) printf 'zip' ;;
+        darwin) printf 'tar.gz' ;;
         *)      printf 'tar.gz' ;;
     esac
 }
