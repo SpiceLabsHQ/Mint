@@ -40,12 +40,18 @@ func (m *mockRecreateSendSSHPublicKey) SendSSHPublicKey(ctx context.Context, par
 }
 
 // mockRecreateRemoteRunner returns a RemoteCommandRunner that yields different
-// output based on the command being run (tmux list-clients vs who).
+// output based on the command being run (tmux, who, docker, cat).
 type mockRecreateRemoteRunner struct {
-	tmuxOutput []byte
-	tmuxErr    error
-	whoOutput  []byte
-	whoErr     error
+	tmuxOutput   []byte
+	tmuxErr      error
+	whoOutput    []byte
+	whoErr       error
+	dockerPsOut  []byte
+	dockerPsErr  error
+	dockerTopOut map[string][]byte
+	dockerTopErr map[string]error
+	catExtendOut []byte
+	catExtendErr error
 }
 
 func (m *mockRecreateRemoteRunner) run(
@@ -61,6 +67,26 @@ func (m *mockRecreateRemoteRunner) run(
 	}
 	if len(command) > 0 && command[0] == "who" {
 		return m.whoOutput, m.whoErr
+	}
+	if len(command) >= 2 && command[0] == "docker" && command[1] == "ps" {
+		return m.dockerPsOut, m.dockerPsErr
+	}
+	if len(command) >= 3 && command[0] == "docker" && command[1] == "top" {
+		containerID := command[2]
+		if m.dockerTopErr != nil {
+			if err, ok := m.dockerTopErr[containerID]; ok {
+				return nil, err
+			}
+		}
+		if m.dockerTopOut != nil {
+			if out, ok := m.dockerTopOut[containerID]; ok {
+				return out, nil
+			}
+		}
+		return nil, fmt.Errorf("no mock for docker top %s", containerID)
+	}
+	if len(command) >= 2 && command[0] == "cat" && strings.Contains(command[1], "idle-extended-until") {
+		return m.catExtendOut, m.catExtendErr
 	}
 	return nil, fmt.Errorf("unexpected command: %v", command)
 }
@@ -254,19 +280,27 @@ func newRecreateTestRoot(sub *cobra.Command) *cobra.Command {
 
 func noSessionsRunner() *mockRecreateRemoteRunner {
 	return &mockRecreateRemoteRunner{
-		tmuxOutput: nil,
-		tmuxErr:    fmt.Errorf("no server running on /tmp/tmux-1000/default"),
-		whoOutput:  []byte(""),
-		whoErr:     nil,
+		tmuxOutput:   nil,
+		tmuxErr:      fmt.Errorf("no server running on /tmp/tmux-1000/default"),
+		whoOutput:    []byte(""),
+		whoErr:       nil,
+		dockerPsOut:  nil,
+		dockerPsErr:  fmt.Errorf("docker: command not found"),
+		catExtendOut: nil,
+		catExtendErr: fmt.Errorf("No such file or directory"),
 	}
 }
 
 func activeSessionsRunner() *mockRecreateRemoteRunner {
 	return &mockRecreateRemoteRunner{
-		tmuxOutput: []byte("/dev/pts/0 main\n"),
-		tmuxErr:    nil,
-		whoOutput:  []byte("ec2-user pts/0        2025-01-15 10:30 (192.168.1.100)\n"),
-		whoErr:     nil,
+		tmuxOutput:   []byte("/dev/pts/0 main\n"),
+		tmuxErr:      nil,
+		whoOutput:    []byte("ec2-user pts/0        2025-01-15 10:30 (192.168.1.100)\n"),
+		whoErr:       nil,
+		dockerPsOut:  nil,
+		dockerPsErr:  fmt.Errorf("docker: command not found"),
+		catExtendOut: nil,
+		catExtendErr: fmt.Errorf("No such file or directory"),
 	}
 }
 
@@ -594,10 +628,14 @@ func TestRecreateCommand(t *testing.T) {
 			name: "session detection failure is non-fatal in verbose mode",
 			deps: func() *recreateDeps {
 				runner := &mockRecreateRemoteRunner{
-					tmuxOutput: nil,
-					tmuxErr:    fmt.Errorf("connection refused"),
-					whoOutput:  nil,
-					whoErr:     fmt.Errorf("connection refused"),
+					tmuxOutput:   nil,
+					tmuxErr:      fmt.Errorf("connection refused"),
+					whoOutput:    nil,
+					whoErr:       fmt.Errorf("connection refused"),
+					dockerPsOut:  nil,
+					dockerPsErr:  fmt.Errorf("connection refused"),
+					catExtendOut: nil,
+					catExtendErr: fmt.Errorf("connection refused"),
 				}
 				d := newHappyRecreateDeps("alice")
 				d.remoteRun = runner.run
@@ -1415,6 +1453,83 @@ func TestRecreateLifecycleHostKeyRemovedWithNonDefaultVM(t *testing.T) {
 
 	if removedVM != "dev" {
 		t.Errorf("removeHostKey called with %q, want %q", removedVM, "dev")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests — Claude-in-containers detection via recreate
+// ---------------------------------------------------------------------------
+
+func TestRecreateDetectsClaudeInContainers(t *testing.T) {
+	// When claude processes are running in containers but no tmux/SSH
+	// sessions exist, recreate should still block.
+	runner := &mockRecreateRemoteRunner{
+		tmuxOutput: nil,
+		tmuxErr:    fmt.Errorf("no server running on /tmp/tmux-1000/default"),
+		whoOutput:  []byte(""),
+		whoErr:     nil,
+		dockerPsOut: []byte("abc123\n"),
+		dockerPsErr: nil,
+		dockerTopOut: map[string][]byte{
+			"abc123": []byte("PID COMMAND\n1 node\n42 claude\n"),
+		},
+		catExtendOut: nil,
+		catExtendErr: fmt.Errorf("No such file or directory"),
+	}
+	d := newHappyRecreateDeps("alice")
+	d.remoteRun = runner.run
+
+	buf := new(bytes.Buffer)
+	cmd := newRecreateCommandWithDeps(d)
+	root := newRecreateTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"recreate", "--yes"})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error when claude processes are active, got nil")
+	}
+	if !strings.Contains(err.Error(), "active sessions detected") {
+		t.Errorf("error %q does not mention active sessions", err.Error())
+	}
+	if !strings.Contains(err.Error(), "Claude processes in containers") {
+		t.Errorf("error %q does not mention claude processes", err.Error())
+	}
+}
+
+func TestRecreateDetectsManualExtend(t *testing.T) {
+	// When a manual extend is active, recreate should block.
+	future := "2099-01-01T00:00:00Z"
+	runner := &mockRecreateRemoteRunner{
+		tmuxOutput:   nil,
+		tmuxErr:      fmt.Errorf("no server running on /tmp/tmux-1000/default"),
+		whoOutput:    []byte(""),
+		whoErr:       nil,
+		dockerPsOut:  nil,
+		dockerPsErr:  fmt.Errorf("docker: command not found"),
+		catExtendOut: []byte(future + "\n"),
+		catExtendErr: nil,
+	}
+	d := newHappyRecreateDeps("alice")
+	d.remoteRun = runner.run
+
+	buf := new(bytes.Buffer)
+	cmd := newRecreateCommandWithDeps(d)
+	root := newRecreateTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"recreate", "--yes"})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error when manual extend is active, got nil")
+	}
+	if !strings.Contains(err.Error(), "active sessions detected") {
+		t.Errorf("error %q does not mention active sessions", err.Error())
+	}
+	if !strings.Contains(err.Error(), "Manual extend active until") {
+		t.Errorf("error %q does not mention manual extend", err.Error())
 	}
 }
 

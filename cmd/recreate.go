@@ -19,6 +19,7 @@ import (
 	"github.com/nicholasgasior/mint/internal/cli"
 	"github.com/nicholasgasior/mint/internal/config"
 	"github.com/nicholasgasior/mint/internal/provision"
+	"github.com/nicholasgasior/mint/internal/session"
 	"github.com/nicholasgasior/mint/internal/sshconfig"
 	"github.com/nicholasgasior/mint/internal/tags"
 	"github.com/nicholasgasior/mint/internal/vm"
@@ -547,60 +548,30 @@ func findSubnetInAZ(ctx context.Context, deps *recreateDeps, az string) (string,
 	return aws.ToString(out.Subnets[0].SubnetId), nil
 }
 
-// detectActiveSessions SSHs into the VM and checks for active tmux clients
-// and SSH/mosh connections. Returns a human-readable summary of active
-// sessions, or empty string if no active sessions are found.
+// detectActiveSessions SSHs into the VM and checks all four ADR-0018 idle
+// detection criteria: tmux clients, SSH/mosh connections, claude processes
+// in containers, and manual extend timestamps. Returns a human-readable
+// summary of active sessions, or empty string if no active sessions found.
 func detectActiveSessions(ctx context.Context, deps *recreateDeps, found *vm.VM) (string, error) {
-	// Check tmux clients (attached sessions indicate active users).
-	tmuxCmd := []string{
-		"tmux", "list-clients", "-F", "#{client_name} #{session_name}",
+	// Create a RemoteExecutor closure that adapts the recreateDeps' remoteRun
+	// to the simpler session.RemoteExecutor interface.
+	executor := func(ctx context.Context, command []string) ([]byte, error) {
+		return deps.remoteRun(
+			ctx,
+			deps.sendKey,
+			found.ID,
+			found.AvailabilityZone,
+			found.PublicIP,
+			defaultSSHPort,
+			defaultSSHUser,
+			command,
+		)
 	}
 
-	var parts []string
-
-	tmuxOutput, err := deps.remoteRun(
-		ctx,
-		deps.sendKey,
-		found.ID,
-		found.AvailabilityZone,
-		found.PublicIP,
-		defaultSSHPort,
-		defaultSSHUser,
-		tmuxCmd,
-	)
+	result, err := session.DetectActiveSessions(ctx, executor)
 	if err != nil {
-		// tmux not running or no clients is not an error condition.
-		if !isTmuxNoSessionsError(err) {
-			return "", fmt.Errorf("checking tmux clients: %w", err)
-		}
-	} else {
-		clients := strings.TrimSpace(string(tmuxOutput))
-		if clients != "" {
-			parts = append(parts, "  Tmux clients:\n    "+strings.ReplaceAll(clients, "\n", "\n    "))
-		}
+		return "", err
 	}
 
-	// Check SSH/mosh connections (who command shows logged-in users).
-	whoCmd := []string{"who"}
-
-	whoOutput, err := deps.remoteRun(
-		ctx,
-		deps.sendKey,
-		found.ID,
-		found.AvailabilityZone,
-		found.PublicIP,
-		defaultSSHPort,
-		defaultSSHUser,
-		whoCmd,
-	)
-	if err != nil {
-		return "", fmt.Errorf("checking active connections: %w", err)
-	}
-
-	connections := strings.TrimSpace(string(whoOutput))
-	if connections != "" {
-		parts = append(parts, "  Active connections:\n    "+strings.ReplaceAll(connections, "\n", "\n    "))
-	}
-
-	return strings.Join(parts, "\n"), nil
+	return result.Summary(), nil
 }
