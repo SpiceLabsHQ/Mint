@@ -91,6 +91,30 @@ func (m *mockRecreateRemoteRunner) run(
 	return nil, fmt.Errorf("unexpected command: %v", command)
 }
 
+// EIP mocks for Elastic IP reassociation.
+
+type mockDescribeAddresses struct {
+	output  *ec2.DescribeAddressesOutput
+	err     error
+	captured *ec2.DescribeAddressesInput
+}
+
+func (m *mockDescribeAddresses) DescribeAddresses(ctx context.Context, params *ec2.DescribeAddressesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeAddressesOutput, error) {
+	m.captured = params
+	return m.output, m.err
+}
+
+type mockAssociateAddress struct {
+	output   *ec2.AssociateAddressOutput
+	err      error
+	captured *ec2.AssociateAddressInput
+}
+
+func (m *mockAssociateAddress) AssociateAddress(ctx context.Context, params *ec2.AssociateAddressInput, optFns ...func(*ec2.Options)) (*ec2.AssociateAddressOutput, error) {
+	m.captured = params
+	return m.output, m.err
+}
+
 // Lifecycle mocks for the 8-step recreate sequence.
 
 type mockDescribeVolumes struct {
@@ -349,20 +373,28 @@ func defaultLifecycleMocks() lifecycleMocks {
 				},
 			},
 		},
+		describeAddrs: &mockDescribeAddresses{
+			output: &ec2.DescribeAddressesOutput{Addresses: []ec2types.Address{}},
+		},
+		associateAddr: &mockAssociateAddress{
+			output: &ec2.AssociateAddressOutput{},
+		},
 	}
 }
 
 type lifecycleMocks struct {
-	describeVolumes *mockDescribeVolumes
-	stop            *mockRecreateStopInstances
-	terminate       *mockTerminateInstances
-	detach          *mockDetachVolume
-	attach          *mockAttachVolume
-	run             *mockRunInstances
-	createTags      *mockCreateTags
-	deleteTags      *mockDeleteTags
-	subnets         *mockDescribeSubnets
-	sgs             *mockDescribeSecurityGroups
+	describeVolumes  *mockDescribeVolumes
+	stop             *mockRecreateStopInstances
+	terminate        *mockTerminateInstances
+	detach           *mockDetachVolume
+	attach           *mockAttachVolume
+	run              *mockRunInstances
+	createTags       *mockCreateTags
+	deleteTags       *mockDeleteTags
+	subnets          *mockDescribeSubnets
+	sgs              *mockDescribeSecurityGroups
+	describeAddrs    *mockDescribeAddresses
+	associateAddr    *mockAssociateAddress
 }
 
 func newHappyRecreateDeps(owner string) *recreateDeps {
@@ -384,6 +416,8 @@ func newHappyRecreateDeps(owner string) *recreateDeps {
 		deleteTags:      lm.deleteTags,
 		describeSubnets: lm.subnets,
 		describeSGs:     lm.sgs,
+		describeAddrs:   lm.describeAddrs,
+		associateAddr:   lm.associateAddr,
 		bootstrapScript: []byte("#!/bin/bash\necho hello"),
 		resolveAMI: func(ctx context.Context, client mintaws.GetParameterAPI) (string, error) {
 			return "ami-test123", nil
@@ -409,6 +443,8 @@ func newHappyRecreateDepsWithMocks(owner string, lm lifecycleMocks) *recreateDep
 		deleteTags:      lm.deleteTags,
 		describeSubnets: lm.subnets,
 		describeSGs:     lm.sgs,
+		describeAddrs:   lm.describeAddrs,
+		associateAddr:   lm.associateAddr,
 		bootstrapScript: []byte("#!/bin/bash\necho hello"),
 		resolveAMI: func(ctx context.Context, client mintaws.GetParameterAPI) (string, error) {
 			return "ami-test123", nil
@@ -542,14 +578,14 @@ func TestRecreateCommand(t *testing.T) {
 				"Discovering VM",
 				"Checking for active sessions",
 				"Proceeding with recreate",
-				"Step 1/8",
-				"Step 2/8",
-				"Step 3/8",
-				"Step 4/8",
-				"Step 5/8",
-				"Step 6/8",
-				"Step 7/8",
-				"Step 8/8",
+				"Step 1/9",
+				"Step 2/9",
+				"Step 3/9",
+				"Step 4/9",
+				"Step 5/9",
+				"Step 6/9",
+				"Step 7/9",
+				"Step 9/9",
 				"Recreate complete",
 			},
 		},
@@ -574,6 +610,8 @@ func TestRecreateCommand(t *testing.T) {
 					deleteTags:      lm.deleteTags,
 					describeSubnets: lm.subnets,
 					describeSGs:     lm.sgs,
+					describeAddrs:   lm.describeAddrs,
+					associateAddr:   lm.associateAddr,
 					bootstrapScript: []byte("#!/bin/bash\necho hello"),
 					resolveAMI: func(ctx context.Context, client mintaws.GetParameterAPI) (string, error) {
 						return "ami-test123", nil
@@ -604,6 +642,8 @@ func TestRecreateCommand(t *testing.T) {
 					deleteTags:      lm.deleteTags,
 					describeSubnets: lm.subnets,
 					describeSGs:     lm.sgs,
+					describeAddrs:   lm.describeAddrs,
+					associateAddr:   lm.associateAddr,
 					bootstrapScript: []byte("#!/bin/bash\necho hello"),
 					resolveAMI: func(ctx context.Context, client mintaws.GetParameterAPI) (string, error) {
 						return "ami-test123", nil
@@ -1053,16 +1093,17 @@ func TestRecreateLifecycleVerboseOutput(t *testing.T) {
 
 	output := buf.String()
 	steps := []string{
-		"Step 1/8: Querying project EBS volume",
+		"Step 1/9: Querying project EBS volume",
 		"Found project volume vol-proj123",
-		"Step 2/8: Tagging project volume with pending-attach",
-		"Step 3/8: Stopping instance i-abc123",
-		"Step 4/8: Detaching project volume vol-proj123",
-		"Step 5/8: Terminating instance i-abc123",
-		"Step 6/8: Launching new instance in us-east-1a",
+		"Step 2/9: Tagging project volume with pending-attach",
+		"Step 3/9: Stopping instance i-abc123",
+		"Step 4/9: Detaching project volume vol-proj123",
+		"Step 5/9: Terminating instance i-abc123",
+		"Step 6/9: Launching new instance in us-east-1a",
 		"Launched new instance i-new789",
-		"Step 7/8: Attaching project volume vol-proj123 to i-new789",
-		"Step 8/8: Waiting for bootstrap to complete",
+		"Step 7/9: Attaching project volume vol-proj123 to i-new789",
+		"Step 8/9: Reassociating Elastic IP",
+		"Step 9/9: Waiting for bootstrap to complete",
 		"Recreate complete. New instance: i-new789",
 	}
 	for _, step := range steps {
@@ -1320,6 +1361,160 @@ func TestRecreateLifecycleBootstrapVerifyRejectsScript(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Tests — EIP reassociation
+// ---------------------------------------------------------------------------
+
+func TestRecreateReassociatesEIP(t *testing.T) {
+	// Happy path: EIP found by tags and reassociated with the new instance.
+	lm := defaultLifecycleMocks()
+	lm.describeAddrs = &mockDescribeAddresses{
+		output: &ec2.DescribeAddressesOutput{
+			Addresses: []ec2types.Address{{
+				AllocationId: aws.String("eipalloc-abc123"),
+				PublicIp:     aws.String("54.1.2.3"),
+			}},
+		},
+	}
+	lm.associateAddr = &mockAssociateAddress{
+		output: &ec2.AssociateAddressOutput{},
+	}
+	deps := newHappyRecreateDepsWithMocks("alice", lm)
+
+	buf := new(bytes.Buffer)
+	cmd := newRecreateCommandWithDeps(deps)
+	root := newRecreateTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"recreate", "--yes"})
+
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify DescribeAddresses was called with correct tag filters.
+	if lm.describeAddrs.captured == nil {
+		t.Fatal("DescribeAddresses was not called")
+	}
+	filters := lm.describeAddrs.captured.Filters
+	foundMint := false
+	foundOwner := false
+	foundVM := false
+	foundComponent := false
+	for _, f := range filters {
+		name := aws.ToString(f.Name)
+		switch name {
+		case "tag:mint":
+			foundMint = true
+			if len(f.Values) != 1 || f.Values[0] != "true" {
+				t.Errorf("mint filter value = %v, want [true]", f.Values)
+			}
+		case "tag:mint:owner":
+			foundOwner = true
+			if len(f.Values) != 1 || f.Values[0] != "alice" {
+				t.Errorf("owner filter value = %v, want [alice]", f.Values)
+			}
+		case "tag:mint:vm":
+			foundVM = true
+			if len(f.Values) != 1 || f.Values[0] != "default" {
+				t.Errorf("vm filter value = %v, want [default]", f.Values)
+			}
+		case "tag:mint:component":
+			foundComponent = true
+			if len(f.Values) != 1 || f.Values[0] != "elastic-ip" {
+				t.Errorf("component filter value = %v, want [elastic-ip]", f.Values)
+			}
+		}
+	}
+	if !foundMint || !foundOwner || !foundVM || !foundComponent {
+		t.Errorf("missing expected tag filters: mint=%v owner=%v vm=%v component=%v", foundMint, foundOwner, foundVM, foundComponent)
+	}
+
+	// Verify AssociateAddress was called with correct AllocationId and new instance ID.
+	if lm.associateAddr.captured == nil {
+		t.Fatal("AssociateAddress was not called")
+	}
+	if aws.ToString(lm.associateAddr.captured.AllocationId) != "eipalloc-abc123" {
+		t.Errorf("AssociateAddress AllocationId = %q, want %q", aws.ToString(lm.associateAddr.captured.AllocationId), "eipalloc-abc123")
+	}
+	if aws.ToString(lm.associateAddr.captured.InstanceId) != "i-new789" {
+		t.Errorf("AssociateAddress InstanceId = %q, want %q", aws.ToString(lm.associateAddr.captured.InstanceId), "i-new789")
+	}
+}
+
+func TestRecreateNoEIPWarning(t *testing.T) {
+	// No EIP found (empty DescribeAddresses result). Recreate still succeeds.
+	lm := defaultLifecycleMocks()
+	lm.describeAddrs = &mockDescribeAddresses{
+		output: &ec2.DescribeAddressesOutput{Addresses: []ec2types.Address{}},
+	}
+	lm.associateAddr = &mockAssociateAddress{
+		output: &ec2.AssociateAddressOutput{},
+	}
+	deps := newHappyRecreateDepsWithMocks("alice", lm)
+
+	buf := new(bytes.Buffer)
+	cmd := newRecreateCommandWithDeps(deps)
+	root := newRecreateTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"recreate", "--yes", "--verbose"})
+
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := buf.String()
+	// Should warn about no EIP in verbose mode.
+	if !strings.Contains(output, "no Elastic IP found") {
+		t.Errorf("output missing EIP warning, got:\n%s", output)
+	}
+
+	// AssociateAddress should NOT have been called.
+	if lm.associateAddr.captured != nil {
+		t.Error("AssociateAddress should not be called when no EIP is found")
+	}
+
+	// Recreate should still complete.
+	if !strings.Contains(output, "Recreate complete") {
+		t.Errorf("output missing 'Recreate complete', got:\n%s", output)
+	}
+}
+
+func TestRecreateEIPAssociateFails(t *testing.T) {
+	// EIP found but AssociateAddress fails. Recreate should return error.
+	lm := defaultLifecycleMocks()
+	lm.describeAddrs = &mockDescribeAddresses{
+		output: &ec2.DescribeAddressesOutput{
+			Addresses: []ec2types.Address{{
+				AllocationId: aws.String("eipalloc-abc123"),
+				PublicIp:     aws.String("54.1.2.3"),
+			}},
+		},
+	}
+	lm.associateAddr = &mockAssociateAddress{
+		err: fmt.Errorf("association limit exceeded"),
+	}
+	deps := newHappyRecreateDepsWithMocks("alice", lm)
+
+	buf := new(bytes.Buffer)
+	cmd := newRecreateCommandWithDeps(deps)
+	root := newRecreateTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"recreate", "--yes"})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error when EIP association fails, got nil")
+	}
+	if !strings.Contains(err.Error(), "reassociat") && !strings.Contains(err.Error(), "associat") {
+		t.Errorf("error %q does not contain 'reassociat' or 'associat'", err.Error())
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Tests — TOFU host key reset
 // ---------------------------------------------------------------------------
 
@@ -1427,6 +1622,8 @@ func TestRecreateLifecycleHostKeyRemovedWithNonDefaultVM(t *testing.T) {
 		createTags:      lm.createTags,
 		describeSubnets: lm.subnets,
 		describeSGs:     lm.sgs,
+		describeAddrs:   lm.describeAddrs,
+		associateAddr:   lm.associateAddr,
 		bootstrapScript: []byte("#!/bin/bash\necho hello"),
 		resolveAMI: func(ctx context.Context, client mintaws.GetParameterAPI) (string, error) {
 			return "ami-test123", nil

@@ -44,6 +44,8 @@ type recreateDeps struct {
 	describeSGs      mintaws.DescribeSecurityGroupsAPI
 	ssmClient        mintaws.GetParameterAPI
 	describeFS       mintaws.DescribeFileSystemsAPI
+	describeAddrs    mintaws.DescribeAddressesAPI
+	associateAddr    mintaws.AssociateAddressAPI
 	bootstrapScript  []byte
 	mintConfig       *config.Config
 	pollBootstrap    provision.BootstrapPollFunc
@@ -94,6 +96,8 @@ func newRecreateCommandWithDeps(deps *recreateDeps) *cobra.Command {
 				describeSGs:      clients.ec2Client,
 				ssmClient:       clients.ssmClient,
 				describeFS:      clients.efsClient,
+				describeAddrs:   clients.ec2Client,
+				associateAddr:   clients.ec2Client,
 				bootstrapScript: GetBootstrapScript(),
 				verifyBootstrap: bootstrap.Verify,
 				mintConfig:      clients.mintConfig,
@@ -190,13 +194,13 @@ func runRecreate(cmd *cobra.Command, deps *recreateDeps) error {
 		}
 	}
 
-	// Guards passed — execute the 8-step recreate lifecycle.
+	// Guards passed — execute the 9-step recreate lifecycle.
 	fmt.Fprintf(w, "Proceeding with recreate of VM %q (%s)...\n", vmName, found.ID)
 
 	return executeRecreateLifecycle(ctx, deps, found, vmName, verbose, w)
 }
 
-// executeRecreateLifecycle runs the 8-step recreate sequence:
+// executeRecreateLifecycle runs the 9-step recreate sequence:
 //  1. Query project EBS volume
 //  2. Tag project EBS with pending-attach
 //  3. Stop instance
@@ -204,7 +208,8 @@ func runRecreate(cmd *cobra.Command, deps *recreateDeps) error {
 //  5. Terminate instance
 //  6. Launch new instance in same AZ
 //  7. Attach project EBS + remove pending-attach tag
-//  8. Poll for bootstrap complete
+//  8. Reassociate Elastic IP
+//  9. Poll for bootstrap complete
 func executeRecreateLifecycle(
 	ctx context.Context,
 	deps *recreateDeps,
@@ -215,7 +220,7 @@ func executeRecreateLifecycle(
 ) error {
 	// Step 1: Query project EBS volume.
 	if verbose {
-		fmt.Fprintf(w, "Step 1/8: Querying project EBS volume...\n")
+		fmt.Fprintf(w, "Step 1/9: Querying project EBS volume...\n")
 	}
 
 	volumeID, volumeAZ, err := findProjectVolume(ctx, deps, vmName)
@@ -229,7 +234,7 @@ func executeRecreateLifecycle(
 
 	// Step 2: Tag project EBS with pending-attach (safety net for crash recovery).
 	if verbose {
-		fmt.Fprintf(w, "Step 2/8: Tagging project volume with pending-attach...\n")
+		fmt.Fprintf(w, "Step 2/9: Tagging project volume with pending-attach...\n")
 	}
 
 	_, err = deps.createTags.CreateTags(ctx, &ec2.CreateTagsInput{
@@ -244,7 +249,7 @@ func executeRecreateLifecycle(
 
 	// Step 3: Stop instance.
 	if verbose {
-		fmt.Fprintf(w, "Step 3/8: Stopping instance %s...\n", found.ID)
+		fmt.Fprintf(w, "Step 3/9: Stopping instance %s...\n", found.ID)
 	}
 
 	_, err = deps.stop.StopInstances(ctx, &ec2.StopInstancesInput{
@@ -256,7 +261,7 @@ func executeRecreateLifecycle(
 
 	// Step 4: Detach project EBS.
 	if verbose {
-		fmt.Fprintf(w, "Step 4/8: Detaching project volume %s...\n", volumeID)
+		fmt.Fprintf(w, "Step 4/9: Detaching project volume %s...\n", volumeID)
 	}
 
 	_, err = deps.detachVolume.DetachVolume(ctx, &ec2.DetachVolumeInput{
@@ -270,7 +275,7 @@ func executeRecreateLifecycle(
 
 	// Step 5: Terminate instance.
 	if verbose {
-		fmt.Fprintf(w, "Step 5/8: Terminating instance %s...\n", found.ID)
+		fmt.Fprintf(w, "Step 5/9: Terminating instance %s...\n", found.ID)
 	}
 
 	_, err = deps.terminate.TerminateInstances(ctx, &ec2.TerminateInstancesInput{
@@ -282,7 +287,7 @@ func executeRecreateLifecycle(
 
 	// Step 6: Launch new instance in same AZ as project volume.
 	if verbose {
-		fmt.Fprintf(w, "Step 6/8: Launching new instance in %s...\n", volumeAZ)
+		fmt.Fprintf(w, "Step 6/9: Launching new instance in %s...\n", volumeAZ)
 	}
 
 	newInstanceID, err := launchRecreateInstance(ctx, deps, found, vmName, volumeAZ)
@@ -296,7 +301,7 @@ func executeRecreateLifecycle(
 
 	// Step 7: Attach project EBS + remove pending-attach tag.
 	if verbose {
-		fmt.Fprintf(w, "Step 7/8: Attaching project volume %s to %s...\n", volumeID, newInstanceID)
+		fmt.Fprintf(w, "Step 7/9: Attaching project volume %s to %s...\n", volumeID, newInstanceID)
 	}
 
 	_, err = deps.attachVolume.AttachVolume(ctx, &ec2.AttachVolumeInput{
@@ -323,9 +328,18 @@ func executeRecreateLifecycle(
 		}
 	}
 
-	// Step 8: Poll for bootstrap complete.
+	// Step 8: Reassociate Elastic IP with the new instance.
 	if verbose {
-		fmt.Fprintf(w, "Step 8/8: Waiting for bootstrap to complete...\n")
+		fmt.Fprintf(w, "Step 8/9: Reassociating Elastic IP...\n")
+	}
+
+	if err := reassociateElasticIP(ctx, deps, vmName, newInstanceID, verbose, w); err != nil {
+		return fmt.Errorf("reassociating Elastic IP: %w", err)
+	}
+
+	// Step 9: Poll for bootstrap complete.
+	if verbose {
+		fmt.Fprintf(w, "Step 9/9: Waiting for bootstrap to complete...\n")
 	}
 
 	if deps.pollBootstrap != nil {
@@ -369,6 +383,73 @@ func findProjectVolume(ctx context.Context, deps *recreateDeps, vmName string) (
 
 	vol := out.Volumes[0]
 	return aws.ToString(vol.VolumeId), aws.ToString(vol.AvailabilityZone), nil
+}
+
+// reassociateElasticIP discovers the existing EIP by tags and associates it
+// with the new instance. If no EIP is found, it logs a warning but does not
+// fail (the VM still has an auto-assigned public IP). If association fails,
+// it returns an error.
+func reassociateElasticIP(
+	ctx context.Context,
+	deps *recreateDeps,
+	vmName, newInstanceID string,
+	verbose bool,
+	w io.Writer,
+) error {
+	if deps.describeAddrs == nil {
+		if verbose {
+			fmt.Fprintf(w, "  Warning: no Elastic IP client configured, skipping EIP reassociation\n")
+		}
+		return nil
+	}
+
+	filters := append(
+		tags.FilterByOwnerAndVM(deps.owner, vmName),
+		ec2types.Filter{
+			Name:   aws.String("tag:" + tags.TagComponent),
+			Values: []string{tags.ComponentElasticIP},
+		},
+	)
+
+	out, err := deps.describeAddrs.DescribeAddresses(ctx, &ec2.DescribeAddressesInput{
+		Filters: filters,
+	})
+	if err != nil {
+		return fmt.Errorf("discovering Elastic IP: %w", err)
+	}
+
+	if len(out.Addresses) == 0 {
+		if verbose {
+			fmt.Fprintf(w, "  Warning: no Elastic IP found for VM %q — using auto-assigned public IP\n", vmName)
+		}
+		return nil
+	}
+
+	addr := out.Addresses[0]
+	allocID := aws.ToString(addr.AllocationId)
+
+	if verbose {
+		fmt.Fprintf(w, "  Found Elastic IP %s (%s), reassociating with %s\n",
+			aws.ToString(addr.PublicIp), allocID, newInstanceID)
+	}
+
+	if deps.associateAddr == nil {
+		return fmt.Errorf("no AssociateAddress client configured")
+	}
+
+	_, err = deps.associateAddr.AssociateAddress(ctx, &ec2.AssociateAddressInput{
+		AllocationId: aws.String(allocID),
+		InstanceId:   aws.String(newInstanceID),
+	})
+	if err != nil {
+		return fmt.Errorf("associating EIP %s with instance %s: %w", allocID, newInstanceID, err)
+	}
+
+	if verbose {
+		fmt.Fprintf(w, "  Elastic IP reassociated successfully\n")
+	}
+
+	return nil
 }
 
 // launchRecreateInstance launches a new EC2 instance in the specified AZ,
