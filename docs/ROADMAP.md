@@ -151,7 +151,7 @@ This roadmap breaks the Mint CLI into five phases, ordered by dependency and shi
 
 ---
 
-## Phase 3: Lifecycle Operations, Health, and Self-Update
+## Phase 3: Lifecycle Operations, Health, and Self-Update ✅
 
 **Goal**: Complete the VM lifecycle model (ADR-0017) with `mint resize` and `mint recreate`, add production hardening with `mint doctor` and `mint update`, and build the bootstrap CI pipeline. After this phase, all five lifecycle verbs work and the CLI can diagnose and repair its own environment.
 
@@ -257,7 +257,7 @@ This roadmap breaks the Mint CLI into five phases, ordered by dependency and shi
 | **0 -- Scaffold** | **Buildable CLI with config and identity** ✅ |
 | **1 -- Init and Provisioning** | **Create, connect, stop, destroy a VM** ✅ |
 | **2 -- Connectivity and Projects** | **mosh, tmux, projects, iPad workflow** ✅ |
-| 3 -- Lifecycle, Health, and Self-Update | resize, recreate, doctor, update, bootstrap CI |
+| **3 -- Lifecycle, Health, and Self-Update** | **resize, recreate, doctor, update, bootstrap CI** ✅ |
 | 4 -- Polish and Distribution | Homebrew, docs, production-ready |
 
 ---
