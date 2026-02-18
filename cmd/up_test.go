@@ -1067,3 +1067,133 @@ func TestUpCommandEFSDiscoveryFailure(t *testing.T) {
 		t.Errorf("error = %q, want substring %q", err.Error(), "discovering EFS")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Tests: Multiple VM pre-flight warning in mint up
+// ---------------------------------------------------------------------------
+
+// makeRunningInstancesOutput creates a DescribeInstancesOutput with n running VMs.
+func makeRunningInstancesOutput(n int) *ec2.DescribeInstancesOutput {
+	var instances []ec2types.Instance
+	for i := 0; i < n; i++ {
+		instances = append(instances, ec2types.Instance{
+			InstanceId:   aws.String(fmt.Sprintf("i-run%03d", i)),
+			InstanceType: ec2types.InstanceTypeM6iXlarge,
+			State: &ec2types.InstanceState{
+				Name: ec2types.InstanceStateNameRunning,
+			},
+			Tags: []ec2types.Tag{
+				{Key: aws.String("mint"), Value: aws.String("true")},
+				{Key: aws.String("mint:vm"), Value: aws.String(fmt.Sprintf("vm%d", i))},
+				{Key: aws.String("mint:owner"), Value: aws.String("testuser")},
+			},
+		})
+	}
+	return &ec2.DescribeInstancesOutput{
+		Reservations: []ec2types.Reservation{{Instances: instances}},
+	}
+}
+
+func TestUpMultiVMWarning(t *testing.T) {
+	tests := []struct {
+		name        string
+		numRunning  int
+		wantWarning bool
+		wantAbsent  []string
+		wantOutput  []string
+	}{
+		{
+			name:        "0 existing running VMs — no warning",
+			numRunning:  0,
+			wantWarning: false,
+			wantAbsent:  []string{"running VMs", "unnecessary costs"},
+		},
+		{
+			name:        "1 existing running VM — no warning",
+			numRunning:  1,
+			wantWarning: false,
+			wantAbsent:  []string{"unnecessary costs"},
+		},
+		{
+			name:        "2 existing running VMs — warning (would become 3)",
+			numRunning:  2,
+			wantWarning: true,
+			wantOutput:  []string{"running VMs", "unnecessary costs"},
+		},
+		{
+			name:        "3 existing running VMs — warning (would become 4)",
+			numRunning:  3,
+			wantWarning: true,
+			wantOutput:  []string{"running VMs", "unnecessary costs"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			buf := new(bytes.Buffer)
+			cmd := &cobra.Command{}
+			cmd.SetOut(buf)
+
+			cliCtx := &cli.CLIContext{VM: "new-vm"}
+			ctx := cli.WithContext(context.Background(), cliCtx)
+			cmd.SetContext(ctx)
+
+			deps := newTestUpDeps()
+			// Wire a describe stub that returns tt.numRunning running instances.
+			deps.describe = &stubUpDescribeInstances{
+				output: makeRunningInstancesOutput(tt.numRunning),
+			}
+
+			err := runUp(cmd, deps)
+			if err != nil {
+				t.Fatalf("runUp error: %v", err)
+			}
+
+			output := buf.String()
+			for _, want := range tt.wantOutput {
+				if !strings.Contains(output, want) {
+					t.Errorf("output missing %q, got:\n%s", want, output)
+				}
+			}
+			for _, absent := range tt.wantAbsent {
+				if strings.Contains(output, absent) {
+					t.Errorf("output should not contain %q, got:\n%s", absent, output)
+				}
+			}
+		})
+	}
+}
+
+// TestUpMultiVMWarningJSONMode verifies that the pre-flight warning is suppressed
+// in --json mode so the output remains valid JSON (not corrupted by a text prefix).
+func TestUpMultiVMWarningJSONMode(t *testing.T) {
+	buf := new(bytes.Buffer)
+	cmd := &cobra.Command{}
+	cmd.SetOut(buf)
+
+	// JSON mode with 2 running VMs — would trigger warning in human mode.
+	cliCtx := &cli.CLIContext{JSON: true, VM: "new-vm"}
+	ctx := cli.WithContext(context.Background(), cliCtx)
+	cmd.SetContext(ctx)
+
+	deps := newTestUpDeps()
+	deps.describe = &stubUpDescribeInstances{
+		output: makeRunningInstancesOutput(2),
+	}
+
+	err := runUp(cmd, deps)
+	if err != nil {
+		t.Fatalf("runUp error: %v", err)
+	}
+
+	// Output must be valid JSON — no warning text prefix allowed.
+	var result map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
+		t.Fatalf("output is not valid JSON (warning text corrupted it): %v\nOutput: %s", err, buf.String())
+	}
+
+	// Confirm the warning text is absent from the raw output.
+	if strings.Contains(buf.String(), "running VMs") {
+		t.Errorf("JSON output must not contain warning text, got:\n%s", buf.String())
+	}
+}
