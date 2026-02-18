@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/efs"
@@ -11,6 +12,7 @@ import (
 
 	mintaws "github.com/nicholasgasior/mint/internal/aws"
 	"github.com/nicholasgasior/mint/internal/cli"
+	"github.com/nicholasgasior/mint/internal/progress"
 	"github.com/nicholasgasior/mint/internal/provision"
 	"github.com/nicholasgasior/mint/internal/sshconfig"
 	"github.com/nicholasgasior/mint/internal/tags"
@@ -54,12 +56,15 @@ func newUpCommandWithDeps(deps *upDeps) *cobra.Command {
 			if clients == nil {
 				return fmt.Errorf("AWS clients not configured")
 			}
+			cliCtx := cli.FromCommand(cmd)
+			verbose := cliCtx != nil && cliCtx.Verbose
+			sp := newCommandSpinner(cmd.OutOrStdout(), verbose)
 			poller := provision.NewBootstrapPoller(
 				clients.ec2Client, // DescribeInstancesAPI
 				clients.ec2Client, // StopInstancesAPI
 				clients.ec2Client, // TerminateInstancesAPI
 				clients.ec2Client, // CreateTagsAPI
-				cmd.OutOrStdout(),
+				sp.Writer,
 				cmd.InOrStdin(),
 			)
 			sshApproved := false
@@ -111,15 +116,13 @@ func runUp(cmd *cobra.Command, deps *upDeps) error {
 		jsonOutput = cliCtx.JSON
 	}
 
-	w := cmd.OutOrStdout()
-
-	if verbose {
-		fmt.Fprintf(w, "Provisioning VM %q for owner %q...\n", vmName, deps.owner)
-	}
+	sp := newCommandSpinner(cmd.OutOrStdout(), verbose)
+	sp.Start(fmt.Sprintf("Provisioning VM %q for owner %q...", vmName, deps.owner))
 
 	// Discover admin EFS filesystem (same pattern as mint init).
 	efsID, err := discoverEFS(ctx, deps.describeFileSystems)
 	if err != nil {
+		sp.Fail(err.Error())
 		return fmt.Errorf("discovering EFS: %w", err)
 	}
 
@@ -130,10 +133,16 @@ func runUp(cmd *cobra.Command, deps *upDeps) error {
 		EFSID:           efsID,
 	}
 
+	sp.Update(fmt.Sprintf("Running provisioner for VM %q...", vmName))
+
 	result, err := deps.provisioner.Run(ctx, deps.owner, deps.ownerARN, vmName, cfg)
 	if err != nil {
+		sp.Fail(err.Error())
 		return err
 	}
+
+	// Stop the spinner (clears line in interactive mode) before printing results.
+	sp.Stop("")
 
 	// Auto-generate SSH config entry if approved (ADR-0015).
 	if deps.sshConfigApproved && result.PublicIP != "" {
@@ -277,4 +286,18 @@ func upWithProvisioner(ctx context.Context, cmd *cobra.Command, cliCtx *cli.CLIC
 	}
 
 	return printUpResult(cmd, cliCtx, result, jsonOutput, verbose)
+}
+
+// newCommandSpinner creates a Spinner for command progress output.
+// When verbose is false, the spinner writes to io.Discard so no progress is
+// shown. When verbose is true, the spinner writes to w. TTY detection sets
+// Interactive automatically; in non-interactive environments (CI, tests) the
+// spinner emits plain timestamped lines.
+func newCommandSpinner(w io.Writer, verbose bool) *progress.Spinner {
+	if !verbose {
+		sp := progress.New(io.Discard)
+		sp.Interactive = false
+		return sp
+	}
+	return progress.New(w)
 }
