@@ -55,6 +55,11 @@ type BootstrapPollFunc func(ctx context.Context, owner, vmName, instanceID strin
 // Defaults to mintaws.ResolveAMI; overridden in tests.
 type AMIResolver func(ctx context.Context, client mintaws.GetParameterAPI) (string, error)
 
+// DeleteTagsAPI defines the subset of the EC2 API used for removing tags.
+type DeleteTagsAPI interface {
+	DeleteTags(ctx context.Context, params *ec2.DeleteTagsInput, optFns ...func(*ec2.Options)) (*ec2.DeleteTagsOutput, error)
+}
+
 // Provisioner orchestrates the full "mint up" provisioning flow.
 // All AWS dependencies are injected via narrow interfaces for testability.
 type Provisioner struct {
@@ -70,6 +75,8 @@ type Provisioner struct {
 	describeAddrs     mintaws.DescribeAddressesAPI
 	createTags        mintaws.CreateTagsAPI
 	ssmClient         mintaws.GetParameterAPI
+	describeVolumes   mintaws.DescribeVolumesAPI
+	deleteTags        DeleteTagsAPI
 
 	verifyBootstrap BootstrapVerifier
 	resolveAMI      AMIResolver
@@ -107,6 +114,18 @@ func NewProvisioner(
 		verifyBootstrap:   bootstrap.Verify,
 		resolveAMI:        mintaws.ResolveAMI,
 	}
+}
+
+// WithDescribeVolumes sets the DescribeVolumes client for pending-attach recovery.
+func (p *Provisioner) WithDescribeVolumes(dv mintaws.DescribeVolumesAPI) *Provisioner {
+	p.describeVolumes = dv
+	return p
+}
+
+// WithDeleteTags sets the DeleteTags client for pending-attach tag cleanup.
+func (p *Provisioner) WithDeleteTags(dt DeleteTagsAPI) *Provisioner {
+	p.deleteTags = dt
+	return p
 }
 
 // WithBootstrapVerifier overrides the default bootstrap verifier (for testing).
@@ -189,13 +208,60 @@ func (p *Provisioner) Run(ctx context.Context, owner, ownerARN, vmName string, c
 	}
 
 	// Step 9: Create and attach project EBS volume.
+	// Check for a pending-attach volume first (crash recovery from mint recreate).
 	volumeSize := cfg.VolumeSize
 	if volumeSize == 0 {
 		volumeSize = 50
 	}
-	volumeID, err := p.createAndAttachVolume(ctx, instanceID, az, volumeSize, owner, ownerARN, vmName)
-	if err != nil {
-		return nil, fmt.Errorf("creating project volume: %w", err)
+
+	var volumeID string
+	pendingVolID, pendingVolAZ, pendingErr := p.findPendingAttachVolume(ctx, owner, vmName)
+	if pendingErr != nil {
+		return nil, fmt.Errorf("checking pending-attach volumes: %w", pendingErr)
+	}
+
+	if pendingVolID != "" {
+		// Found a pending-attach volume from a previous recreate.
+		// Verify AZ match before attaching.
+		if pendingVolAZ != az {
+			return nil, fmt.Errorf(
+				"pending-attach volume %s is in %s but instance launched in %s — "+
+					"run 'mint destroy' and start fresh to resolve this AZ mismatch",
+				pendingVolID, pendingVolAZ, az,
+			)
+		}
+
+		// Attach the existing volume instead of creating a new one.
+		_, attachErr := p.attachVolume.AttachVolume(ctx, &ec2.AttachVolumeInput{
+			VolumeId:   aws.String(pendingVolID),
+			InstanceId: aws.String(instanceID),
+			Device:     aws.String("/dev/xvdf"),
+		})
+		if attachErr != nil {
+			return nil, fmt.Errorf("attaching pending-attach volume %s to %s: %w", pendingVolID, instanceID, attachErr)
+		}
+
+		// Remove the pending-attach tag via DeleteTags.
+		if p.deleteTags != nil {
+			_, delErr := p.deleteTags.DeleteTags(ctx, &ec2.DeleteTagsInput{
+				Resources: []string{pendingVolID},
+				Tags: []ec2types.Tag{
+					{Key: aws.String(tags.TagPendingAttach)},
+				},
+			})
+			if delErr != nil {
+				return nil, fmt.Errorf("removing pending-attach tag from %s: %w", pendingVolID, delErr)
+			}
+		}
+
+		volumeID = pendingVolID
+	} else {
+		// No pending-attach volume — create a new one.
+		var createErr error
+		volumeID, createErr = p.createAndAttachVolume(ctx, instanceID, az, volumeSize, owner, ownerARN, vmName)
+		if createErr != nil {
+			return nil, fmt.Errorf("creating project volume: %w", createErr)
+		}
 	}
 
 	// Step 10: Allocate and associate Elastic IP.
@@ -327,25 +393,25 @@ func (p *Provisioner) findSubnet(ctx context.Context) (subnetID, az string, err 
 	return aws.ToString(subnet.SubnetId), aws.ToString(subnet.AvailabilityZone), nil
 }
 
-// interpolateBootstrap substitutes Mint-specific variables in the bootstrap
+// InterpolateBootstrap substitutes Mint-specific variables in the bootstrap
 // script. Only variables present in the vars map are replaced; all other
 // ${...} expressions (including bash defaults like ${VAR:-default}) are left
 // untouched so the shell can evaluate them normally.
-func interpolateBootstrap(script []byte, vars map[string]string) []byte {
+func InterpolateBootstrap(script []byte, vars map[string]string) []byte {
 	result := string(script)
 	for name, value := range vars {
 		// Replace ${VAR:-default} patterns first (bash default syntax).
 		// We need to handle these because os.Expand won't match them.
 		// Find and replace any ${NAME...} where NAME matches our variable.
-		result = replaceBashVar(result, name, value)
+		result = ReplaceBashVar(result, name, value)
 	}
 	return []byte(result)
 }
 
-// replaceBashVar replaces all occurrences of ${name}, ${name:-...}, and
+// ReplaceBashVar replaces all occurrences of ${name}, ${name:-...}, and
 // ${name-...} with the given value. This handles bash default-value syntax
 // so that Go sets the value explicitly rather than relying on shell defaults.
-func replaceBashVar(s, name, value string) string {
+func ReplaceBashVar(s, name, value string) string {
 	var b strings.Builder
 	b.Grow(len(s))
 
@@ -391,7 +457,7 @@ func (p *Provisioner) launchInstance(
 		idleTimeout = 60
 	}
 
-	interpolated := interpolateBootstrap(cfg.BootstrapScript, map[string]string{
+	interpolated := InterpolateBootstrap(cfg.BootstrapScript, map[string]string{
 		"MINT_EFS_ID":       cfg.EFSID,
 		"MINT_PROJECT_DEV":  "/dev/xvdf",
 		"MINT_VM_NAME":      vmName,
@@ -448,6 +514,38 @@ func (p *Provisioner) launchInstance(
 	}
 
 	return aws.ToString(out.Instances[0].InstanceId), nil
+}
+
+// findPendingAttachVolume checks for a project EBS volume with the
+// mint:pending-attach tag, indicating a crash-recovery scenario from
+// mint recreate. Returns empty strings if no pending volume is found
+// or if the describeVolumes client is not configured.
+func (p *Provisioner) findPendingAttachVolume(ctx context.Context, owner, vmName string) (volumeID, az string, err error) {
+	if p.describeVolumes == nil {
+		return "", "", nil
+	}
+
+	filters := []ec2types.Filter{
+		{Name: aws.String("tag:" + tags.TagMint), Values: []string{"true"}},
+		{Name: aws.String("tag:" + tags.TagComponent), Values: []string{tags.ComponentProjectVolume}},
+		{Name: aws.String("tag:" + tags.TagOwner), Values: []string{owner}},
+		{Name: aws.String("tag:" + tags.TagVM), Values: []string{vmName}},
+		{Name: aws.String("tag:" + tags.TagPendingAttach), Values: []string{"true"}},
+	}
+
+	out, err := p.describeVolumes.DescribeVolumes(ctx, &ec2.DescribeVolumesInput{
+		Filters: filters,
+	})
+	if err != nil {
+		return "", "", fmt.Errorf("describe pending-attach volumes: %w", err)
+	}
+
+	if len(out.Volumes) == 0 {
+		return "", "", nil
+	}
+
+	vol := out.Volumes[0]
+	return aws.ToString(vol.VolumeId), aws.ToString(vol.AvailabilityZone), nil
 }
 
 // createAndAttachVolume creates a gp3 project EBS volume and attaches it.

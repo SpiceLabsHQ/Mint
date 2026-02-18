@@ -19,6 +19,7 @@ import (
 	"github.com/nicholasgasior/mint/internal/cli"
 	"github.com/nicholasgasior/mint/internal/config"
 	"github.com/nicholasgasior/mint/internal/provision"
+	"github.com/nicholasgasior/mint/internal/sshconfig"
 	"github.com/nicholasgasior/mint/internal/tags"
 	"github.com/nicholasgasior/mint/internal/vm"
 )
@@ -37,6 +38,7 @@ type recreateDeps struct {
 	run              mintaws.RunInstancesAPI
 	attachVolume     mintaws.AttachVolumeAPI
 	createTags       mintaws.CreateTagsAPI
+	deleteTags       provision.DeleteTagsAPI
 	describeSubnets  mintaws.DescribeSubnetsAPI
 	describeSGs      mintaws.DescribeSecurityGroupsAPI
 	ssmClient        mintaws.GetParameterAPI
@@ -46,6 +48,7 @@ type recreateDeps struct {
 	pollBootstrap    provision.BootstrapPollFunc
 	resolveAMI       provision.AMIResolver
 	verifyBootstrap  provision.BootstrapVerifier
+	removeHostKey    func(vmName string) error
 }
 
 // newRecreateCommand creates the production recreate command.
@@ -71,6 +74,7 @@ func newRecreateCommandWithDeps(deps *recreateDeps) *cobra.Command {
 			if clients == nil {
 				return fmt.Errorf("AWS clients not configured")
 			}
+			hostKeyStore := sshconfig.NewHostKeyStore(config.DefaultConfigDir())
 			return runRecreate(cmd, &recreateDeps{
 				describe:         clients.ec2Client,
 				sendKey:          clients.icClient,
@@ -84,6 +88,7 @@ func newRecreateCommandWithDeps(deps *recreateDeps) *cobra.Command {
 				run:              clients.ec2Client,
 				attachVolume:     clients.ec2Client,
 				createTags:       clients.ec2Client,
+				deleteTags:       clients.ec2Client,
 				describeSubnets:  clients.ec2Client,
 				describeSGs:      clients.ec2Client,
 				ssmClient:       clients.ssmClient,
@@ -91,6 +96,7 @@ func newRecreateCommandWithDeps(deps *recreateDeps) *cobra.Command {
 				bootstrapScript: GetBootstrapScript(),
 				verifyBootstrap: bootstrap.Verify,
 				mintConfig:      clients.mintConfig,
+				removeHostKey:   hostKeyStore.RemoveKey,
 			})
 		},
 	}
@@ -301,17 +307,19 @@ func executeRecreateLifecycle(
 		return fmt.Errorf("attaching project volume %s to %s: %w", volumeID, newInstanceID, err)
 	}
 
-	// Remove the pending-attach tag by setting it to empty string.
-	_, err = deps.createTags.CreateTags(ctx, &ec2.CreateTagsInput{
-		Resources: []string{volumeID},
-		Tags: []ec2types.Tag{
-			{Key: aws.String(tags.TagPendingAttach), Value: aws.String("")},
-		},
-	})
-	if err != nil {
-		// Non-fatal: the volume is attached, but the tag cleanup failed.
-		// Log the warning but don't fail the recreate.
-		fmt.Fprintf(w, "Warning: could not remove pending-attach tag from %s: %v\n", volumeID, err)
+	// Remove the pending-attach tag via DeleteTags (fully removes the key).
+	if deps.deleteTags != nil {
+		_, delErr := deps.deleteTags.DeleteTags(ctx, &ec2.DeleteTagsInput{
+			Resources: []string{volumeID},
+			Tags: []ec2types.Tag{
+				{Key: aws.String(tags.TagPendingAttach)},
+			},
+		})
+		if delErr != nil {
+			// Non-fatal: the volume is attached, but the tag cleanup failed.
+			// Log the warning but don't fail the recreate.
+			fmt.Fprintf(w, "Warning: could not remove pending-attach tag from %s: %v\n", volumeID, delErr)
+		}
 	}
 
 	// Step 8: Poll for bootstrap complete.
@@ -322,6 +330,14 @@ func executeRecreateLifecycle(
 	if deps.pollBootstrap != nil {
 		if pollErr := deps.pollBootstrap(ctx, deps.owner, vmName, newInstanceID); pollErr != nil {
 			return fmt.Errorf("bootstrap polling: %w", pollErr)
+		}
+	}
+
+	// Clear cached TOFU host key so the next connection triggers fresh
+	// key recording instead of a scary change-detection warning (ADR-0019).
+	if deps.removeHostKey != nil {
+		if keyErr := deps.removeHostKey(vmName); keyErr != nil {
+			return fmt.Errorf("clearing cached host key for %s: %w", vmName, keyErr)
 		}
 	}
 
@@ -426,7 +442,7 @@ func launchRecreateInstance(
 	}
 
 	// Interpolate bootstrap script with mint variables.
-	interpolated := interpolateRecreateBootstrap(bootstrapScript, map[string]string{
+	interpolated := provision.InterpolateBootstrap(bootstrapScript, map[string]string{
 		"MINT_EFS_ID":       efsID,
 		"MINT_PROJECT_DEV":  "/dev/xvdf",
 		"MINT_VM_NAME":      vmName,
@@ -529,48 +545,6 @@ func findSubnetInAZ(ctx context.Context, deps *recreateDeps, az string) (string,
 		return "", fmt.Errorf("no default subnet found in %s", az)
 	}
 	return aws.ToString(out.Subnets[0].SubnetId), nil
-}
-
-// interpolateRecreateBootstrap substitutes Mint-specific variables in the
-// bootstrap script. Mirrors the same logic used by provision/up.go.
-func interpolateRecreateBootstrap(script []byte, vars map[string]string) []byte {
-	result := string(script)
-	for name, value := range vars {
-		result = recreateReplaceBashVar(result, name, value)
-	}
-	return []byte(result)
-}
-
-// recreateReplaceBashVar replaces all occurrences of ${name}, ${name:-...},
-// and ${name-...} with the given value. This handles bash default-value syntax
-// so that Go sets the value explicitly rather than relying on shell defaults.
-func recreateReplaceBashVar(s, name, value string) string {
-	var b strings.Builder
-	b.Grow(len(s))
-
-	for i := 0; i < len(s); i++ {
-		if i+1 < len(s) && s[i] == '$' && s[i+1] == '{' {
-			rest := s[i+2:]
-			if strings.HasPrefix(rest, name) {
-				after := rest[len(name):]
-				if len(after) > 0 && after[0] == '}' {
-					b.WriteString(value)
-					i += 2 + len(name)
-					continue
-				}
-				if len(after) > 0 && (after[0] == ':' || after[0] == '-') {
-					closeBrace := strings.IndexByte(after, '}')
-					if closeBrace >= 0 {
-						b.WriteString(value)
-						i += 2 + len(name) + closeBrace
-						continue
-					}
-				}
-			}
-		}
-		b.WriteByte(s[i])
-	}
-	return b.String()
 }
 
 // detectActiveSessions SSHs into the VM and checks for active tmux clients

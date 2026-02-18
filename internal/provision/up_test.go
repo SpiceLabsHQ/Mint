@@ -162,6 +162,32 @@ func (m *mockGetParameter) GetParameter(ctx context.Context, params *ssm.GetPara
 	return m.output, m.err
 }
 
+type mockUpDescribeVolumes struct {
+	output *ec2.DescribeVolumesOutput
+	err    error
+	called bool
+	input  *ec2.DescribeVolumesInput
+}
+
+func (m *mockUpDescribeVolumes) DescribeVolumes(ctx context.Context, params *ec2.DescribeVolumesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeVolumesOutput, error) {
+	m.called = true
+	m.input = params
+	return m.output, m.err
+}
+
+type mockUpDeleteTags struct {
+	output *ec2.DeleteTagsOutput
+	err    error
+	called bool
+	input  *ec2.DeleteTagsInput
+}
+
+func (m *mockUpDeleteTags) DeleteTags(ctx context.Context, params *ec2.DeleteTagsInput, optFns ...func(*ec2.Options)) (*ec2.DeleteTagsOutput, error) {
+	m.called = true
+	m.input = params
+	return m.output, m.err
+}
+
 // ---------------------------------------------------------------------------
 // Helper: build a Provisioner with all mocks
 // ---------------------------------------------------------------------------
@@ -179,6 +205,8 @@ type upMocks struct {
 	describeAddrs     *mockUpDescribeAddresses
 	createTags        *mockUpCreateTags
 	ssmClient         *mockGetParameter
+	describeVolumes   *mockUpDescribeVolumes
+	deleteTags        *mockUpDeleteTags
 
 	bootstrapVerifier BootstrapVerifier
 	amiResolver       AMIResolver
@@ -248,6 +276,13 @@ func newUpHappyMocks() *upMocks {
 			output: &ec2.CreateTagsOutput{},
 		},
 		ssmClient: &mockGetParameter{},
+		// No pending-attach volumes by default.
+		describeVolumes: &mockUpDescribeVolumes{
+			output: &ec2.DescribeVolumesOutput{Volumes: []ec2types.Volume{}},
+		},
+		deleteTags: &mockUpDeleteTags{
+			output: &ec2.DeleteTagsOutput{},
+		},
 		bootstrapVerifier: func(content []byte) error {
 			return nil // always pass
 		},
@@ -274,6 +309,12 @@ func (m *upMocks) build() *Provisioner {
 	)
 	p.WithBootstrapVerifier(m.bootstrapVerifier)
 	p.WithAMIResolver(m.amiResolver)
+	if m.describeVolumes != nil {
+		p.WithDescribeVolumes(m.describeVolumes)
+	}
+	if m.deleteTags != nil {
+		p.WithDeleteTags(m.deleteTags)
+	}
 	return p
 }
 
@@ -898,7 +939,7 @@ echo done`)
 		"MINT_IDLE_TIMEOUT": "90",
 	}
 
-	result := interpolateBootstrap(script, vars)
+	result := InterpolateBootstrap(script, vars)
 
 	expected := `#!/bin/bash
 EFS_ID="fs-abc123"
@@ -908,7 +949,7 @@ IDLE_TIMEOUT="90"
 echo done`
 
 	if string(result) != expected {
-		t.Errorf("interpolateBootstrap result:\n%s\nwant:\n%s", string(result), expected)
+		t.Errorf("InterpolateBootstrap result:\n%s\nwant:\n%s", string(result), expected)
 	}
 }
 
@@ -924,7 +965,7 @@ BARE_KNOWN="${MINT_VM_NAME}"`)
 		"MINT_VM_NAME": "myvm",
 	}
 
-	result := interpolateBootstrap(script, vars)
+	result := InterpolateBootstrap(script, vars)
 
 	// Known variables should be replaced
 	if !strings.Contains(string(result), `KNOWN="fs-xyz"`) {
@@ -951,7 +992,7 @@ func TestInterpolateBootstrapHandlesBashDefaults(t *testing.T) {
 		"MINT_IDLE_TIMEOUT": "120",
 	}
 
-	result := interpolateBootstrap(script, vars)
+	result := InterpolateBootstrap(script, vars)
 
 	if !strings.Contains(string(result), `TIMEOUT="120"`) {
 		t.Errorf("expected bash default expression to be replaced, got:\n%s", string(result))
@@ -1348,6 +1389,193 @@ func TestLaunchInstanceIncludesVolumeTagsCustom(t *testing.T) {
 		t.Errorf("missing tag %q on instance", tags.TagProjectVolumeGB)
 	} else if got != "100" {
 		t.Errorf("tag %q = %q, want %q", tags.TagProjectVolumeGB, got, "100")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests: Pending-attach volume recovery
+// ---------------------------------------------------------------------------
+
+func TestProvisionerPendingAttachHappyPath(t *testing.T) {
+	// When a pending-attach volume exists in the same AZ, the provisioner
+	// should attach it (skip volume creation) and remove the pending-attach tag.
+	m := newUpHappyMocks()
+	m.describeVolumes = &mockUpDescribeVolumes{
+		output: &ec2.DescribeVolumesOutput{
+			Volumes: []ec2types.Volume{{
+				VolumeId:         aws.String("vol-pending1"),
+				AvailabilityZone: aws.String("us-east-1a"),
+			}},
+		},
+	}
+	m.deleteTags = &mockUpDeleteTags{
+		output: &ec2.DeleteTagsOutput{},
+	}
+	p := m.build()
+
+	result, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", defaultConfig())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Volume should be the pending-attach volume, not a newly created one.
+	if result.VolumeID != "vol-pending1" {
+		t.Errorf("result.VolumeID = %q, want %q", result.VolumeID, "vol-pending1")
+	}
+
+	// CreateVolume should NOT be called (volume already exists).
+	if m.createVolume.called {
+		t.Error("CreateVolume should NOT be called when pending-attach volume exists")
+	}
+
+	// AttachVolume should be called with the pending volume.
+	if !m.attachVolume.called {
+		t.Fatal("AttachVolume was not called")
+	}
+	if aws.ToString(m.attachVolume.input.VolumeId) != "vol-pending1" {
+		t.Errorf("AttachVolume VolumeId = %q, want %q", aws.ToString(m.attachVolume.input.VolumeId), "vol-pending1")
+	}
+	if aws.ToString(m.attachVolume.input.Device) != "/dev/xvdf" {
+		t.Errorf("AttachVolume Device = %q, want %q", aws.ToString(m.attachVolume.input.Device), "/dev/xvdf")
+	}
+
+	// DeleteTags should be called to remove the pending-attach tag.
+	if !m.deleteTags.called {
+		t.Fatal("DeleteTags was not called to remove pending-attach tag")
+	}
+	if len(m.deleteTags.input.Resources) != 1 || m.deleteTags.input.Resources[0] != "vol-pending1" {
+		t.Errorf("DeleteTags resources = %v, want [vol-pending1]", m.deleteTags.input.Resources)
+	}
+	foundTag := false
+	for _, tag := range m.deleteTags.input.Tags {
+		if aws.ToString(tag.Key) == tags.TagPendingAttach {
+			foundTag = true
+		}
+	}
+	if !foundTag {
+		t.Error("DeleteTags did not include mint:pending-attach tag")
+	}
+}
+
+func TestProvisionerPendingAttachAZMismatch(t *testing.T) {
+	// When a pending-attach volume is in a different AZ than the instance,
+	// the provisioner should fail fast with guidance.
+	m := newUpHappyMocks()
+	m.describeVolumes = &mockUpDescribeVolumes{
+		output: &ec2.DescribeVolumesOutput{
+			Volumes: []ec2types.Volume{{
+				VolumeId:         aws.String("vol-wrongaz"),
+				AvailabilityZone: aws.String("us-west-2a"), // Different AZ
+			}},
+		},
+	}
+	p := m.build()
+
+	_, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", defaultConfig())
+	if err == nil {
+		t.Fatal("expected error for AZ mismatch")
+	}
+	if !strings.Contains(err.Error(), "AZ mismatch") {
+		t.Errorf("error = %q, want substring %q", err.Error(), "AZ mismatch")
+	}
+	if !strings.Contains(err.Error(), "mint destroy") {
+		t.Errorf("error should mention 'mint destroy', got: %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "vol-wrongaz") {
+		t.Errorf("error should include volume ID, got: %q", err.Error())
+	}
+}
+
+func TestProvisionerPendingAttachNoneFound(t *testing.T) {
+	// When no pending-attach volume is found, normal provisioning continues
+	// (a new volume is created).
+	m := newUpHappyMocks()
+	// describeVolumes returns empty (no pending-attach volumes) — this is the default.
+	p := m.build()
+
+	result, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", defaultConfig())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Normal flow: CreateVolume should be called.
+	if !m.createVolume.called {
+		t.Error("CreateVolume should be called when no pending-attach volume exists")
+	}
+	if result.VolumeID != "vol-proj1" {
+		t.Errorf("result.VolumeID = %q, want %q (newly created)", result.VolumeID, "vol-proj1")
+	}
+
+	// DeleteTags should NOT be called.
+	if m.deleteTags.called {
+		t.Error("DeleteTags should NOT be called when no pending-attach volume exists")
+	}
+}
+
+func TestProvisionerPendingAttachDescribeError(t *testing.T) {
+	// When DescribeVolumes fails, the error should propagate.
+	m := newUpHappyMocks()
+	m.describeVolumes = &mockUpDescribeVolumes{
+		err: fmt.Errorf("describe volumes throttled"),
+	}
+	p := m.build()
+
+	_, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", defaultConfig())
+	if err == nil {
+		t.Fatal("expected error from DescribeVolumes failure")
+	}
+	if !strings.Contains(err.Error(), "pending-attach") {
+		t.Errorf("error = %q, want substring %q", err.Error(), "pending-attach")
+	}
+}
+
+func TestProvisionerPendingAttachAttachError(t *testing.T) {
+	// When attaching the pending-attach volume fails, the error should propagate.
+	m := newUpHappyMocks()
+	m.describeVolumes = &mockUpDescribeVolumes{
+		output: &ec2.DescribeVolumesOutput{
+			Volumes: []ec2types.Volume{{
+				VolumeId:         aws.String("vol-pending1"),
+				AvailabilityZone: aws.String("us-east-1a"),
+			}},
+		},
+	}
+	m.attachVolume = &mockUpAttachVolume{
+		err: fmt.Errorf("volume busy"),
+	}
+	p := m.build()
+
+	_, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", defaultConfig())
+	if err == nil {
+		t.Fatal("expected error from attach failure")
+	}
+	if !strings.Contains(err.Error(), "volume busy") {
+		t.Errorf("error = %q, want substring %q", err.Error(), "volume busy")
+	}
+}
+
+func TestProvisionerPendingAttachDeleteTagError(t *testing.T) {
+	// When removing the pending-attach tag fails, the error should propagate.
+	m := newUpHappyMocks()
+	m.describeVolumes = &mockUpDescribeVolumes{
+		output: &ec2.DescribeVolumesOutput{
+			Volumes: []ec2types.Volume{{
+				VolumeId:         aws.String("vol-pending1"),
+				AvailabilityZone: aws.String("us-east-1a"),
+			}},
+		},
+	}
+	m.deleteTags = &mockUpDeleteTags{
+		err: fmt.Errorf("delete tags denied"),
+	}
+	p := m.build()
+
+	_, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", defaultConfig())
+	if err == nil {
+		t.Fatal("expected error from DeleteTags failure")
+	}
+	if !strings.Contains(err.Error(), "delete tags denied") {
+		t.Errorf("error = %q, want substring %q", err.Error(), "delete tags denied")
 	}
 }
 

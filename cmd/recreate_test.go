@@ -144,6 +144,19 @@ func (m *mockCreateTags) CreateTags(ctx context.Context, params *ec2.CreateTagsI
 	return &ec2.CreateTagsOutput{}, nil
 }
 
+type mockDeleteTags struct {
+	calls []*ec2.DeleteTagsInput
+	err   error
+}
+
+func (m *mockDeleteTags) DeleteTags(ctx context.Context, params *ec2.DeleteTagsInput, optFns ...func(*ec2.Options)) (*ec2.DeleteTagsOutput, error) {
+	m.calls = append(m.calls, params)
+	if m.err != nil {
+		return nil, m.err
+	}
+	return &ec2.DeleteTagsOutput{}, nil
+}
+
 type mockDescribeSubnets struct {
 	output *ec2.DescribeSubnetsOutput
 	err    error
@@ -279,6 +292,7 @@ func defaultLifecycleMocks() lifecycleMocks {
 			},
 		},
 		createTags: &mockCreateTags{},
+		deleteTags: &mockDeleteTags{},
 		subnets: &mockDescribeSubnets{
 			output: &ec2.DescribeSubnetsOutput{
 				Subnets: []ec2types.Subnet{{
@@ -312,6 +326,7 @@ type lifecycleMocks struct {
 	attach          *mockAttachVolume
 	run             *mockRunInstances
 	createTags      *mockCreateTags
+	deleteTags      *mockDeleteTags
 	subnets         *mockDescribeSubnets
 	sgs             *mockDescribeSecurityGroups
 }
@@ -332,6 +347,7 @@ func newHappyRecreateDeps(owner string) *recreateDeps {
 		attachVolume:    lm.attach,
 		run:             lm.run,
 		createTags:      lm.createTags,
+		deleteTags:      lm.deleteTags,
 		describeSubnets: lm.subnets,
 		describeSGs:     lm.sgs,
 		bootstrapScript: []byte("#!/bin/bash\necho hello"),
@@ -356,6 +372,7 @@ func newHappyRecreateDepsWithMocks(owner string, lm lifecycleMocks) *recreateDep
 		attachVolume:    lm.attach,
 		run:             lm.run,
 		createTags:      lm.createTags,
+		deleteTags:      lm.deleteTags,
 		describeSubnets: lm.subnets,
 		describeSGs:     lm.sgs,
 		bootstrapScript: []byte("#!/bin/bash\necho hello"),
@@ -520,6 +537,7 @@ func TestRecreateCommand(t *testing.T) {
 					attachVolume:    lm.attach,
 					run:             lm.run,
 					createTags:      lm.createTags,
+					deleteTags:      lm.deleteTags,
 					describeSubnets: lm.subnets,
 					describeSGs:     lm.sgs,
 					bootstrapScript: []byte("#!/bin/bash\necho hello"),
@@ -549,6 +567,7 @@ func TestRecreateCommand(t *testing.T) {
 					attachVolume:    lm.attach,
 					run:             lm.run,
 					createTags:      lm.createTags,
+					deleteTags:      lm.deleteTags,
 					describeSubnets: lm.subnets,
 					describeSGs:     lm.sgs,
 					bootstrapScript: []byte("#!/bin/bash\necho hello"),
@@ -671,12 +690,12 @@ func TestRecreateLifecycleHappyPath(t *testing.T) {
 		t.Errorf("output missing new instance ID 'i-new789', got: %s", output)
 	}
 
-	// Verify pending-attach tag was set then cleared.
-	if len(lm.createTags.calls) < 2 {
-		t.Fatalf("expected at least 2 CreateTags calls, got %d", len(lm.createTags.calls))
+	// Verify pending-attach tag was set via CreateTags then cleared via DeleteTags.
+	if len(lm.createTags.calls) < 1 {
+		t.Fatalf("expected at least 1 CreateTags call, got %d", len(lm.createTags.calls))
 	}
 
-	// First call: set pending-attach=true on the volume.
+	// First CreateTags call: set pending-attach=true on the volume.
 	setCall := lm.createTags.calls[0]
 	if len(setCall.Resources) != 1 || setCall.Resources[0] != "vol-proj123" {
 		t.Errorf("pending-attach set call resource = %v, want [vol-proj123]", setCall.Resources)
@@ -691,19 +710,22 @@ func TestRecreateLifecycleHappyPath(t *testing.T) {
 		t.Error("first CreateTags call did not set mint:pending-attach=true")
 	}
 
-	// Second call: clear pending-attach (set to empty).
-	clearCall := lm.createTags.calls[1]
-	if len(clearCall.Resources) != 1 || clearCall.Resources[0] != "vol-proj123" {
-		t.Errorf("pending-attach clear call resource = %v, want [vol-proj123]", clearCall.Resources)
+	// DeleteTags call: remove pending-attach tag key entirely.
+	if len(lm.deleteTags.calls) < 1 {
+		t.Fatalf("expected at least 1 DeleteTags call, got %d", len(lm.deleteTags.calls))
 	}
-	foundPendingClear := false
-	for _, tag := range clearCall.Tags {
-		if aws.ToString(tag.Key) == "mint:pending-attach" && aws.ToString(tag.Value) == "" {
-			foundPendingClear = true
+	delCall := lm.deleteTags.calls[0]
+	if len(delCall.Resources) != 1 || delCall.Resources[0] != "vol-proj123" {
+		t.Errorf("pending-attach delete call resource = %v, want [vol-proj123]", delCall.Resources)
+	}
+	foundPendingDelete := false
+	for _, tag := range delCall.Tags {
+		if aws.ToString(tag.Key) == "mint:pending-attach" {
+			foundPendingDelete = true
 		}
 	}
-	if !foundPendingClear {
-		t.Error("second CreateTags call did not clear mint:pending-attach")
+	if !foundPendingDelete {
+		t.Error("DeleteTags call did not target mint:pending-attach key")
 	}
 
 	// Verify the RunInstances input has correct AZ (via subnet in same AZ).
@@ -918,20 +940,20 @@ func TestRecreateLifecyclePendingAttachTagRemovedAfterAttach(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Verify the second CreateTags call clears the pending-attach tag.
-	if len(lm.createTags.calls) < 2 {
-		t.Fatalf("expected at least 2 CreateTags calls, got %d", len(lm.createTags.calls))
+	// Verify the DeleteTags call removes the pending-attach tag.
+	if len(lm.deleteTags.calls) < 1 {
+		t.Fatalf("expected at least 1 DeleteTags call, got %d", len(lm.deleteTags.calls))
 	}
 
-	clearCall := lm.createTags.calls[1]
+	delCall := lm.deleteTags.calls[0]
 	foundClear := false
-	for _, tag := range clearCall.Tags {
-		if aws.ToString(tag.Key) == "mint:pending-attach" && aws.ToString(tag.Value) == "" {
+	for _, tag := range delCall.Tags {
+		if aws.ToString(tag.Key) == "mint:pending-attach" {
 			foundClear = true
 		}
 	}
 	if !foundClear {
-		t.Error("pending-attach tag was not cleared after attach")
+		t.Error("pending-attach tag was not removed via DeleteTags after attach")
 	}
 }
 
@@ -1074,9 +1096,8 @@ func TestRecreateLifecyclePendingAttachClearFailureIsNonFatal(t *testing.T) {
 	// If removing the pending-attach tag fails, the recreate should still succeed
 	// (the volume is attached; the tag is a safety net for crash recovery).
 	lm := defaultLifecycleMocks()
-	lm.createTags = &mockCreateTags{
-		failOnCall: 2, // Second call (the clear) fails.
-		err:        fmt.Errorf("tag cleanup failed"),
+	lm.deleteTags = &mockDeleteTags{
+		err: fmt.Errorf("tag cleanup failed"),
 	}
 	deps := newHappyRecreateDepsWithMocks("alice", lm)
 
@@ -1257,6 +1278,143 @@ func TestRecreateLifecycleBootstrapVerifyRejectsScript(t *testing.T) {
 	// RunInstances should NOT have been called.
 	if lm.run.captured != nil {
 		t.Error("RunInstances was called despite bootstrap verification failure")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests — TOFU host key reset
+// ---------------------------------------------------------------------------
+
+func TestRecreateLifecycleRemovesHostKey(t *testing.T) {
+	// After successful recreate, removeHostKey should be called with the VM name.
+	lm := defaultLifecycleMocks()
+	deps := newHappyRecreateDepsWithMocks("alice", lm)
+
+	var removedVM string
+	deps.removeHostKey = func(vmName string) error {
+		removedVM = vmName
+		return nil
+	}
+
+	buf := new(bytes.Buffer)
+	cmd := newRecreateCommandWithDeps(deps)
+	root := newRecreateTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"recreate", "--yes"})
+
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if removedVM != "default" {
+		t.Errorf("removeHostKey called with %q, want %q", removedVM, "default")
+	}
+}
+
+func TestRecreateLifecycleHostKeyRemovalError(t *testing.T) {
+	// When removeHostKey returns an error, the recreate should fail.
+	lm := defaultLifecycleMocks()
+	deps := newHappyRecreateDepsWithMocks("alice", lm)
+
+	deps.removeHostKey = func(vmName string) error {
+		return fmt.Errorf("known_hosts permission denied")
+	}
+
+	buf := new(bytes.Buffer)
+	cmd := newRecreateCommandWithDeps(deps)
+	root := newRecreateTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"recreate", "--yes"})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error from host key removal, got nil")
+	}
+	if !strings.Contains(err.Error(), "clearing cached host key") {
+		t.Errorf("error %q does not contain 'clearing cached host key'", err.Error())
+	}
+	if !strings.Contains(err.Error(), "known_hosts permission denied") {
+		t.Errorf("error %q does not contain original error message", err.Error())
+	}
+}
+
+func TestRecreateLifecycleHostKeyNotRemovedOnBootstrapFailure(t *testing.T) {
+	// When bootstrap polling fails, removeHostKey should NOT be called.
+	lm := defaultLifecycleMocks()
+	deps := newHappyRecreateDepsWithMocks("alice", lm)
+
+	deps.pollBootstrap = func(ctx context.Context, owner, vmName, instanceID string) error {
+		return fmt.Errorf("bootstrap timed out")
+	}
+
+	hostKeyCalled := false
+	deps.removeHostKey = func(vmName string) error {
+		hostKeyCalled = true
+		return nil
+	}
+
+	buf := new(bytes.Buffer)
+	cmd := newRecreateCommandWithDeps(deps)
+	root := newRecreateTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"recreate", "--yes"})
+
+	_ = root.Execute() // Will fail at bootstrap polling.
+
+	if hostKeyCalled {
+		t.Error("removeHostKey should NOT be called when bootstrap polling fails")
+	}
+}
+
+func TestRecreateLifecycleHostKeyRemovedWithNonDefaultVM(t *testing.T) {
+	// Verify removeHostKey is called with the correct non-default VM name.
+	runner := noSessionsRunner()
+	lm := defaultLifecycleMocks()
+	deps := &recreateDeps{
+		describe:        &mockRecreateDescribeInstances{output: makeRunningInstanceForRecreate("i-dev456", "dev", "bob", "5.6.7.8", "us-west-2a")},
+		sendKey:         &mockRecreateSendSSHPublicKey{output: &ec2instanceconnect.SendSSHPublicKeyOutput{}},
+		remoteRun:       runner.run,
+		owner:           "bob",
+		ownerARN:        "arn:aws:iam::123456789012:user/bob",
+		describeVolumes: lm.describeVolumes,
+		stop:            lm.stop,
+		terminate:       lm.terminate,
+		detachVolume:    lm.detach,
+		attachVolume:    lm.attach,
+		run:             lm.run,
+		createTags:      lm.createTags,
+		describeSubnets: lm.subnets,
+		describeSGs:     lm.sgs,
+		bootstrapScript: []byte("#!/bin/bash\necho hello"),
+		resolveAMI: func(ctx context.Context, client mintaws.GetParameterAPI) (string, error) {
+			return "ami-test123", nil
+		},
+	}
+
+	var removedVM string
+	deps.removeHostKey = func(vmName string) error {
+		removedVM = vmName
+		return nil
+	}
+
+	buf := new(bytes.Buffer)
+	cmd := newRecreateCommandWithDeps(deps)
+	root := newRecreateTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"recreate", "--vm", "dev", "--yes"})
+
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if removedVM != "dev" {
+		t.Errorf("removeHostKey called with %q, want %q", removedVM, "dev")
 	}
 }
 
