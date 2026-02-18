@@ -161,7 +161,7 @@ func runUp(cmd *cobra.Command, deps *upDeps) error {
 		EFSID:           efsID,
 	}
 
-	sp.Update(fmt.Sprintf("Running provisioner for VM %q...", vmName))
+	sp.Update(fmt.Sprintf("Provisioning VM %q...", vmName))
 
 	result, err := deps.provisioner.Run(ctx, deps.owner, deps.ownerARN, vmName, cfg)
 	if err != nil {
