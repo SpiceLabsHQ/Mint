@@ -5,6 +5,11 @@ version: 2
 
 project_name: mint
 
+before:
+  hooks:
+    # ADR-0009: embed bootstrap script SHA256 hash before every build.
+    - go generate ./...
+
 builds:
   - id: mint
     binary: mint
@@ -25,9 +30,9 @@ builds:
 
 archives:
   - id: default
-    format_overrides:
-      - goos: darwin
-        format: zip
+    # tar.gz for all platforms — selfupdate expects mint_<ver>_<os>_<arch>.tar.gz
+    # on both darwin and linux (see internal/selfupdate/update.go assetNameForPlatform).
+    formats: [tar.gz]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 checksum:
