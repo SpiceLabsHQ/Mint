@@ -193,6 +193,36 @@ This policy follows the **trusted-team security model** (ADR-0005). Key design d
 
 For teams requiring stronger isolation, v2 will add IAM permission boundaries that enforce `aws:ResourceTag/mint:owner` conditions. This will prevent a VM from stopping or tagging another user's VM, even via direct AWS API calls. The current architecture supports this without code changes -- it requires only an IAM policy update. See ADR-0005 for details.
 
+## Homebrew Distribution
+
+Mint is distributed via a Homebrew tap hosted at **SpiceLabsHQ/homebrew-mint**. GoReleaser automatically commits an updated formula to that repository on every tagged release.
+
+### Prerequisites
+
+The tap repository must exist before the first release:
+
+1. Create `SpiceLabsHQ/homebrew-mint` as a public GitHub repository (no initial files needed — GoReleaser writes `Formula/mint.rb` on first release).
+2. Add a GitHub Actions secret named `HOMEBREW_TAP_GITHUB_TOKEN` to the **Mint release repository** (`SpiceLabsHQ/Mint`). The token must belong to an account with write access to `homebrew-mint` and needs the `repo` scope (or a fine-grained token scoped to `homebrew-mint` with Contents: read/write).
+
+### Installing Mint via Homebrew
+
+End users install Mint with:
+
+```bash
+brew install SpiceLabsHQ/mint/mint
+```
+
+The first run taps the repository automatically. To tap explicitly before installing:
+
+```bash
+brew tap SpiceLabsHQ/mint
+brew install mint
+```
+
+### How It Works
+
+GoReleaser's `brews:` stanza (in `.goreleaser.yaml`) generates `Formula/mint.rb` from the release artifacts and pushes it to `SpiceLabsHQ/homebrew-mint` using `HOMEBREW_TAP_GITHUB_TOKEN`. No manual formula edits are required — every release updates the formula automatically with the new version, checksums, and download URLs.
+
 ## Tear Down
 
 Deleting the stack removes all admin-created resources. User data stored on EFS will be lost.
