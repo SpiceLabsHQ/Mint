@@ -20,10 +20,11 @@ import (
 
 // statusDeps holds the injectable dependencies for the status command.
 type statusDeps struct {
-	describe  mintaws.DescribeInstancesAPI
-	sendKey   mintaws.SendSSHPublicKeyAPI
-	owner     string
-	remoteRun RemoteCommandRunner
+	describe       mintaws.DescribeInstancesAPI
+	sendKey        mintaws.SendSSHPublicKeyAPI
+	owner          string
+	remoteRun      RemoteCommandRunner
+	versionChecker VersionCheckerFunc
 }
 
 // newStatusCommand creates the production status command.
@@ -41,6 +42,9 @@ func newStatusCommandWithDeps(deps *statusDeps) *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if deps != nil {
+				if deps.versionChecker == nil {
+					deps.versionChecker = defaultVersionChecker()
+				}
 				return runStatus(cmd, deps)
 			}
 			clients := awsClientsFromContext(cmd.Context())
@@ -48,10 +52,11 @@ func newStatusCommandWithDeps(deps *statusDeps) *cobra.Command {
 				return fmt.Errorf("AWS clients not configured")
 			}
 			return runStatus(cmd, &statusDeps{
-				describe:  clients.ec2Client,
-				sendKey:   clients.icClient,
-				owner:     clients.owner,
-				remoteRun: defaultRemoteRunner,
+				describe:       clients.ec2Client,
+				sendKey:        clients.icClient,
+				owner:          clients.owner,
+				remoteRun:      defaultRemoteRunner,
+				versionChecker: defaultVersionChecker(),
 			})
 		},
 	}
@@ -71,6 +76,8 @@ type statusJSON struct {
 	BootstrapStatus string            `json:"bootstrap_status"`
 	Tags            map[string]string `json:"tags,omitempty"`
 	MintVersion     string            `json:"mint_version"`
+	UpdateAvailable bool              `json:"update_available"`
+	LatestVersion   *string           `json:"latest_version"`
 }
 
 // runStatus executes the status command logic.
@@ -106,7 +113,7 @@ func runStatus(cmd *cobra.Command, deps *statusDeps) error {
 	w := cmd.OutOrStdout()
 
 	if jsonOutput {
-		return writeStatusJSON(w, found, diskUsagePct)
+		return writeStatusJSON(w, found, diskUsagePct, deps.versionChecker)
 	}
 
 	writeStatusHuman(w, found, diskUsagePct)
@@ -160,7 +167,13 @@ func parseDiskUsagePct(output string) (int, error) {
 }
 
 // writeStatusJSON outputs a single VM as a JSON object.
-func writeStatusJSON(w io.Writer, v *vm.VM, diskUsagePct *int) error {
+func writeStatusJSON(w io.Writer, v *vm.VM, diskUsagePct *int, checker VersionCheckerFunc) error {
+	updateAvailable := false
+	var latestVersion *string
+	if checker != nil {
+		updateAvailable, latestVersion = checker()
+	}
+
 	obj := statusJSON{
 		ID:              v.ID,
 		Name:            v.Name,
@@ -174,6 +187,8 @@ func writeStatusJSON(w io.Writer, v *vm.VM, diskUsagePct *int) error {
 		BootstrapStatus: v.BootstrapStatus,
 		Tags:            v.Tags,
 		MintVersion:     version,
+		UpdateAvailable: updateAvailable,
+		LatestVersion:   latestVersion,
 	}
 
 	enc := json.NewEncoder(w)
