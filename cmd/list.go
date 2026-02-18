@@ -99,6 +99,7 @@ type vmJSON struct {
 // listJSON is the top-level JSON envelope for the list command output.
 type listJSON struct {
 	VMs             []vmJSON `json:"vms"`
+	RunningVMCount  int      `json:"running_vm_count"`
 	UpdateAvailable bool     `json:"update_available"`
 	LatestVersion   *string  `json:"latest_version"`
 }
@@ -135,6 +136,17 @@ func runList(cmd *cobra.Command, deps *listDeps) error {
 	return nil
 }
 
+// countRunningVMs returns the number of VMs in the "running" state.
+func countRunningVMs(vms []*vm.VM) int {
+	count := 0
+	for _, v := range vms {
+		if v.State == "running" {
+			count++
+		}
+	}
+	return count
+}
+
 // writeListJSON outputs VMs as a JSON object with version check fields.
 func writeListJSON(w io.Writer, vms []*vm.VM, checker VersionCheckerFunc) error {
 	items := make([]vmJSON, 0, len(vms))
@@ -160,6 +172,7 @@ func writeListJSON(w io.Writer, vms []*vm.VM, checker VersionCheckerFunc) error 
 
 	out := listJSON{
 		VMs:             items,
+		RunningVMCount:  countRunningVMs(vms),
 		UpdateAvailable: updateAvailable,
 		LatestVersion:   latestVersion,
 	}
@@ -203,6 +216,11 @@ func writeListTable(w io.Writer, vms []*vm.VM, idleTimeout time.Duration) {
 	}
 
 	tw.Flush()
+
+	// Warn when 3+ VMs are running (SPEC: informational only, no hard limit).
+	if n := countRunningVMs(vms); n >= 3 {
+		fmt.Fprintf(w, "\n⚠  You have %d running VMs. Consider stopping unused VMs to avoid unnecessary costs.\n", n)
+	}
 }
 
 // formatUptime returns a human-readable uptime string.

@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -410,3 +411,200 @@ var errThrottled = errForTest("throttled")
 type errForTest string
 
 func (e errForTest) Error() string { return string(e) }
+
+// ---------------------------------------------------------------------------
+// Tests: Multiple VM warning (3+ running)
+// ---------------------------------------------------------------------------
+
+// makeMultiRunningInstances returns a DescribeInstancesOutput with N running VMs
+// and one stopped VM (to verify stopped VMs don't count toward the warning).
+func makeMultiRunningInstances(n int) *ec2.DescribeInstancesOutput {
+	var instances []ec2types.Instance
+	recentLaunch := time.Now().Add(-30 * time.Minute)
+	for i := 0; i < n; i++ {
+		instances = append(instances, makeTestInstance(
+			fmt.Sprintf("i-%03d", i),
+			fmt.Sprintf("vm%d", i),
+			"alice",
+			"running",
+			fmt.Sprintf("1.2.3.%d", i+1),
+			"m6i.xlarge",
+			"complete",
+			recentLaunch,
+		))
+	}
+	return makeMultiInstanceOutput(instances...)
+}
+
+func TestListMultiVMWarning(t *testing.T) {
+	recentLaunch := time.Now().Add(-30 * time.Minute)
+
+	tests := []struct {
+		name        string
+		describe    *mockDescribeInstances
+		wantWarning bool
+		wantAbsent  []string
+		wantOutput  []string
+	}{
+		{
+			name: "0 running VMs — no warning",
+			describe: &mockDescribeInstances{
+				output: &ec2.DescribeInstancesOutput{},
+			},
+			wantWarning: false,
+			wantAbsent:  []string{"running VMs", "unnecessary costs"},
+		},
+		{
+			name: "2 running VMs — no warning",
+			describe: &mockDescribeInstances{
+				output: makeMultiInstanceOutput(
+					makeTestInstance("i-001", "vm1", "alice", "running", "1.1.1.1", "m6i.xlarge", "complete", recentLaunch),
+					makeTestInstance("i-002", "vm2", "alice", "running", "1.1.1.2", "m6i.xlarge", "complete", recentLaunch),
+				),
+			},
+			wantWarning: false,
+			wantAbsent:  []string{"unnecessary costs"},
+		},
+		{
+			name: "3 running VMs — warning shown",
+			describe: &mockDescribeInstances{
+				output: makeMultiRunningInstances(3),
+			},
+			wantWarning: true,
+			wantOutput:  []string{"3", "running VMs", "unnecessary costs"},
+		},
+		{
+			name: "4 running VMs — warning shown with count",
+			describe: &mockDescribeInstances{
+				output: makeMultiRunningInstances(4),
+			},
+			wantWarning: true,
+			wantOutput:  []string{"4", "running VMs", "unnecessary costs"},
+		},
+		{
+			name: "stopped VMs do not count toward warning",
+			describe: &mockDescribeInstances{
+				output: makeMultiInstanceOutput(
+					makeTestInstance("i-001", "vm1", "alice", "running", "1.1.1.1", "m6i.xlarge", "complete", recentLaunch),
+					makeTestInstance("i-002", "vm2", "alice", "running", "1.1.1.2", "m6i.xlarge", "complete", recentLaunch),
+					makeTestInstance("i-003", "vm3", "alice", "stopped", "", "m6i.xlarge", "complete", recentLaunch),
+				),
+			},
+			wantWarning: false,
+			wantAbsent:  []string{"unnecessary costs"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			buf := new(bytes.Buffer)
+			deps := &listDeps{
+				describe:    tt.describe,
+				owner:       "alice",
+				idleTimeout: 60 * time.Minute,
+			}
+			cmd := newListCommandWithDeps(deps)
+			root := newTestRoot()
+			root.AddCommand(cmd)
+			root.SetOut(buf)
+			root.SetErr(buf)
+			root.SetArgs([]string{"list"})
+
+			if err := root.Execute(); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			output := buf.String()
+			for _, want := range tt.wantOutput {
+				if !strings.Contains(output, want) {
+					t.Errorf("output missing %q, got:\n%s", want, output)
+				}
+			}
+			for _, absent := range tt.wantAbsent {
+				if strings.Contains(output, absent) {
+					t.Errorf("output should not contain %q, got:\n%s", absent, output)
+				}
+			}
+		})
+	}
+}
+
+func TestListJSONRunningVMCount(t *testing.T) {
+	recentLaunch := time.Now().Add(-30 * time.Minute)
+
+	tests := []struct {
+		name              string
+		describe          *mockDescribeInstances
+		wantRunningVMCount float64
+	}{
+		{
+			name: "0 running VMs",
+			describe: &mockDescribeInstances{
+				output: &ec2.DescribeInstancesOutput{},
+			},
+			wantRunningVMCount: 0,
+		},
+		{
+			name: "2 running VMs",
+			describe: &mockDescribeInstances{
+				output: makeMultiInstanceOutput(
+					makeTestInstance("i-001", "vm1", "alice", "running", "1.1.1.1", "m6i.xlarge", "complete", recentLaunch),
+					makeTestInstance("i-002", "vm2", "alice", "running", "1.1.1.2", "m6i.xlarge", "complete", recentLaunch),
+				),
+			},
+			wantRunningVMCount: 2,
+		},
+		{
+			name: "3 running VMs",
+			describe: &mockDescribeInstances{
+				output: makeMultiRunningInstances(3),
+			},
+			wantRunningVMCount: 3,
+		},
+		{
+			name: "stopped VMs excluded from count",
+			describe: &mockDescribeInstances{
+				output: makeMultiInstanceOutput(
+					makeTestInstance("i-001", "vm1", "alice", "running", "1.1.1.1", "m6i.xlarge", "complete", recentLaunch),
+					makeTestInstance("i-002", "vm2", "alice", "stopped", "", "m6i.xlarge", "complete", recentLaunch),
+				),
+			},
+			wantRunningVMCount: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			buf := new(bytes.Buffer)
+			deps := &listDeps{
+				describe:       tt.describe,
+				owner:          "alice",
+				idleTimeout:    60 * time.Minute,
+				versionChecker: stubVersionChecker(false, nil),
+			}
+			cmd := newListCommandWithDeps(deps)
+			root := newTestRoot()
+			root.AddCommand(cmd)
+			root.SetOut(buf)
+			root.SetErr(buf)
+			root.SetArgs([]string{"list", "--json"})
+
+			if err := root.Execute(); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			var result map[string]interface{}
+			if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
+				t.Fatalf("invalid JSON: %v\nOutput: %s", err, buf.String())
+			}
+
+			got, ok := result["running_vm_count"]
+			if !ok {
+				t.Fatalf("JSON missing running_vm_count field; got fields: %v", result)
+			}
+			if got != tt.wantRunningVMCount {
+				t.Errorf("running_vm_count = %v, want %v", got, tt.wantRunningVMCount)
+			}
+		})
+	}
+}
