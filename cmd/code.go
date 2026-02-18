@@ -98,8 +98,8 @@ func runCode(cmd *cobra.Command, deps *codeDeps) error {
 	// ADR-0015: Check permission before writing to ~/.ssh/config.
 	if !deps.sshConfigApproved {
 		return fmt.Errorf(
-			"mint needs to update ~/.ssh/config to connect VS Code.\n"+
-				"Run: mint config set ssh_config_approved true",
+			"mint needs permission to update ~/.ssh/config — " +
+				"run mint config set ssh_config_approved true",
 		)
 	}
 

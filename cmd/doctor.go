@@ -496,7 +496,7 @@ func checkConfig(deps *doctorDeps) []checkResult {
 		results = append(results, checkResult{
 			name:    "region",
 			status:  "FAIL",
-			message: "region is not set — run: mint config set region <region>",
+			message: "region is not set — run mint config set region <region>",
 		})
 	} else if !regionFormatPattern.MatchString(cfg.Region) {
 		results = append(results, checkResult{
@@ -557,7 +557,7 @@ func checkSSHConfig(deps *doctorDeps) checkResult {
 		return checkResult{
 			name:    "SSH config",
 			status:  "WARN",
-			message: "SSH config file not found — run: mint ssh-config",
+			message: "SSH config file not found — run mint ssh-config",
 		}
 	}
 
@@ -566,7 +566,7 @@ func checkSSHConfig(deps *doctorDeps) checkResult {
 		return checkResult{
 			name:    "SSH config",
 			status:  "WARN",
-			message: "no mint managed block found — run: mint ssh-config",
+			message: "no mint managed block found — run mint ssh-config",
 		}
 	}
 
