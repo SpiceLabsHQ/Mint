@@ -114,8 +114,20 @@ apt-get install -y -qq gh
 log "Installing AWS CLI v2"
 if ! command -v aws &> /dev/null; then
     apt-get install -y -qq unzip
-    curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/awscliv2.zip
-    # TODO: Add checksum verification when AWS CLI version is pinned
+    AWS_CLI_VERSION="2.22.0"
+    AWS_CLI_ARCH="$(uname -m)"
+    # SHA256 checksums for awscli-exe-linux-<arch>-<version>.zip
+    # Computed from the official AWS distribution at awscli.amazonaws.com.
+    # Update both checksums whenever AWS_CLI_VERSION is bumped.
+    case "${AWS_CLI_ARCH}" in
+        x86_64)  AWS_CLI_SHA256="f315aa564190a12ae05a05bd8ab7b0645dd4a1ad71ce9e47dae4ff3dfeee8ceb" ;;
+        aarch64) AWS_CLI_SHA256="c932ac00901ea3c430f3829140b8dc00fa6e9b8b99d6891929a4795947de7f3e" ;;
+        *) log "ERROR: Unsupported architecture for AWS CLI: ${AWS_CLI_ARCH}"; exit 1 ;;
+    esac
+    curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-${AWS_CLI_ARCH}-${AWS_CLI_VERSION}.zip" \
+        -o /tmp/awscliv2.zip
+    echo "${AWS_CLI_SHA256}  /tmp/awscliv2.zip" | sha256sum -c - \
+        || { log "ERROR: AWS CLI checksum mismatch — aborting installation"; exit 1; }
     cd /tmp && unzip -q awscliv2.zip
     /tmp/aws/install
     rm -rf /tmp/aws /tmp/awscliv2.zip
