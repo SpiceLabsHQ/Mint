@@ -1,0 +1,22 @@
+{
+  "name": "Mint Dev",
+  "image": "mcr.microsoft.com/devcontainers/go:1-1.24-bookworm",
+
+  "features": {
+    "ghcr.io/devcontainers/features/aws-cli:1": {}
+  },
+
+  "postCreateCommand": "sudo apt-get update && sudo apt-get install -y openssh-client mosh tmux jq netcat-openbsd && go mod download && go generate ./...",
+
+  "remoteEnv": {
+    "MINT_CONFIG_DIR": "${containerWorkspaceFolder}/.mint-test"
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "golang.go"
+      ]
+    }
+  }
+}
