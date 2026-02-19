@@ -336,7 +336,9 @@ func TestDoctorRegionNotSet(t *testing.T) {
 volume_size_gb = 50
 idle_timeout_minutes = 60
 `
-	os.WriteFile(filepath.Join(dir, "config.toml"), []byte(content), 0o600)
+	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(content), 0o600); err != nil {
+		t.Fatalf("writing config: %v", err)
+	}
 
 	buf := new(bytes.Buffer)
 	cmd := newDoctorCommandWithDeps(deps)
@@ -363,7 +365,9 @@ func TestDoctorRegionInvalidFormat(t *testing.T) {
 volume_size_gb = 50
 idle_timeout_minutes = 60
 `
-	os.WriteFile(filepath.Join(dir, "config.toml"), []byte(content), 0o600)
+	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(content), 0o600); err != nil {
+		t.Fatalf("writing config: %v", err)
+	}
 
 	buf := new(bytes.Buffer)
 	cmd := newDoctorCommandWithDeps(deps)
@@ -390,7 +394,9 @@ func TestDoctorVolumeTooSmall(t *testing.T) {
 volume_size_gb = 10
 idle_timeout_minutes = 60
 `
-	os.WriteFile(filepath.Join(dir, "config.toml"), []byte(content), 0o600)
+	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(content), 0o600); err != nil {
+		t.Fatalf("writing config: %v", err)
+	}
 
 	buf := new(bytes.Buffer)
 	cmd := newDoctorCommandWithDeps(deps)
@@ -417,7 +423,9 @@ func TestDoctorIdleTimeoutTooLow(t *testing.T) {
 volume_size_gb = 50
 idle_timeout_minutes = 5
 `
-	os.WriteFile(filepath.Join(dir, "config.toml"), []byte(content), 0o600)
+	if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(content), 0o600); err != nil {
+		t.Fatalf("writing config: %v", err)
+	}
 
 	buf := new(bytes.Buffer)
 	cmd := newDoctorCommandWithDeps(deps)

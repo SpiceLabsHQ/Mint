@@ -32,7 +32,7 @@ func TestCheckLatest_ReturnsRelease(t *testing.T) {
 				{Name: "checksums.txt", BrowserDownloadURL: "https://example.com/checksums.txt"},
 			},
 		}
-		json.NewEncoder(w).Encode(release)
+		_ = json.NewEncoder(w).Encode(release)
 	})
 
 	srv := httptest.NewServer(mux)
@@ -63,7 +63,7 @@ func TestCheckLatest_AlreadyCurrent(t *testing.T) {
 			TagName: "v1.0.0",
 			Assets:  []githubAsset{},
 		}
-		json.NewEncoder(w).Encode(release)
+		_ = json.NewEncoder(w).Encode(release)
 	})
 
 	srv := httptest.NewServer(mux)
@@ -187,7 +187,7 @@ func TestDownload_Success(t *testing.T) {
 
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/gzip")
-		w.Write(tarGz)
+		_, _ = w.Write(tarGz)
 	}))
 	defer srv.Close()
 
@@ -441,7 +441,7 @@ func TestDownloadChecksums_Success(t *testing.T) {
 	checksumContent := "abc123  mint_1.0.0_linux_amd64.tar.gz\ndef456  mint_1.0.0_darwin_arm64.tar.gz\n"
 
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		io.WriteString(w, checksumContent)
+		_, _ = io.WriteString(w, checksumContent)
 	}))
 	defer srv.Close()
 
@@ -600,7 +600,11 @@ func createTestTarGz(t *testing.T, name string, content []byte) []byte {
 	if _, err := tw.Write(content); err != nil {
 		t.Fatal(err)
 	}
-	tw.Close()
-	gw.Close()
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gw.Close(); err != nil {
+		t.Fatal(err)
+	}
 	return buf.Bytes()
 }
