@@ -49,7 +49,9 @@ func TestCheck_CacheHit_SkipsAPI(t *testing.T) {
 		CheckedAt:     time.Now().Add(-1 * time.Hour), // 1 hour ago, within 24h
 	}
 	data, _ := json.Marshal(cache)
-	os.WriteFile(filepath.Join(cacheDir, "version-cache.json"), data, 0o644)
+	if err := os.WriteFile(filepath.Join(cacheDir, "version-cache.json"), data, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	info, err := CheckWithEndpoint("v1.0.0", cacheDir, srv.URL)
 	if err != nil {
@@ -81,7 +83,9 @@ func TestCheck_CacheExpired_FetchesFromAPI(t *testing.T) {
 		CheckedAt:     time.Now().Add(-25 * time.Hour), // expired
 	}
 	data, _ := json.Marshal(cache)
-	os.WriteFile(filepath.Join(cacheDir, "version-cache.json"), data, 0o644)
+	if err := os.WriteFile(filepath.Join(cacheDir, "version-cache.json"), data, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	info, err := CheckWithEndpoint("v1.0.0", cacheDir, srv.URL)
 	if err != nil {
@@ -129,7 +133,9 @@ func TestCheck_InvalidCacheJSON_FetchesFromAPI(t *testing.T) {
 	defer srv.Close()
 
 	cacheDir := t.TempDir()
-	os.WriteFile(filepath.Join(cacheDir, "version-cache.json"), []byte("not json"), 0o644)
+	if err := os.WriteFile(filepath.Join(cacheDir, "version-cache.json"), []byte("not json"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	info, err := CheckWithEndpoint("v1.0.0", cacheDir, srv.URL)
 	if err != nil {

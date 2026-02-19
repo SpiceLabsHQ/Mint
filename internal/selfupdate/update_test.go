@@ -32,7 +32,7 @@ func TestCheckLatest_ReturnsRelease(t *testing.T) {
 				{Name: "checksums.txt", BrowserDownloadURL: "https://example.com/checksums.txt"},
 			},
 		}
-		json.NewEncoder(w).Encode(release)
+		_ = json.NewEncoder(w).Encode(release)
 	})
 
 	srv := httptest.NewServer(mux)
@@ -63,7 +63,7 @@ func TestCheckLatest_AlreadyCurrent(t *testing.T) {
 			TagName: "v1.0.0",
 			Assets:  []githubAsset{},
 		}
-		json.NewEncoder(w).Encode(release)
+		_ = json.NewEncoder(w).Encode(release)
 	})
 
 	srv := httptest.NewServer(mux)
@@ -600,7 +600,11 @@ func createTestTarGz(t *testing.T, name string, content []byte) []byte {
 	if _, err := tw.Write(content); err != nil {
 		t.Fatal(err)
 	}
-	tw.Close()
-	gw.Close()
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gw.Close(); err != nil {
+		t.Fatal(err)
+	}
 	return buf.Bytes()
 }
