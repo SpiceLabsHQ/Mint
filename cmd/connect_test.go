@@ -474,8 +474,8 @@ func TestConnectCommandNoSessionsError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "No active sessions") {
-		t.Errorf("error %q does not contain 'No active sessions'", err.Error())
+	if !strings.Contains(err.Error(), "no active sessions") {
+		t.Errorf("error %q does not contain 'no active sessions'", err.Error())
 	}
 	if !strings.Contains(err.Error(), "mint project add") {
 		t.Errorf("error %q does not contain 'mint project add'", err.Error())
@@ -508,8 +508,8 @@ func TestConnectCommandNoSessionsTmuxNotRunning(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "No active sessions") {
-		t.Errorf("error %q does not contain 'No active sessions'", err.Error())
+	if !strings.Contains(err.Error(), "no active sessions") {
+		t.Errorf("error %q does not contain 'no active sessions'", err.Error())
 	}
 }
 

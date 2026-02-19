@@ -12,7 +12,7 @@ import (
 
 func TestCheck_CacheMiss_FetchesFromAPI(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]string{"tag_name": "v1.2.0"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"tag_name": "v1.2.0"})
 	}))
 	defer srv.Close()
 
@@ -39,7 +39,7 @@ func TestCheck_CacheHit_SkipsAPI(t *testing.T) {
 	apiCalled := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		apiCalled = true
-		json.NewEncoder(w).Encode(map[string]string{"tag_name": "v2.0.0"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"tag_name": "v2.0.0"})
 	}))
 	defer srv.Close()
 
@@ -49,7 +49,9 @@ func TestCheck_CacheHit_SkipsAPI(t *testing.T) {
 		CheckedAt:     time.Now().Add(-1 * time.Hour), // 1 hour ago, within 24h
 	}
 	data, _ := json.Marshal(cache)
-	os.WriteFile(filepath.Join(cacheDir, "version-cache.json"), data, 0o644)
+	if err := os.WriteFile(filepath.Join(cacheDir, "version-cache.json"), data, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	info, err := CheckWithEndpoint("v1.0.0", cacheDir, srv.URL)
 	if err != nil {
@@ -71,7 +73,7 @@ func TestCheck_CacheHit_SkipsAPI(t *testing.T) {
 
 func TestCheck_CacheExpired_FetchesFromAPI(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]string{"tag_name": "v3.0.0"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"tag_name": "v3.0.0"})
 	}))
 	defer srv.Close()
 
@@ -81,7 +83,9 @@ func TestCheck_CacheExpired_FetchesFromAPI(t *testing.T) {
 		CheckedAt:     time.Now().Add(-25 * time.Hour), // expired
 	}
 	data, _ := json.Marshal(cache)
-	os.WriteFile(filepath.Join(cacheDir, "version-cache.json"), data, 0o644)
+	if err := os.WriteFile(filepath.Join(cacheDir, "version-cache.json"), data, 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	info, err := CheckWithEndpoint("v1.0.0", cacheDir, srv.URL)
 	if err != nil {
@@ -124,12 +128,14 @@ func TestCheck_NetworkError_FailsOpen(t *testing.T) {
 
 func TestCheck_InvalidCacheJSON_FetchesFromAPI(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]string{"tag_name": "v2.0.0"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"tag_name": "v2.0.0"})
 	}))
 	defer srv.Close()
 
 	cacheDir := t.TempDir()
-	os.WriteFile(filepath.Join(cacheDir, "version-cache.json"), []byte("not json"), 0o644)
+	if err := os.WriteFile(filepath.Join(cacheDir, "version-cache.json"), []byte("not json"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	info, err := CheckWithEndpoint("v1.0.0", cacheDir, srv.URL)
 	if err != nil {
@@ -145,7 +151,7 @@ func TestCheck_InvalidCacheJSON_FetchesFromAPI(t *testing.T) {
 
 func TestCheck_CacheWritten(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]string{"tag_name": "v1.0.0"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"tag_name": "v1.0.0"})
 	}))
 	defer srv.Close()
 
@@ -205,7 +211,7 @@ func TestCompareSemver(t *testing.T) {
 
 func TestCheck_SameVersion_NoUpdate(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]string{"tag_name": "v1.0.0"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"tag_name": "v1.0.0"})
 	}))
 	defer srv.Close()
 
@@ -224,7 +230,7 @@ func TestCheck_SameVersion_NoUpdate(t *testing.T) {
 
 func TestCheck_DevVersion_SkipsComparison(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]string{"tag_name": "v1.0.0"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"tag_name": "v1.0.0"})
 	}))
 	defer srv.Close()
 

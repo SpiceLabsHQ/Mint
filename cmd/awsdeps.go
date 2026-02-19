@@ -57,7 +57,7 @@ func contextWithAWSClients(ctx context.Context, clients *awsClients) context.Con
 // help) return false.
 func commandNeedsAWS(cmdName string) bool {
 	switch cmdName {
-	case "version", "config", "set", "get", "ssh-config", "help":
+	case "version", "config", "set", "get", "ssh-config", "help", "update":
 		return false
 	default:
 		return true

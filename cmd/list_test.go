@@ -3,6 +3,7 @@ package cmd
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -164,7 +165,7 @@ func TestListCommand(t *testing.T) {
 			wantOutput:  []string{`"id"`, `"name"`, `"state"`, `"i-abc123"`},
 		},
 		{
-			name: "json output is valid JSON array",
+			name: "json output is valid JSON object",
 			describe: &mockDescribeInstances{
 				output: makeInstanceWithTime("i-abc123", "default", "alice", "running", "1.2.3.4", "m6i.xlarge", "complete", recentLaunch),
 			},
@@ -180,7 +181,7 @@ func TestListCommand(t *testing.T) {
 			owner:       "alice",
 			idleTimeout: 60,
 			jsonOutput:  true,
-			wantOutput:  []string{"[]"},
+			wantOutput:  []string{`"vms"`, `"update_available"`, `"latest_version"`},
 		},
 		{
 			name: "API error propagates",
@@ -244,14 +245,163 @@ func TestListCommand(t *testing.T) {
 				}
 			}
 
-			// Validate JSON output is parseable.
+			// Validate JSON output is parseable as an object with vms array.
 			if tt.jsonOutput {
-				var result []interface{}
+				var result map[string]interface{}
 				if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &result); err != nil {
-					t.Errorf("JSON output is not a valid array: %v\nOutput: %s", err, output)
+					t.Errorf("JSON output is not a valid object: %v\nOutput: %s", err, output)
 				}
 			}
 		})
+	}
+}
+
+// stubVersionChecker returns a VersionCheckerFunc that returns fixed values,
+// avoiding any real network or filesystem access during tests.
+func stubVersionChecker(updateAvailable bool, latestVersion *string) VersionCheckerFunc {
+	return func() (bool, *string) {
+		return updateAvailable, latestVersion
+	}
+}
+
+// strPtr is a test helper that converts a string literal to a *string.
+func strPtr(s string) *string { return &s }
+
+func TestListJSONIncludesVersionFields(t *testing.T) {
+	recentLaunch := time.Now().Add(-30 * time.Minute)
+	buf := new(bytes.Buffer)
+
+	deps := &listDeps{
+		describe: &mockDescribeInstances{
+			output: makeInstanceWithTime("i-abc123", "default", "alice", "running", "1.2.3.4", "m6i.xlarge", "complete", recentLaunch),
+		},
+		owner:          "alice",
+		idleTimeout:    60 * time.Minute,
+		versionChecker: stubVersionChecker(true, strPtr("v2.0.0")),
+	}
+
+	cmd := newListCommandWithDeps(deps)
+	root := newTestRoot()
+	root.AddCommand(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"list", "--json"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+
+	// update_available must be true.
+	if v, ok := result["update_available"]; !ok {
+		t.Error("JSON missing update_available field")
+	} else if v.(bool) != true {
+		t.Errorf("update_available = %v, want true", v)
+	}
+
+	// latest_version must be the string returned by the checker.
+	if v, ok := result["latest_version"]; !ok {
+		t.Error("JSON missing latest_version field")
+	} else if v.(string) != "v2.0.0" {
+		t.Errorf("latest_version = %q, want %q", v, "v2.0.0")
+	}
+
+	// vms must be a non-empty array.
+	if v, ok := result["vms"]; !ok {
+		t.Error("JSON missing vms field")
+	} else if arr, ok := v.([]interface{}); !ok || len(arr) == 0 {
+		t.Errorf("vms = %v, want non-empty array", v)
+	}
+}
+
+func TestListJSONVersionFieldsFailOpen(t *testing.T) {
+	// When the version checker returns no info (check failed), update_available
+	// must be false and latest_version must be null.
+	recentLaunch := time.Now().Add(-30 * time.Minute)
+	buf := new(bytes.Buffer)
+
+	deps := &listDeps{
+		describe: &mockDescribeInstances{
+			output: makeInstanceWithTime("i-abc456", "default", "alice", "running", "1.2.3.4", "m6i.xlarge", "complete", recentLaunch),
+		},
+		owner:          "alice",
+		idleTimeout:    60 * time.Minute,
+		versionChecker: stubVersionChecker(false, nil),
+	}
+
+	cmd := newListCommandWithDeps(deps)
+	root := newTestRoot()
+	root.AddCommand(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"list", "--json"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+
+	if v, ok := result["update_available"]; !ok {
+		t.Error("JSON missing update_available field")
+	} else if v.(bool) != false {
+		t.Errorf("update_available = %v, want false", v)
+	}
+
+	if v, ok := result["latest_version"]; !ok {
+		t.Error("JSON missing latest_version field")
+	} else if v != nil {
+		t.Errorf("latest_version = %v, want null", v)
+	}
+}
+
+func TestListJSONStructureHasVmsArray(t *testing.T) {
+	// Verify top-level JSON structure: object with vms, update_available, latest_version.
+	buf := new(bytes.Buffer)
+
+	deps := &listDeps{
+		describe: &mockDescribeInstances{
+			output: &ec2.DescribeInstancesOutput{},
+		},
+		owner:          "alice",
+		idleTimeout:    60 * time.Minute,
+		versionChecker: stubVersionChecker(false, nil),
+	}
+
+	cmd := newListCommandWithDeps(deps)
+	root := newTestRoot()
+	root.AddCommand(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"list", "--json"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+
+	for _, field := range []string{"vms", "update_available", "latest_version"} {
+		if _, ok := result[field]; !ok {
+			t.Errorf("JSON missing top-level field %q", field)
+		}
+	}
+
+	// vms must be an empty array (not null).
+	if vms, ok := result["vms"].([]interface{}); !ok {
+		t.Errorf("vms is not an array, got %T", result["vms"])
+	} else if len(vms) != 0 {
+		t.Errorf("expected empty vms array, got %d items", len(vms))
 	}
 }
 
@@ -261,3 +411,200 @@ var errThrottled = errForTest("throttled")
 type errForTest string
 
 func (e errForTest) Error() string { return string(e) }
+
+// ---------------------------------------------------------------------------
+// Tests: Multiple VM warning (3+ running)
+// ---------------------------------------------------------------------------
+
+// makeMultiRunningInstances returns a DescribeInstancesOutput with N running VMs
+// and one stopped VM (to verify stopped VMs don't count toward the warning).
+func makeMultiRunningInstances(n int) *ec2.DescribeInstancesOutput {
+	var instances []ec2types.Instance
+	recentLaunch := time.Now().Add(-30 * time.Minute)
+	for i := 0; i < n; i++ {
+		instances = append(instances, makeTestInstance(
+			fmt.Sprintf("i-%03d", i),
+			fmt.Sprintf("vm%d", i),
+			"alice",
+			"running",
+			fmt.Sprintf("1.2.3.%d", i+1),
+			"m6i.xlarge",
+			"complete",
+			recentLaunch,
+		))
+	}
+	return makeMultiInstanceOutput(instances...)
+}
+
+func TestListMultiVMWarning(t *testing.T) {
+	recentLaunch := time.Now().Add(-30 * time.Minute)
+
+	tests := []struct {
+		name        string
+		describe    *mockDescribeInstances
+		wantWarning bool
+		wantAbsent  []string
+		wantOutput  []string
+	}{
+		{
+			name: "0 running VMs — no warning",
+			describe: &mockDescribeInstances{
+				output: &ec2.DescribeInstancesOutput{},
+			},
+			wantWarning: false,
+			wantAbsent:  []string{"running VMs", "unnecessary costs"},
+		},
+		{
+			name: "2 running VMs — no warning",
+			describe: &mockDescribeInstances{
+				output: makeMultiInstanceOutput(
+					makeTestInstance("i-001", "vm1", "alice", "running", "1.1.1.1", "m6i.xlarge", "complete", recentLaunch),
+					makeTestInstance("i-002", "vm2", "alice", "running", "1.1.1.2", "m6i.xlarge", "complete", recentLaunch),
+				),
+			},
+			wantWarning: false,
+			wantAbsent:  []string{"unnecessary costs"},
+		},
+		{
+			name: "3 running VMs — warning shown",
+			describe: &mockDescribeInstances{
+				output: makeMultiRunningInstances(3),
+			},
+			wantWarning: true,
+			wantOutput:  []string{"3", "running VMs", "unnecessary costs"},
+		},
+		{
+			name: "4 running VMs — warning shown with count",
+			describe: &mockDescribeInstances{
+				output: makeMultiRunningInstances(4),
+			},
+			wantWarning: true,
+			wantOutput:  []string{"4", "running VMs", "unnecessary costs"},
+		},
+		{
+			name: "stopped VMs do not count toward warning",
+			describe: &mockDescribeInstances{
+				output: makeMultiInstanceOutput(
+					makeTestInstance("i-001", "vm1", "alice", "running", "1.1.1.1", "m6i.xlarge", "complete", recentLaunch),
+					makeTestInstance("i-002", "vm2", "alice", "running", "1.1.1.2", "m6i.xlarge", "complete", recentLaunch),
+					makeTestInstance("i-003", "vm3", "alice", "stopped", "", "m6i.xlarge", "complete", recentLaunch),
+				),
+			},
+			wantWarning: false,
+			wantAbsent:  []string{"unnecessary costs"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			buf := new(bytes.Buffer)
+			deps := &listDeps{
+				describe:    tt.describe,
+				owner:       "alice",
+				idleTimeout: 60 * time.Minute,
+			}
+			cmd := newListCommandWithDeps(deps)
+			root := newTestRoot()
+			root.AddCommand(cmd)
+			root.SetOut(buf)
+			root.SetErr(buf)
+			root.SetArgs([]string{"list"})
+
+			if err := root.Execute(); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			output := buf.String()
+			for _, want := range tt.wantOutput {
+				if !strings.Contains(output, want) {
+					t.Errorf("output missing %q, got:\n%s", want, output)
+				}
+			}
+			for _, absent := range tt.wantAbsent {
+				if strings.Contains(output, absent) {
+					t.Errorf("output should not contain %q, got:\n%s", absent, output)
+				}
+			}
+		})
+	}
+}
+
+func TestListJSONRunningVMCount(t *testing.T) {
+	recentLaunch := time.Now().Add(-30 * time.Minute)
+
+	tests := []struct {
+		name              string
+		describe          *mockDescribeInstances
+		wantRunningVMCount float64
+	}{
+		{
+			name: "0 running VMs",
+			describe: &mockDescribeInstances{
+				output: &ec2.DescribeInstancesOutput{},
+			},
+			wantRunningVMCount: 0,
+		},
+		{
+			name: "2 running VMs",
+			describe: &mockDescribeInstances{
+				output: makeMultiInstanceOutput(
+					makeTestInstance("i-001", "vm1", "alice", "running", "1.1.1.1", "m6i.xlarge", "complete", recentLaunch),
+					makeTestInstance("i-002", "vm2", "alice", "running", "1.1.1.2", "m6i.xlarge", "complete", recentLaunch),
+				),
+			},
+			wantRunningVMCount: 2,
+		},
+		{
+			name: "3 running VMs",
+			describe: &mockDescribeInstances{
+				output: makeMultiRunningInstances(3),
+			},
+			wantRunningVMCount: 3,
+		},
+		{
+			name: "stopped VMs excluded from count",
+			describe: &mockDescribeInstances{
+				output: makeMultiInstanceOutput(
+					makeTestInstance("i-001", "vm1", "alice", "running", "1.1.1.1", "m6i.xlarge", "complete", recentLaunch),
+					makeTestInstance("i-002", "vm2", "alice", "stopped", "", "m6i.xlarge", "complete", recentLaunch),
+				),
+			},
+			wantRunningVMCount: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			buf := new(bytes.Buffer)
+			deps := &listDeps{
+				describe:       tt.describe,
+				owner:          "alice",
+				idleTimeout:    60 * time.Minute,
+				versionChecker: stubVersionChecker(false, nil),
+			}
+			cmd := newListCommandWithDeps(deps)
+			root := newTestRoot()
+			root.AddCommand(cmd)
+			root.SetOut(buf)
+			root.SetErr(buf)
+			root.SetArgs([]string{"list", "--json"})
+
+			if err := root.Execute(); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			var result map[string]interface{}
+			if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
+				t.Fatalf("invalid JSON: %v\nOutput: %s", err, buf.String())
+			}
+
+			got, ok := result["running_vm_count"]
+			if !ok {
+				t.Fatalf("JSON missing running_vm_count field; got fields: %v", result)
+			}
+			if got != tt.wantRunningVMCount {
+				t.Errorf("running_vm_count = %v, want %v", got, tt.wantRunningVMCount)
+			}
+		})
+	}
+}

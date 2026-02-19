@@ -1,6 +1,6 @@
 // Package bootstrap provides integrity verification for the EC2 user-data
-// bootstrap script. The script's SHA256 hash is embedded at compile time via
-// go:generate and verified before the script is sent to EC2 (ADR-0009).
+// bootstrap script. The script's SHA256 hash is embedded at compile time
+// (via go generate) and verified before the script is sent to EC2 (ADR-0009).
 package bootstrap
 
 import (

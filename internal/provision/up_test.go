@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
@@ -162,6 +165,32 @@ func (m *mockGetParameter) GetParameter(ctx context.Context, params *ssm.GetPara
 	return m.output, m.err
 }
 
+type mockUpDescribeVolumes struct {
+	output *ec2.DescribeVolumesOutput
+	err    error
+	called bool
+	input  *ec2.DescribeVolumesInput
+}
+
+func (m *mockUpDescribeVolumes) DescribeVolumes(ctx context.Context, params *ec2.DescribeVolumesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeVolumesOutput, error) {
+	m.called = true
+	m.input = params
+	return m.output, m.err
+}
+
+type mockUpDeleteTags struct {
+	output *ec2.DeleteTagsOutput
+	err    error
+	called bool
+	input  *ec2.DeleteTagsInput
+}
+
+func (m *mockUpDeleteTags) DeleteTags(ctx context.Context, params *ec2.DeleteTagsInput, optFns ...func(*ec2.Options)) (*ec2.DeleteTagsOutput, error) {
+	m.called = true
+	m.input = params
+	return m.output, m.err
+}
+
 // ---------------------------------------------------------------------------
 // Helper: build a Provisioner with all mocks
 // ---------------------------------------------------------------------------
@@ -179,6 +208,8 @@ type upMocks struct {
 	describeAddrs     *mockUpDescribeAddresses
 	createTags        *mockUpCreateTags
 	ssmClient         *mockGetParameter
+	describeVolumes   *mockUpDescribeVolumes
+	deleteTags        *mockUpDeleteTags
 
 	bootstrapVerifier BootstrapVerifier
 	amiResolver       AMIResolver
@@ -248,6 +279,13 @@ func newUpHappyMocks() *upMocks {
 			output: &ec2.CreateTagsOutput{},
 		},
 		ssmClient: &mockGetParameter{},
+		// No pending-attach volumes by default.
+		describeVolumes: &mockUpDescribeVolumes{
+			output: &ec2.DescribeVolumesOutput{Volumes: []ec2types.Volume{}},
+		},
+		deleteTags: &mockUpDeleteTags{
+			output: &ec2.DeleteTagsOutput{},
+		},
 		bootstrapVerifier: func(content []byte) error {
 			return nil // always pass
 		},
@@ -274,6 +312,12 @@ func (m *upMocks) build() *Provisioner {
 	)
 	p.WithBootstrapVerifier(m.bootstrapVerifier)
 	p.WithAMIResolver(m.amiResolver)
+	if m.describeVolumes != nil {
+		p.WithDescribeVolumes(m.describeVolumes)
+	}
+	if m.deleteTags != nil {
+		p.WithDeleteTags(m.deleteTags)
+	}
 	return p
 }
 
@@ -898,7 +942,7 @@ echo done`)
 		"MINT_IDLE_TIMEOUT": "90",
 	}
 
-	result := interpolateBootstrap(script, vars)
+	result := InterpolateBootstrap(script, vars)
 
 	expected := `#!/bin/bash
 EFS_ID="fs-abc123"
@@ -908,7 +952,7 @@ IDLE_TIMEOUT="90"
 echo done`
 
 	if string(result) != expected {
-		t.Errorf("interpolateBootstrap result:\n%s\nwant:\n%s", string(result), expected)
+		t.Errorf("InterpolateBootstrap result:\n%s\nwant:\n%s", string(result), expected)
 	}
 }
 
@@ -924,7 +968,7 @@ BARE_KNOWN="${MINT_VM_NAME}"`)
 		"MINT_VM_NAME": "myvm",
 	}
 
-	result := interpolateBootstrap(script, vars)
+	result := InterpolateBootstrap(script, vars)
 
 	// Known variables should be replaced
 	if !strings.Contains(string(result), `KNOWN="fs-xyz"`) {
@@ -951,7 +995,7 @@ func TestInterpolateBootstrapHandlesBashDefaults(t *testing.T) {
 		"MINT_IDLE_TIMEOUT": "120",
 	}
 
-	result := interpolateBootstrap(script, vars)
+	result := InterpolateBootstrap(script, vars)
 
 	if !strings.Contains(string(result), `TIMEOUT="120"`) {
 		t.Errorf("expected bash default expression to be replaced, got:\n%s", string(result))
@@ -1351,6 +1395,327 @@ func TestLaunchInstanceIncludesVolumeTagsCustom(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Tests: Pending-attach volume recovery
+// ---------------------------------------------------------------------------
+
+func TestProvisionerPendingAttachHappyPath(t *testing.T) {
+	// When a pending-attach volume exists in the same AZ, the provisioner
+	// should attach it (skip volume creation) and remove the pending-attach tag.
+	m := newUpHappyMocks()
+	m.describeVolumes = &mockUpDescribeVolumes{
+		output: &ec2.DescribeVolumesOutput{
+			Volumes: []ec2types.Volume{{
+				VolumeId:         aws.String("vol-pending1"),
+				AvailabilityZone: aws.String("us-east-1a"),
+			}},
+		},
+	}
+	m.deleteTags = &mockUpDeleteTags{
+		output: &ec2.DeleteTagsOutput{},
+	}
+	p := m.build()
+
+	result, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", defaultConfig())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Volume should be the pending-attach volume, not a newly created one.
+	if result.VolumeID != "vol-pending1" {
+		t.Errorf("result.VolumeID = %q, want %q", result.VolumeID, "vol-pending1")
+	}
+
+	// CreateVolume should NOT be called (volume already exists).
+	if m.createVolume.called {
+		t.Error("CreateVolume should NOT be called when pending-attach volume exists")
+	}
+
+	// AttachVolume should be called with the pending volume.
+	if !m.attachVolume.called {
+		t.Fatal("AttachVolume was not called")
+	}
+	if aws.ToString(m.attachVolume.input.VolumeId) != "vol-pending1" {
+		t.Errorf("AttachVolume VolumeId = %q, want %q", aws.ToString(m.attachVolume.input.VolumeId), "vol-pending1")
+	}
+	if aws.ToString(m.attachVolume.input.Device) != "/dev/xvdf" {
+		t.Errorf("AttachVolume Device = %q, want %q", aws.ToString(m.attachVolume.input.Device), "/dev/xvdf")
+	}
+
+	// DeleteTags should be called to remove the pending-attach tag.
+	if !m.deleteTags.called {
+		t.Fatal("DeleteTags was not called to remove pending-attach tag")
+	}
+	if len(m.deleteTags.input.Resources) != 1 || m.deleteTags.input.Resources[0] != "vol-pending1" {
+		t.Errorf("DeleteTags resources = %v, want [vol-pending1]", m.deleteTags.input.Resources)
+	}
+	foundTag := false
+	for _, tag := range m.deleteTags.input.Tags {
+		if aws.ToString(tag.Key) == tags.TagPendingAttach {
+			foundTag = true
+		}
+	}
+	if !foundTag {
+		t.Error("DeleteTags did not include mint:pending-attach tag")
+	}
+}
+
+func TestProvisionerPendingAttachAZMismatch(t *testing.T) {
+	// When a pending-attach volume is in a different AZ than the instance,
+	// the provisioner should fail fast with guidance.
+	m := newUpHappyMocks()
+	m.describeVolumes = &mockUpDescribeVolumes{
+		output: &ec2.DescribeVolumesOutput{
+			Volumes: []ec2types.Volume{{
+				VolumeId:         aws.String("vol-wrongaz"),
+				AvailabilityZone: aws.String("us-west-2a"), // Different AZ
+			}},
+		},
+	}
+	p := m.build()
+
+	_, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", defaultConfig())
+	if err == nil {
+		t.Fatal("expected error for AZ mismatch")
+	}
+	if !strings.Contains(err.Error(), "AZ mismatch") {
+		t.Errorf("error = %q, want substring %q", err.Error(), "AZ mismatch")
+	}
+	if !strings.Contains(err.Error(), "mint destroy") {
+		t.Errorf("error should mention 'mint destroy', got: %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "vol-wrongaz") {
+		t.Errorf("error should include volume ID, got: %q", err.Error())
+	}
+}
+
+func TestProvisionerPendingAttachNoneFound(t *testing.T) {
+	// When no pending-attach volume is found, normal provisioning continues
+	// (a new volume is created).
+	m := newUpHappyMocks()
+	// describeVolumes returns empty (no pending-attach volumes) — this is the default.
+	p := m.build()
+
+	result, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", defaultConfig())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Normal flow: CreateVolume should be called.
+	if !m.createVolume.called {
+		t.Error("CreateVolume should be called when no pending-attach volume exists")
+	}
+	if result.VolumeID != "vol-proj1" {
+		t.Errorf("result.VolumeID = %q, want %q (newly created)", result.VolumeID, "vol-proj1")
+	}
+
+	// DeleteTags should NOT be called.
+	if m.deleteTags.called {
+		t.Error("DeleteTags should NOT be called when no pending-attach volume exists")
+	}
+}
+
+func TestProvisionerPendingAttachDescribeError(t *testing.T) {
+	// When DescribeVolumes fails, the error should propagate.
+	m := newUpHappyMocks()
+	m.describeVolumes = &mockUpDescribeVolumes{
+		err: fmt.Errorf("describe volumes throttled"),
+	}
+	p := m.build()
+
+	_, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", defaultConfig())
+	if err == nil {
+		t.Fatal("expected error from DescribeVolumes failure")
+	}
+	if !strings.Contains(err.Error(), "pending-attach") {
+		t.Errorf("error = %q, want substring %q", err.Error(), "pending-attach")
+	}
+}
+
+func TestProvisionerPendingAttachAttachError(t *testing.T) {
+	// When attaching the pending-attach volume fails, the error should propagate.
+	m := newUpHappyMocks()
+	m.describeVolumes = &mockUpDescribeVolumes{
+		output: &ec2.DescribeVolumesOutput{
+			Volumes: []ec2types.Volume{{
+				VolumeId:         aws.String("vol-pending1"),
+				AvailabilityZone: aws.String("us-east-1a"),
+			}},
+		},
+	}
+	m.attachVolume = &mockUpAttachVolume{
+		err: fmt.Errorf("volume busy"),
+	}
+	p := m.build()
+
+	_, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", defaultConfig())
+	if err == nil {
+		t.Fatal("expected error from attach failure")
+	}
+	if !strings.Contains(err.Error(), "volume busy") {
+		t.Errorf("error = %q, want substring %q", err.Error(), "volume busy")
+	}
+}
+
+func TestProvisionerPendingAttachDeleteTagError(t *testing.T) {
+	// When removing the pending-attach tag fails, the error should propagate.
+	m := newUpHappyMocks()
+	m.describeVolumes = &mockUpDescribeVolumes{
+		output: &ec2.DescribeVolumesOutput{
+			Volumes: []ec2types.Volume{{
+				VolumeId:         aws.String("vol-pending1"),
+				AvailabilityZone: aws.String("us-east-1a"),
+			}},
+		},
+	}
+	m.deleteTags = &mockUpDeleteTags{
+		err: fmt.Errorf("delete tags denied"),
+	}
+	p := m.build()
+
+	_, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", defaultConfig())
+	if err == nil {
+		t.Fatal("expected error from DeleteTags failure")
+	}
+	if !strings.Contains(err.Error(), "delete tags denied") {
+		t.Errorf("error = %q, want substring %q", err.Error(), "delete tags denied")
+	}
+}
+
+func TestProvisionerCrashAfterTerminateRecovery(t *testing.T) {
+	// Scenario: mint recreate crashed after terminating the old instance.
+	// The old instance no longer exists but the project volume is orphaned
+	// with a mint:pending-attach=true tag. Running mint up should recover
+	// by attaching the existing volume instead of creating a new one.
+	//
+	// Timeline:
+	//   1. User runs "mint recreate" on VM "default"
+	//   2. Recreate stops instance, detaches volume, tags it pending-attach, terminates instance
+	//   3. CRASH — recreate dies after terminate but before launching a replacement
+	//   4. User runs "mint up" — DescribeInstances finds NO instance (it was terminated)
+	//   5. mint up provisions a fresh instance
+	//   6. findPendingAttachVolume discovers the orphaned volume
+	//   7. The volume is attached to the new instance (skip CreateVolume)
+	//   8. The mint:pending-attach tag is removed
+	//   9. User's data is preserved
+
+	m := newUpHappyMocks()
+
+	// No existing instance (it was terminated before the crash).
+	// newUpHappyMocks() already defaults to empty DescribeInstancesOutput.
+
+	// The orphaned volume from the crashed recreate:
+	m.describeVolumes = &mockUpDescribeVolumes{
+		output: &ec2.DescribeVolumesOutput{
+			Volumes: []ec2types.Volume{{
+				VolumeId:         aws.String("vol-orphaned"),
+				AvailabilityZone: aws.String("us-east-1a"),
+			}},
+		},
+	}
+	m.deleteTags = &mockUpDeleteTags{
+		output: &ec2.DeleteTagsOutput{},
+	}
+	p := m.build()
+
+	result, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", defaultConfig())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// The orphaned volume should be recovered, not a new one created.
+	if result.VolumeID != "vol-orphaned" {
+		t.Errorf("VolumeID = %q, want %q (orphaned volume should be recovered)", result.VolumeID, "vol-orphaned")
+	}
+
+	// CreateVolume should NOT be called — the orphaned volume replaces it.
+	if m.createVolume.called {
+		t.Error("CreateVolume called — should reuse orphaned pending-attach volume")
+	}
+
+	// AttachVolume should attach the orphaned volume.
+	if !m.attachVolume.called {
+		t.Fatal("AttachVolume not called — orphaned volume should be attached to new instance")
+	}
+	if aws.ToString(m.attachVolume.input.VolumeId) != "vol-orphaned" {
+		t.Errorf("AttachVolume VolumeId = %q, want %q", aws.ToString(m.attachVolume.input.VolumeId), "vol-orphaned")
+	}
+
+	// DeleteTags should remove the pending-attach tag.
+	if !m.deleteTags.called {
+		t.Fatal("DeleteTags not called — pending-attach tag should be removed after recovery")
+	}
+
+	// A new instance should have been launched (not a restart).
+	if result.InstanceID != "i-new123" {
+		t.Errorf("InstanceID = %q, want %q (fresh instance should be launched)", result.InstanceID, "i-new123")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests: Volume IOPS configuration
+// ---------------------------------------------------------------------------
+
+func TestProvisionerDefaultVolumeIOPS(t *testing.T) {
+	// When VolumeIOPS is 0 in ProvisionConfig, the AWS call should use the
+	// gp3 AWS default (3000). We verify by checking that Iops is set to 3000.
+	m := newUpHappyMocks()
+	p := m.build()
+
+	cfg := defaultConfig()
+	cfg.VolumeIOPS = 0 // should default to 3000
+
+	_, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !m.createVolume.called {
+		t.Fatal("CreateVolume was not called")
+	}
+	if aws.ToInt32(m.createVolume.input.Iops) != 3000 {
+		t.Errorf("volume Iops = %d, want 3000 (default)", aws.ToInt32(m.createVolume.input.Iops))
+	}
+}
+
+func TestProvisionerCustomVolumeIOPS(t *testing.T) {
+	// When VolumeIOPS is explicitly set, it should be passed to CreateVolume.
+	m := newUpHappyMocks()
+	p := m.build()
+
+	cfg := defaultConfig()
+	cfg.VolumeIOPS = 6000
+
+	_, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !m.createVolume.called {
+		t.Fatal("CreateVolume was not called")
+	}
+	if aws.ToInt32(m.createVolume.input.Iops) != 6000 {
+		t.Errorf("volume Iops = %d, want 6000", aws.ToInt32(m.createVolume.input.Iops))
+	}
+}
+
+func TestProvisionerMaxVolumeIOPS(t *testing.T) {
+	m := newUpHappyMocks()
+	p := m.build()
+
+	cfg := defaultConfig()
+	cfg.VolumeIOPS = 16000
+
+	_, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if aws.ToInt32(m.createVolume.input.Iops) != 16000 {
+		t.Errorf("volume Iops = %d, want 16000", aws.ToInt32(m.createVolume.input.Iops))
+	}
+}
+
 func TestProvisionerNoPollOnRunningVM(t *testing.T) {
 	m := newUpHappyMocks()
 	m.describeInstances.output = &ec2.DescribeInstancesOutput{
@@ -1384,5 +1749,203 @@ func TestProvisionerNoPollOnRunningVM(t *testing.T) {
 
 	if pollCalled {
 		t.Error("bootstrap poll should NOT be called for already-running VM")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Logger mock for structured logging tests
+// ---------------------------------------------------------------------------
+
+type mockLogger struct {
+	mu      sync.Mutex
+	entries []mockLogEntry
+}
+
+type mockLogEntry struct {
+	service   string
+	operation string
+	duration  time.Duration
+	err       error
+}
+
+func (l *mockLogger) Log(service, operation string, duration time.Duration, err error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.entries = append(l.entries, mockLogEntry{
+		service:   service,
+		operation: operation,
+		duration:  duration,
+		err:       err,
+	})
+}
+
+func (l *mockLogger) SetStderr(_ io.Writer) {}
+
+func (l *mockLogger) findEntry(operation string) (mockLogEntry, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, e := range l.entries {
+		if e.operation == operation {
+			return e, true
+		}
+	}
+	return mockLogEntry{}, false
+}
+
+// ---------------------------------------------------------------------------
+// Tests: Provisioner WithLogger and structured logging
+// ---------------------------------------------------------------------------
+
+func TestProvisionerWithLoggerLogsRunInstances(t *testing.T) {
+	m := newUpHappyMocks()
+	p := m.build()
+
+	logger := &mockLogger{}
+	p.WithLogger(logger)
+
+	_, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", defaultConfig())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	entry, found := logger.findEntry("RunInstances")
+	if !found {
+		t.Fatal("logger.Log not called with operation=RunInstances")
+	}
+	if entry.service != "ec2" {
+		t.Errorf("service = %q, want %q", entry.service, "ec2")
+	}
+	if entry.duration < 0 {
+		t.Errorf("duration = %v, want >= 0", entry.duration)
+	}
+	if entry.err != nil {
+		t.Errorf("err = %v, want nil on success", entry.err)
+	}
+}
+
+func TestProvisionerWithLoggerLogsCreateVolume(t *testing.T) {
+	m := newUpHappyMocks()
+	p := m.build()
+
+	logger := &mockLogger{}
+	p.WithLogger(logger)
+
+	_, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", defaultConfig())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	entry, found := logger.findEntry("CreateVolume")
+	if !found {
+		t.Fatal("logger.Log not called with operation=CreateVolume")
+	}
+	if entry.service != "ec2" {
+		t.Errorf("service = %q, want %q", entry.service, "ec2")
+	}
+	if entry.duration < 0 {
+		t.Errorf("duration = %v, want >= 0", entry.duration)
+	}
+}
+
+func TestProvisionerWithLoggerLogsAttachVolume(t *testing.T) {
+	m := newUpHappyMocks()
+	p := m.build()
+
+	logger := &mockLogger{}
+	p.WithLogger(logger)
+
+	_, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", defaultConfig())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	entry, found := logger.findEntry("AttachVolume")
+	if !found {
+		t.Fatal("logger.Log not called with operation=AttachVolume")
+	}
+	if entry.service != "ec2" {
+		t.Errorf("service = %q, want %q", entry.service, "ec2")
+	}
+}
+
+func TestProvisionerWithLoggerLogsAllocateAddress(t *testing.T) {
+	m := newUpHappyMocks()
+	p := m.build()
+
+	logger := &mockLogger{}
+	p.WithLogger(logger)
+
+	_, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", defaultConfig())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	entry, found := logger.findEntry("AllocateAddress")
+	if !found {
+		t.Fatal("logger.Log not called with operation=AllocateAddress")
+	}
+	if entry.service != "ec2" {
+		t.Errorf("service = %q, want %q", entry.service, "ec2")
+	}
+}
+
+func TestProvisionerWithLoggerLogsAssociateAddress(t *testing.T) {
+	m := newUpHappyMocks()
+	p := m.build()
+
+	logger := &mockLogger{}
+	p.WithLogger(logger)
+
+	_, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", defaultConfig())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	entry, found := logger.findEntry("AssociateAddress")
+	if !found {
+		t.Fatal("logger.Log not called with operation=AssociateAddress")
+	}
+	if entry.service != "ec2" {
+		t.Errorf("service = %q, want %q", entry.service, "ec2")
+	}
+}
+
+func TestProvisionerWithLoggerLogsErrorOnRunInstancesFailure(t *testing.T) {
+	m := newUpHappyMocks()
+	m.runInstances.err = fmt.Errorf("insufficient capacity")
+	p := m.build()
+
+	logger := &mockLogger{}
+	p.WithLogger(logger)
+
+	_, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", defaultConfig())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	entry, found := logger.findEntry("RunInstances")
+	if !found {
+		t.Fatal("logger.Log not called with operation=RunInstances even on failure")
+	}
+	if entry.err == nil {
+		t.Error("expected non-nil err in log entry when RunInstances fails")
+	}
+	if !strings.Contains(entry.err.Error(), "insufficient capacity") {
+		t.Errorf("logged err = %q, want to contain %q", entry.err.Error(), "insufficient capacity")
+	}
+}
+
+func TestProvisionerNilLoggerNoChange(t *testing.T) {
+	// When no logger is set, provision should succeed without panicking.
+	m := newUpHappyMocks()
+	p := m.build()
+	// No WithLogger call — logger field is nil.
+
+	result, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", defaultConfig())
+	if err != nil {
+		t.Fatalf("unexpected error with nil logger: %v", err)
+	}
+	if result.InstanceID != "i-new123" {
+		t.Errorf("result.InstanceID = %q, want %q", result.InstanceID, "i-new123")
 	}
 }

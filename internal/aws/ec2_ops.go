@@ -39,6 +39,12 @@ type DescribeInstancesAPI interface {
 	DescribeInstances(ctx context.Context, params *ec2.DescribeInstancesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeInstancesOutput, error)
 }
 
+// ModifyInstanceAttributeAPI defines the subset of the EC2 API used for modifying
+// instance attributes (e.g., instance type on a stopped instance).
+type ModifyInstanceAttributeAPI interface {
+	ModifyInstanceAttribute(ctx context.Context, params *ec2.ModifyInstanceAttributeInput, optFns ...func(*ec2.Options)) (*ec2.ModifyInstanceAttributeOutput, error)
+}
+
 // ---------------------------------------------------------------------------
 // EBS volume management
 // ---------------------------------------------------------------------------
@@ -141,6 +147,7 @@ var (
 	_ StopInstancesAPI                 = (*ec2.Client)(nil)
 	_ TerminateInstancesAPI            = (*ec2.Client)(nil)
 	_ DescribeInstancesAPI             = (*ec2.Client)(nil)
+	_ ModifyInstanceAttributeAPI       = (*ec2.Client)(nil)
 	_ CreateVolumeAPI                  = (*ec2.Client)(nil)
 	_ AttachVolumeAPI                  = (*ec2.Client)(nil)
 	_ DetachVolumeAPI                  = (*ec2.Client)(nil)

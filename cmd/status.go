@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strconv"
+	"strings"
 	"time"
 
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/spf13/cobra"
 
 	mintaws "github.com/nicholasgasior/mint/internal/aws"
@@ -17,8 +20,11 @@ import (
 
 // statusDeps holds the injectable dependencies for the status command.
 type statusDeps struct {
-	describe mintaws.DescribeInstancesAPI
-	owner    string
+	describe       mintaws.DescribeInstancesAPI
+	sendKey        mintaws.SendSSHPublicKeyAPI
+	owner          string
+	remoteRun      RemoteCommandRunner
+	versionChecker VersionCheckerFunc
 }
 
 // newStatusCommand creates the production status command.
@@ -36,6 +42,9 @@ func newStatusCommandWithDeps(deps *statusDeps) *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if deps != nil {
+				if deps.versionChecker == nil {
+					deps.versionChecker = defaultVersionChecker()
+				}
 				return runStatus(cmd, deps)
 			}
 			clients := awsClientsFromContext(cmd.Context())
@@ -43,8 +52,11 @@ func newStatusCommandWithDeps(deps *statusDeps) *cobra.Command {
 				return fmt.Errorf("AWS clients not configured")
 			}
 			return runStatus(cmd, &statusDeps{
-				describe: clients.ec2Client,
-				owner:    clients.owner,
+				describe:       clients.ec2Client,
+				sendKey:        clients.icClient,
+				owner:          clients.owner,
+				remoteRun:      defaultRemoteRunner,
+				versionChecker: defaultVersionChecker(),
 			})
 		},
 	}
@@ -59,10 +71,13 @@ type statusJSON struct {
 	InstanceType    string            `json:"instance_type"`
 	RootVolumeGB    int               `json:"root_volume_gb,omitempty"`
 	ProjectVolumeGB int               `json:"project_volume_gb,omitempty"`
+	DiskUsagePct    *int              `json:"disk_usage_pct,omitempty"`
 	LaunchTime      time.Time         `json:"launch_time"`
 	BootstrapStatus string            `json:"bootstrap_status"`
 	Tags            map[string]string `json:"tags,omitempty"`
 	MintVersion     string            `json:"mint_version"`
+	UpdateAvailable bool              `json:"update_available"`
+	LatestVersion   *string           `json:"latest_version"`
 }
 
 // runStatus executes the status command logic.
@@ -89,19 +104,76 @@ func runStatus(cmd *cobra.Command, deps *statusDeps) error {
 		return fmt.Errorf("VM %q not found for owner %q", vmName, deps.owner)
 	}
 
+	// Fetch disk usage when VM is running and SSH deps are available.
+	var diskUsagePct *int
+	if found.State == string(ec2types.InstanceStateNameRunning) && deps.remoteRun != nil && deps.sendKey != nil {
+		diskUsagePct = fetchDiskUsage(ctx, deps, found)
+	}
+
 	w := cmd.OutOrStdout()
 
 	if jsonOutput {
-		return writeStatusJSON(w, found)
+		return writeStatusJSON(w, found, diskUsagePct, deps.versionChecker)
 	}
 
-	writeStatusHuman(w, found)
+	writeStatusHuman(w, found, diskUsagePct)
 	appendVersionNotice(w)
 	return nil
 }
 
+// fetchDiskUsage retrieves the root volume disk usage percentage via SSH.
+// Returns nil if the SSH command fails (graceful degradation).
+func fetchDiskUsage(ctx context.Context, deps *statusDeps, v *vm.VM) *int {
+	dfCmd := []string{"df", "--output=pcent", "/"}
+	output, err := deps.remoteRun(
+		ctx,
+		deps.sendKey,
+		v.ID,
+		v.AvailabilityZone,
+		v.PublicIP,
+		defaultSSHPort,
+		defaultSSHUser,
+		dfCmd,
+	)
+	if err != nil {
+		return nil
+	}
+
+	pct, err := parseDiskUsagePct(string(output))
+	if err != nil {
+		return nil
+	}
+	return &pct
+}
+
+// parseDiskUsagePct extracts the percentage value from df --output=pcent output.
+// Expected format:
+//
+//	Use%
+//	 42%
+func parseDiskUsagePct(output string) (int, error) {
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	if len(lines) < 2 {
+		return 0, fmt.Errorf("unexpected df output: %q", output)
+	}
+	// The percentage is on the last line, e.g. " 42%"
+	pctStr := strings.TrimSpace(lines[len(lines)-1])
+	pctStr = strings.TrimSuffix(pctStr, "%")
+	pct, err := strconv.Atoi(pctStr)
+	if err != nil {
+		return 0, fmt.Errorf("parsing disk usage percentage: %w", err)
+	}
+	return pct, nil
+}
+
 // writeStatusJSON outputs a single VM as a JSON object.
-func writeStatusJSON(w io.Writer, v *vm.VM) error {
+func writeStatusJSON(w io.Writer, v *vm.VM, diskUsagePct *int, checker VersionCheckerFunc) error {
+	updateAvailable := false
+	var latestVersion *string
+	if checker != nil {
+		updateAvailable, latestVersion = checker()
+	}
+
 	obj := statusJSON{
 		ID:              v.ID,
 		Name:            v.Name,
@@ -110,10 +182,13 @@ func writeStatusJSON(w io.Writer, v *vm.VM) error {
 		InstanceType:    v.InstanceType,
 		RootVolumeGB:    v.RootVolumeGB,
 		ProjectVolumeGB: v.ProjectVolumeGB,
+		DiskUsagePct:    diskUsagePct,
 		LaunchTime:      v.LaunchTime,
 		BootstrapStatus: v.BootstrapStatus,
 		Tags:            v.Tags,
 		MintVersion:     version,
+		UpdateAvailable: updateAvailable,
+		LatestVersion:   latestVersion,
 	}
 
 	enc := json.NewEncoder(w)
@@ -122,7 +197,7 @@ func writeStatusJSON(w io.Writer, v *vm.VM) error {
 }
 
 // writeStatusHuman outputs a single VM in human-readable format.
-func writeStatusHuman(w io.Writer, v *vm.VM) {
+func writeStatusHuman(w io.Writer, v *vm.VM, diskUsagePct *int) {
 	bootstrap := v.BootstrapStatus
 	if bootstrap == tags.BootstrapFailed {
 		bootstrap = "FAILED"
@@ -143,6 +218,15 @@ func writeStatusHuman(w io.Writer, v *vm.VM) {
 	}
 	if v.ProjectVolumeGB > 0 {
 		fmt.Fprintf(w, "Proj Vol:  %d GB\n", v.ProjectVolumeGB)
+	}
+	if diskUsagePct != nil {
+		if *diskUsagePct >= 80 {
+			fmt.Fprintf(w, "Disk:      %d%% [WARN]\n", *diskUsagePct)
+		} else {
+			fmt.Fprintf(w, "Disk:      %d%%\n", *diskUsagePct)
+		}
+	} else if v.State == string(ec2types.InstanceStateNameRunning) {
+		fmt.Fprintf(w, "Disk:      unknown\n")
 	}
 	fmt.Fprintf(w, "Launched:  %s\n", v.LaunchTime.Format(time.RFC3339))
 	fmt.Fprintf(w, "Bootstrap: %s\n", bootstrap)

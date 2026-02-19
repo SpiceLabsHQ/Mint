@@ -249,7 +249,9 @@ func TestWriteManagedBlock_ExistingFileWithoutBlock(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config")
 	existing := "Host example\n    HostName example.com\n"
-	os.WriteFile(path, []byte(existing), 0o600)
+	if err := os.WriteFile(path, []byte(existing), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	block := GenerateBlock("testvm", "1.2.3.4", "ubuntu", 41122, "i-abc123", "us-east-1a")
 	if err := WriteManagedBlock(path, "testvm", block); err != nil {
@@ -333,7 +335,9 @@ func TestRemoveManagedBlock(t *testing.T) {
 
 	existing := "Host example\n    HostName example.com\n"
 	block := GenerateBlock("testvm", "1.2.3.4", "ubuntu", 41122, "i-abc123", "us-east-1a")
-	os.WriteFile(path, []byte(existing+"\n"+block+"\n"), 0o600)
+	if err := os.WriteFile(path, []byte(existing+"\n"+block+"\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	if err := RemoveManagedBlock(path, "testvm"); err != nil {
 		t.Fatalf("remove: %v", err)
@@ -353,7 +357,9 @@ func TestRemoveManagedBlock(t *testing.T) {
 func TestRemoveManagedBlock_NoBlock(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config")
-	os.WriteFile(path, []byte("Host example\n"), 0o600)
+	if err := os.WriteFile(path, []byte("Host example\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
 
 	// Should not error when block doesn't exist.
 	if err := RemoveManagedBlock(path, "nonexistent"); err != nil {

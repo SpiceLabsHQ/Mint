@@ -374,6 +374,160 @@ func TestTOFURemoteRunnerMatchingKeyProceeds(t *testing.T) {
 	}
 }
 
+// --- verifyHostKey direct tests ---
+
+// TestVerifyHostKeyMismatchErrorFormat directly exercises the error-message
+// formatting path in verifyHostKey (sshutil.go lines 258-264). It asserts that
+// when a stored key exists and the newly scanned key differs, the error contains:
+//   - the VM name
+//   - the stored (old) fingerprint labeled "Stored fingerprint:"
+//   - the current (new) fingerprint labeled "Current fingerprint:"
+//   - the "HOST KEY CHANGED" sentinel
+//   - the remediation hint mentioning "mint destroy && mint up"
+func TestVerifyHostKeyMismatchErrorFormat(t *testing.T) {
+	const vmName = "my-dev-vm"
+	const storedFP = "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	const currentFP = "SHA256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+
+	store := sshconfig.NewHostKeyStore(t.TempDir())
+	if err := store.RecordKey(vmName, storedFP); err != nil {
+		t.Fatalf("RecordKey: %v", err)
+	}
+
+	// Mock scanner returns a different fingerprint than what is stored.
+	scanner := func(host string, port int) (string, string, error) {
+		return currentFP, "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICurrent", nil
+	}
+
+	inner := &tofuMockInner{output: []byte("should not run")}
+	runner := NewTOFURemoteRunner(inner.run, store, scanner, vmName)
+
+	err := runner.verifyHostKey("1.2.3.4", 41122)
+
+	if err == nil {
+		t.Fatal("expected mismatch error, got nil")
+	}
+
+	msg := err.Error()
+
+	// Assert the "HOST KEY CHANGED" sentinel.
+	if !strings.Contains(msg, "HOST KEY CHANGED") {
+		t.Errorf("error missing 'HOST KEY CHANGED', got:\n%s", msg)
+	}
+
+	// Assert the VM name appears in the message.
+	if !strings.Contains(msg, vmName) {
+		t.Errorf("error missing VM name %q, got:\n%s", vmName, msg)
+	}
+
+	// Assert the stored fingerprint appears under the "Stored fingerprint:" label.
+	if !strings.Contains(msg, "Stored fingerprint: "+storedFP) {
+		t.Errorf("error missing 'Stored fingerprint: %s', got:\n%s", storedFP, msg)
+	}
+
+	// Assert the current fingerprint appears under the "Current fingerprint:" label.
+	if !strings.Contains(msg, "Current fingerprint: "+currentFP) {
+		t.Errorf("error missing 'Current fingerprint: %s', got:\n%s", currentFP, msg)
+	}
+
+	// Assert the remediation hint is present.
+	if !strings.Contains(msg, "mint destroy && mint up") {
+		t.Errorf("error missing remediation hint 'mint destroy && mint up', got:\n%s", msg)
+	}
+
+	// The inner runner must not have been called.
+	if inner.calls != 0 {
+		t.Errorf("inner should not be called on key mismatch, got %d calls", inner.calls)
+	}
+}
+
+// TestVerifyHostKeyMismatchErrorFormatViaRun exercises the same mismatch path
+// through the public Run method to confirm the error propagates unchanged.
+func TestVerifyHostKeyMismatchErrorFormatViaRun(t *testing.T) {
+	const vmName = "staging-vm"
+	const storedFP = "SHA256:oldfingerprintvalue"
+	const currentFP = "SHA256:newfingerprintvalue"
+
+	store := sshconfig.NewHostKeyStore(t.TempDir())
+	if err := store.RecordKey(vmName, storedFP); err != nil {
+		t.Fatalf("RecordKey: %v", err)
+	}
+
+	scanner := func(host string, port int) (string, string, error) {
+		return currentFP, "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINew", nil
+	}
+
+	inner := &tofuMockInner{output: []byte("unreachable")}
+	runner := NewTOFURemoteRunner(inner.run, store, scanner, vmName)
+
+	ctx := context.Background()
+	mock := &mockSendKeyForRemote{
+		output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
+	}
+
+	_, err := runner.Run(ctx, mock, "i-staging", "us-west-2a", "10.0.0.1", 41122, "ubuntu", []string{"ls"})
+	if err == nil {
+		t.Fatal("expected mismatch error, got nil")
+	}
+
+	msg := err.Error()
+
+	if !strings.Contains(msg, "HOST KEY CHANGED") {
+		t.Errorf("error missing 'HOST KEY CHANGED', got:\n%s", msg)
+	}
+	if !strings.Contains(msg, vmName) {
+		t.Errorf("error missing VM name %q, got:\n%s", vmName, msg)
+	}
+	if !strings.Contains(msg, "Stored fingerprint: "+storedFP) {
+		t.Errorf("error missing 'Stored fingerprint: %s', got:\n%s", storedFP, msg)
+	}
+	if !strings.Contains(msg, "Current fingerprint: "+currentFP) {
+		t.Errorf("error missing 'Current fingerprint: %s', got:\n%s", currentFP, msg)
+	}
+	if !strings.Contains(msg, "mint destroy && mint up") {
+		t.Errorf("error missing remediation hint, got:\n%s", msg)
+	}
+}
+
+// TestVerifyHostKeyCheckError covers the checkErr != nil branch in verifyHostKey
+// (sshutil.go line 245-247). This path is triggered when the HostKeyStore itself
+// returns an error from CheckKey — e.g., when the known_hosts file is unreadable.
+func TestVerifyHostKeyCheckError(t *testing.T) {
+	dir := t.TempDir()
+	store := sshconfig.NewHostKeyStore(dir)
+
+	// Write a known_hosts file, then make it unreadable so CheckKey fails.
+	knownHostsPath := dir + "/known_hosts"
+	if err := os.WriteFile(knownHostsPath, []byte("default=SHA256:somefp\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.Chmod(knownHostsPath, 0o000); err != nil {
+		t.Fatalf("Chmod: %v", err)
+	}
+	t.Cleanup(func() {
+		// Restore permissions so t.TempDir cleanup can remove the file.
+		_ = os.Chmod(knownHostsPath, 0o600)
+	})
+
+	scanner := func(host string, port int) (string, string, error) {
+		return "SHA256:anyfp", "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAny", nil
+	}
+
+	inner := &tofuMockInner{output: []byte("should not run")}
+	runner := NewTOFURemoteRunner(inner.run, store, scanner, "default")
+
+	err := runner.verifyHostKey("1.2.3.4", 41122)
+	if err == nil {
+		t.Fatal("expected error when CheckKey fails, got nil")
+	}
+	if !strings.Contains(err.Error(), "checking host key") {
+		t.Errorf("error should mention 'checking host key', got: %s", err.Error())
+	}
+	if inner.calls != 0 {
+		t.Errorf("inner should not be called on CheckKey error, got %d calls", inner.calls)
+	}
+}
+
 // --- StreamingRemoteRunner tests ---
 
 func TestStreamingRemoteRunnerType(t *testing.T) {

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -12,6 +13,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/aws/aws-sdk-go-v2/service/ec2instanceconnect"
+	mintaws "github.com/nicholasgasior/mint/internal/aws"
 )
 
 func TestStatusCommand(t *testing.T) {
@@ -362,9 +365,10 @@ func TestStatusAppendsVersionNoticeInHumanMode(t *testing.T) {
 	}
 }
 
-func TestStatusDoesNotAppendVersionNoticeInJSONMode(t *testing.T) {
+func TestStatusDoesNotAppendVersionBannerInJSONMode(t *testing.T) {
 	// Seed a version cache file with a newer version. In JSON mode,
-	// appendVersionNotice must NOT be called, so the output stays valid JSON.
+	// the human-readable version banner must NOT be appended after the JSON
+	// object — version info is instead embedded in the JSON fields.
 	tmpDir := t.TempDir()
 	cacheJSON := `{"latest_version":"v99.0.0","checked_at":"` +
 		time.Now().UTC().Format(time.RFC3339) + `"}`
@@ -399,13 +403,14 @@ func TestStatusDoesNotAppendVersionNoticeInJSONMode(t *testing.T) {
 	}
 
 	output := buf.String()
-	// JSON output must remain a valid object — no version banner appended.
+	// JSON output must remain a valid object — the human banner must NOT be appended.
 	var result map[string]interface{}
 	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &result); err != nil {
-		t.Errorf("JSON output is not valid (version notice may have been appended): %v\nOutput: %s", err, output)
+		t.Errorf("JSON output is not valid (banner may have been appended): %v\nOutput: %s", err, output)
 	}
-	if strings.Contains(output, "v99.0.0") {
-		t.Errorf("version notice must NOT appear in JSON output; got:\n%s", output)
+	// The human-readable banner separator must not appear.
+	if strings.Contains(output, "A new version of mint is available") {
+		t.Errorf("human-readable version banner must NOT appear in JSON output; got:\n%s", output)
 	}
 }
 
@@ -440,5 +445,435 @@ func TestStatusJSONIncludesVersion(t *testing.T) {
 		t.Error("JSON output missing mint_version field")
 	} else if v.(string) != "dev" {
 		t.Errorf("mint_version = %q, want %q", v, "dev")
+	}
+}
+
+func TestStatusShowsDiskUsage(t *testing.T) {
+	buf := new(bytes.Buffer)
+
+	deps := &statusDeps{
+		describe: &mockDescribeInstances{
+			output: makeRunningInstanceWithAZ("i-disk1", "default", "alice", "1.2.3.4", "us-east-1a"),
+		},
+		sendKey:   &mockSendSSHPublicKey{output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true}},
+		owner:     "alice",
+		remoteRun: mockRemoteCommandRunner([]byte("Use%\n 42%\n"), nil),
+	}
+
+	cmd := newStatusCommandWithDeps(deps)
+	root := newTestRoot()
+	root.AddCommand(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"status"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "Disk:      42%") {
+		t.Errorf("output missing disk usage, got:\n%s", output)
+	}
+	if strings.Contains(output, "[WARN]") {
+		t.Errorf("output should NOT contain [WARN] for 42%%, got:\n%s", output)
+	}
+}
+
+func TestStatusDiskUsageWarning(t *testing.T) {
+	buf := new(bytes.Buffer)
+
+	deps := &statusDeps{
+		describe: &mockDescribeInstances{
+			output: makeRunningInstanceWithAZ("i-disk2", "default", "alice", "1.2.3.4", "us-east-1a"),
+		},
+		sendKey:   &mockSendSSHPublicKey{output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true}},
+		owner:     "alice",
+		remoteRun: mockRemoteCommandRunner([]byte("Use%\n 85%\n"), nil),
+	}
+
+	cmd := newStatusCommandWithDeps(deps)
+	root := newTestRoot()
+	root.AddCommand(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"status"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "Disk:      85% [WARN]") {
+		t.Errorf("output missing disk usage warning, got:\n%s", output)
+	}
+}
+
+func TestStatusDiskUsageWarningAt80(t *testing.T) {
+	buf := new(bytes.Buffer)
+
+	deps := &statusDeps{
+		describe: &mockDescribeInstances{
+			output: makeRunningInstanceWithAZ("i-disk80", "default", "alice", "1.2.3.4", "us-east-1a"),
+		},
+		sendKey:   &mockSendSSHPublicKey{output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true}},
+		owner:     "alice",
+		remoteRun: mockRemoteCommandRunner([]byte("Use%\n 80%\n"), nil),
+	}
+
+	cmd := newStatusCommandWithDeps(deps)
+	root := newTestRoot()
+	root.AddCommand(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"status"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "80% [WARN]") {
+		t.Errorf("expected [WARN] at exactly 80%%, got:\n%s", output)
+	}
+}
+
+func TestStatusDiskUsageSSHFailure(t *testing.T) {
+	buf := new(bytes.Buffer)
+
+	deps := &statusDeps{
+		describe: &mockDescribeInstances{
+			output: makeRunningInstanceWithAZ("i-disk3", "default", "alice", "1.2.3.4", "us-east-1a"),
+		},
+		sendKey:   &mockSendSSHPublicKey{output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true}},
+		owner:     "alice",
+		remoteRun: mockRemoteCommandRunner(nil, fmt.Errorf("connection refused")),
+	}
+
+	cmd := newStatusCommandWithDeps(deps)
+	root := newTestRoot()
+	root.AddCommand(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"status"})
+
+	// Should NOT return an error — graceful fallback.
+	if err := root.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "Disk:      unknown") {
+		t.Errorf("expected 'unknown' disk usage on SSH failure, got:\n%s", output)
+	}
+}
+
+func TestStatusDiskUsageJSON(t *testing.T) {
+	buf := new(bytes.Buffer)
+
+	deps := &statusDeps{
+		describe: &mockDescribeInstances{
+			output: makeRunningInstanceWithAZ("i-disk4", "default", "alice", "1.2.3.4", "us-east-1a"),
+		},
+		sendKey:   &mockSendSSHPublicKey{output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true}},
+		owner:     "alice",
+		remoteRun: mockRemoteCommandRunner([]byte("Use%\n 42%\n"), nil),
+	}
+
+	cmd := newStatusCommandWithDeps(deps)
+	root := newTestRoot()
+	root.AddCommand(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"status", "--json"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+
+	v, ok := result["disk_usage_pct"]
+	if !ok {
+		t.Fatal("JSON output missing disk_usage_pct field")
+	}
+	if v.(float64) != 42 {
+		t.Errorf("disk_usage_pct = %v, want 42", v)
+	}
+}
+
+func TestStatusDiskUsageJSONSSHFailure(t *testing.T) {
+	buf := new(bytes.Buffer)
+
+	deps := &statusDeps{
+		describe: &mockDescribeInstances{
+			output: makeRunningInstanceWithAZ("i-disk5", "default", "alice", "1.2.3.4", "us-east-1a"),
+		},
+		sendKey:   &mockSendSSHPublicKey{output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true}},
+		owner:     "alice",
+		remoteRun: mockRemoteCommandRunner(nil, fmt.Errorf("connection refused")),
+	}
+
+	cmd := newStatusCommandWithDeps(deps)
+	root := newTestRoot()
+	root.AddCommand(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"status", "--json"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+
+	// disk_usage_pct should be omitted when SSH fails.
+	if _, ok := result["disk_usage_pct"]; ok {
+		t.Error("disk_usage_pct should be omitted in JSON when SSH fails")
+	}
+}
+
+func TestStatusNoDiskCheckWhenStopped(t *testing.T) {
+	recentLaunch := time.Now().Add(-30 * time.Minute)
+	buf := new(bytes.Buffer)
+
+	remoteCallCount := 0
+	trackingRunner := func(
+		ctx context.Context,
+		sendKey mintaws.SendSSHPublicKeyAPI,
+		instanceID, az, host string,
+		port int,
+		user string,
+		command []string,
+	) ([]byte, error) {
+		remoteCallCount++
+		return []byte("Use%\n 50%\n"), nil
+	}
+
+	deps := &statusDeps{
+		describe: &mockDescribeInstances{
+			output: makeInstanceWithTime("i-stopped2", "default", "alice", "stopped", "", "m6i.xlarge", "complete", recentLaunch),
+		},
+		sendKey:   &mockSendSSHPublicKey{output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true}},
+		owner:     "alice",
+		remoteRun: trackingRunner,
+	}
+
+	cmd := newStatusCommandWithDeps(deps)
+	root := newTestRoot()
+	root.AddCommand(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"status"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if remoteCallCount != 0 {
+		t.Errorf("remote command runner was called %d times for stopped VM, expected 0", remoteCallCount)
+	}
+
+	output := buf.String()
+	if strings.Contains(output, "Disk:") {
+		t.Errorf("stopped VM should NOT show Disk line, got:\n%s", output)
+	}
+}
+
+func TestStatusJSONIncludesVersionCheckFields(t *testing.T) {
+	recentLaunch := time.Now().Add(-30 * time.Minute)
+	buf := new(bytes.Buffer)
+
+	deps := &statusDeps{
+		describe: &mockDescribeInstances{
+			output: makeInstanceWithTime("i-vc1", "default", "alice", "running", "1.2.3.4", "m6i.xlarge", "complete", recentLaunch),
+		},
+		owner:          "alice",
+		versionChecker: stubVersionChecker(true, strPtr("v2.0.0")),
+	}
+
+	cmd := newStatusCommandWithDeps(deps)
+	root := newTestRoot()
+	root.AddCommand(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"status", "--json"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+
+	// update_available must be true.
+	if v, ok := result["update_available"]; !ok {
+		t.Error("JSON missing update_available field")
+	} else if v.(bool) != true {
+		t.Errorf("update_available = %v, want true", v)
+	}
+
+	// latest_version must be the string returned by the checker.
+	if v, ok := result["latest_version"]; !ok {
+		t.Error("JSON missing latest_version field")
+	} else if v.(string) != "v2.0.0" {
+		t.Errorf("latest_version = %q, want %q", v, "v2.0.0")
+	}
+}
+
+func TestStatusJSONVersionFieldsFailOpen(t *testing.T) {
+	// When the version checker fails, update_available must be false and
+	// latest_version must be null. The command must still succeed.
+	recentLaunch := time.Now().Add(-30 * time.Minute)
+	buf := new(bytes.Buffer)
+
+	deps := &statusDeps{
+		describe: &mockDescribeInstances{
+			output: makeInstanceWithTime("i-vc2", "default", "alice", "running", "1.2.3.4", "m6i.xlarge", "complete", recentLaunch),
+		},
+		owner:          "alice",
+		versionChecker: stubVersionChecker(false, nil),
+	}
+
+	cmd := newStatusCommandWithDeps(deps)
+	root := newTestRoot()
+	root.AddCommand(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"status", "--json"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+
+	if v, ok := result["update_available"]; !ok {
+		t.Error("JSON missing update_available field")
+	} else if v.(bool) != false {
+		t.Errorf("update_available = %v, want false", v)
+	}
+
+	if v, ok := result["latest_version"]; !ok {
+		t.Error("JSON missing latest_version field")
+	} else if v != nil {
+		t.Errorf("latest_version = %v, want null", v)
+	}
+}
+
+func TestStatusJSONVersionFieldsOnLatestVersion(t *testing.T) {
+	// When running on the latest version, update_available must be false
+	// and latest_version must be the current version.
+	recentLaunch := time.Now().Add(-30 * time.Minute)
+	buf := new(bytes.Buffer)
+
+	deps := &statusDeps{
+		describe: &mockDescribeInstances{
+			output: makeInstanceWithTime("i-vc3", "default", "alice", "running", "1.2.3.4", "m6i.xlarge", "complete", recentLaunch),
+		},
+		owner:          "alice",
+		versionChecker: stubVersionChecker(false, strPtr("v1.0.0")),
+	}
+
+	cmd := newStatusCommandWithDeps(deps)
+	root := newTestRoot()
+	root.AddCommand(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"status", "--json"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+
+	if v, ok := result["update_available"]; !ok {
+		t.Error("JSON missing update_available field")
+	} else if v.(bool) != false {
+		t.Errorf("update_available = %v, want false (already on latest)", v)
+	}
+
+	if v, ok := result["latest_version"]; !ok {
+		t.Error("JSON missing latest_version field")
+	} else if v.(string) != "v1.0.0" {
+		t.Errorf("latest_version = %q, want %q", v, "v1.0.0")
+	}
+}
+
+func TestParseDiskUsagePct(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    int
+		wantErr bool
+	}{
+		{
+			name:  "normal output",
+			input: "Use%\n 42%\n",
+			want:  42,
+		},
+		{
+			name:  "high usage",
+			input: "Use%\n 95%\n",
+			want:  95,
+		},
+		{
+			name:  "zero usage",
+			input: "Use%\n  0%\n",
+			want:  0,
+		},
+		{
+			name:  "100 percent",
+			input: "Use%\n100%\n",
+			want:  100,
+		},
+		{
+			name:    "empty output",
+			input:   "",
+			wantErr: true,
+		},
+		{
+			name:    "single line only",
+			input:   "Use%",
+			wantErr: true,
+		},
+		{
+			name:    "garbage data",
+			input:   "Use%\n abc\n",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseDiskUsagePct(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("parseDiskUsagePct() = %d, want %d", got, tt.want)
+			}
+		})
 	}
 }

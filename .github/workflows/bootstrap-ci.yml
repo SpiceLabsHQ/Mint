@@ -1,0 +1,48 @@
+name: Bootstrap CI
+
+on:
+  push:
+    paths:
+      - 'scripts/bootstrap.sh'
+      - 'internal/bootstrap/**'
+  pull_request:
+    paths:
+      - 'scripts/bootstrap.sh'
+      - 'internal/bootstrap/**'
+
+permissions:
+  contents: read
+
+jobs:
+  validate-bootstrap:
+    name: Validate Bootstrap
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify embedded hash is current
+        run: |
+          go generate ./internal/bootstrap/...
+          if ! git diff --exit-code internal/bootstrap/; then
+            echo ""
+            echo "ERROR: Embedded bootstrap hash is stale."
+            echo "Run 'go generate ./internal/bootstrap/...' and commit the result."
+            exit 1
+          fi
+
+      - name: Lint bootstrap script (syntax check)
+        run: bash -n scripts/bootstrap.sh
+
+      - name: Lint shell scripts
+        run: shellcheck --severity=warning scripts/bootstrap.sh
+
+      - name: Build
+        run: go build ./...
+
+      - name: Test bootstrap package
+        run: go test ./internal/bootstrap/... -v -count=1

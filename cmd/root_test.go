@@ -64,6 +64,27 @@ func TestKeyHasAddSubcommand(t *testing.T) {
 	}
 }
 
+func TestPhase3CommandsRegistered(t *testing.T) {
+	root := NewRootCommand()
+
+	phase3Commands := []string{
+		"resize",
+		"recreate",
+		"doctor",
+	}
+
+	registered := make(map[string]bool)
+	for _, cmd := range root.Commands() {
+		registered[cmd.Name()] = true
+	}
+
+	for _, name := range phase3Commands {
+		if !registered[name] {
+			t.Errorf("expected Phase 3 command %q to be registered on root", name)
+		}
+	}
+}
+
 func TestProjectHasSubcommands(t *testing.T) {
 	root := NewRootCommand()
 

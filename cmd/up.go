@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/efs"
@@ -11,12 +13,27 @@ import (
 
 	mintaws "github.com/nicholasgasior/mint/internal/aws"
 	"github.com/nicholasgasior/mint/internal/cli"
+	"github.com/nicholasgasior/mint/internal/progress"
 	"github.com/nicholasgasior/mint/internal/provision"
 	"github.com/nicholasgasior/mint/internal/sshconfig"
 	"github.com/nicholasgasior/mint/internal/tags"
 	"github.com/nicholasgasior/mint/internal/vm"
 	"github.com/spf13/cobra"
 )
+
+// spinnerWriter is an io.Writer that routes writes through the spinner's
+// Update method. This prevents garbled output when --verbose is active:
+// the spinner goroutine and the bootstrap poller would otherwise both write
+// to the same fd concurrently.
+type spinnerWriter struct{ sp *progress.Spinner }
+
+func (sw *spinnerWriter) Write(p []byte) (int, error) {
+	msg := strings.TrimRight(string(p), "\n")
+	if msg != "" {
+		sw.sp.Update(msg)
+	}
+	return len(p), nil
+}
 
 // upDeps holds the injectable dependencies for the up command.
 type upDeps struct {
@@ -26,6 +43,7 @@ type upDeps struct {
 	bootstrapScript     []byte
 	instanceType        string
 	volumeSize          int32
+	volumeIOPS          int32
 	sshConfigApproved   bool
 	sshConfigPath       string
 	describe            mintaws.DescribeInstancesAPI
@@ -39,7 +57,7 @@ func newUpCommand() *cobra.Command {
 
 // newUpCommandWithDeps creates the up command with explicit dependencies for testing.
 func newUpCommandWithDeps(deps *upDeps) *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "up",
 		Short: "Provision or start the VM",
 		Long: "Provision a new VM or start a stopped one. Creates EC2 instance, " +
@@ -54,17 +72,35 @@ func newUpCommandWithDeps(deps *upDeps) *cobra.Command {
 			if clients == nil {
 				return fmt.Errorf("AWS clients not configured")
 			}
+			cliCtx := cli.FromCommand(cmd)
+			verbose := cliCtx != nil && cliCtx.Verbose
+			sp := newCommandSpinner(cmd.OutOrStdout(), verbose)
+			// When --verbose is active, route poller output through the spinner's
+			// mutex-protected Update method to prevent concurrent writes to the
+			// same fd from the spinner goroutine and the poller.
+			var pollerWriter io.Writer
+			if verbose {
+				pollerWriter = &spinnerWriter{sp: sp}
+			} else {
+				pollerWriter = sp.Writer
+			}
 			poller := provision.NewBootstrapPoller(
 				clients.ec2Client, // DescribeInstancesAPI
 				clients.ec2Client, // StopInstancesAPI
 				clients.ec2Client, // TerminateInstancesAPI
 				clients.ec2Client, // CreateTagsAPI
-				cmd.OutOrStdout(),
+				pollerWriter,
 				cmd.InOrStdin(),
 			)
 			sshApproved := false
+			volumeIOPS := int32(0)
 			if clients.mintConfig != nil {
 				sshApproved = clients.mintConfig.SSHConfigApproved
+				volumeIOPS = int32(clients.mintConfig.VolumeIOPS)
+			}
+			// --volume-iops flag overrides config value when provided (> 0).
+			if flagIOPS, _ := cmd.Flags().GetInt32("volume-iops"); flagIOPS > 0 {
+				volumeIOPS = flagIOPS
 			}
 			return runUp(cmd, &upDeps{
 				provisioner: provision.NewProvisioner(
@@ -86,12 +122,18 @@ func newUpCommandWithDeps(deps *upDeps) *cobra.Command {
 				bootstrapScript:     GetBootstrapScript(),
 				instanceType:        clients.mintConfig.InstanceType,
 				volumeSize:          int32(clients.mintConfig.VolumeSizeGB),
+				volumeIOPS:          volumeIOPS,
 				sshConfigApproved:   sshApproved,
 				describe:            clients.ec2Client,
 				describeFileSystems: clients.efsClient,
 			})
 		},
 	}
+
+	// --volume-iops overrides the config value. 0 means "use config value".
+	cmd.Flags().Int32("volume-iops", 0, "IOPS for the project EBS volume (gp3, range 3000-16000; 0 uses config value)")
+
+	return cmd
 }
 
 // runUp executes the up command logic.
@@ -111,29 +153,48 @@ func runUp(cmd *cobra.Command, deps *upDeps) error {
 		jsonOutput = cliCtx.JSON
 	}
 
-	w := cmd.OutOrStdout()
-
-	if verbose {
-		fmt.Fprintf(w, "Provisioning VM %q for owner %q...\n", vmName, deps.owner)
+	// Pre-flight: warn when provisioning would result in 3+ running VMs (SPEC).
+	// Warning is informational only — never blocks the operation.
+	// Skip in JSON mode to avoid corrupting machine-readable output.
+	if deps.describe != nil && !jsonOutput {
+		existingVMs, err := vm.ListVMs(ctx, deps.describe, deps.owner)
+		if err == nil {
+			if runningCount := countRunningVMs(existingVMs); runningCount >= 2 {
+				fmt.Fprintf(cmd.OutOrStdout(),
+					"⚠  You have %d running VMs. Consider stopping unused VMs to avoid unnecessary costs.\n",
+					runningCount)
+			}
+		}
 	}
+
+	sp := newCommandSpinner(cmd.OutOrStdout(), verbose)
+	sp.Start(fmt.Sprintf("Provisioning VM %q for owner %q...", vmName, deps.owner))
 
 	// Discover admin EFS filesystem (same pattern as mint init).
 	efsID, err := discoverEFS(ctx, deps.describeFileSystems)
 	if err != nil {
+		sp.Fail(err.Error())
 		return fmt.Errorf("discovering EFS: %w", err)
 	}
 
 	cfg := provision.ProvisionConfig{
 		InstanceType:    deps.instanceType,
 		VolumeSize:      deps.volumeSize,
+		VolumeIOPS:      deps.volumeIOPS,
 		BootstrapScript: deps.bootstrapScript,
 		EFSID:           efsID,
 	}
 
+	sp.Update(fmt.Sprintf("Provisioning VM %q...", vmName))
+
 	result, err := deps.provisioner.Run(ctx, deps.owner, deps.ownerARN, vmName, cfg)
 	if err != nil {
+		sp.Fail(err.Error())
 		return err
 	}
+
+	// Stop the spinner (clears line in interactive mode) before printing results.
+	sp.Stop("")
 
 	// Auto-generate SSH config entry if approved (ADR-0015).
 	if deps.sshConfigApproved && result.PublicIP != "" {
@@ -261,6 +322,7 @@ func upWithProvisioner(ctx context.Context, cmd *cobra.Command, cliCtx *cli.CLIC
 	cfg := provision.ProvisionConfig{
 		InstanceType:    deps.instanceType,
 		VolumeSize:      deps.volumeSize,
+		VolumeIOPS:      deps.volumeIOPS,
 		BootstrapScript: deps.bootstrapScript,
 	}
 
@@ -277,4 +339,18 @@ func upWithProvisioner(ctx context.Context, cmd *cobra.Command, cliCtx *cli.CLIC
 	}
 
 	return printUpResult(cmd, cliCtx, result, jsonOutput, verbose)
+}
+
+// newCommandSpinner creates a Spinner for command progress output.
+// When verbose is false, the spinner writes to io.Discard so no progress is
+// shown. When verbose is true, the spinner writes to w. TTY detection sets
+// Interactive automatically; in non-interactive environments (CI, tests) the
+// spinner emits plain timestamped lines.
+func newCommandSpinner(w io.Writer, verbose bool) *progress.Spinner {
+	if !verbose {
+		sp := progress.New(io.Discard)
+		sp.Interactive = false
+		return sp
+	}
+	return progress.New(w)
 }
