@@ -610,7 +610,9 @@ func TestUpCommandWritesSSHConfigOnSuccess(t *testing.T) {
 	// Use a temp file for SSH config.
 	tmpDir := t.TempDir()
 	sshConfigPath := tmpDir + "/config"
-	os.WriteFile(sshConfigPath, []byte(""), 0644)
+	if err := os.WriteFile(sshConfigPath, []byte(""), 0644); err != nil {
+		t.Fatalf("writing ssh config: %v", err)
+	}
 
 	// Stub DescribeInstances to return the VM with AZ info for SSH config generation.
 	describeStub := &stubUpDescribeInstances{output: &ec2.DescribeInstancesOutput{
@@ -670,7 +672,9 @@ func TestUpCommandSkipsSSHConfigWhenNotApproved(t *testing.T) {
 
 	tmpDir := t.TempDir()
 	sshConfigPath := tmpDir + "/config"
-	os.WriteFile(sshConfigPath, []byte(""), 0644)
+	if err := os.WriteFile(sshConfigPath, []byte(""), 0644); err != nil {
+		t.Fatalf("writing ssh config: %v", err)
+	}
 
 	deps := newTestUpDeps()
 	deps.sshConfigApproved = false

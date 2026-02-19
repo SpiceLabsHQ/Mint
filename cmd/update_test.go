@@ -69,7 +69,9 @@ func (m *mockUpdater) Apply(newBinaryPath, currentBinaryPath string) error {
 func TestUpdateCommand_SuccessfulUpdate(t *testing.T) {
 	dir := t.TempDir()
 	binaryPath := filepath.Join(dir, "mint")
-	os.WriteFile(binaryPath, []byte("old"), 0o755)
+	if err := os.WriteFile(binaryPath, []byte("old"), 0o755); err != nil {
+		t.Fatalf("writing binary: %v", err)
+	}
 
 	mock := &mockUpdater{
 		checkLatestFn: func(ctx context.Context) (*selfupdate.Release, error) {
@@ -77,7 +79,7 @@ func TestUpdateCommand_SuccessfulUpdate(t *testing.T) {
 		},
 		downloadFn: func(ctx context.Context, release *selfupdate.Release, destDir string) (string, error) {
 			p := filepath.Join(destDir, "mint.tar.gz")
-			os.WriteFile(p, []byte("archive-data"), 0o644)
+			_ = os.WriteFile(p, []byte("archive-data"), 0o644)
 			return p, nil
 		},
 		downloadChecksumFn: func(ctx context.Context, release *selfupdate.Release) (string, error) {
@@ -88,7 +90,7 @@ func TestUpdateCommand_SuccessfulUpdate(t *testing.T) {
 		},
 		extractFn: func(archivePath, destDir string) (string, error) {
 			p := filepath.Join(destDir, "mint")
-			os.WriteFile(p, []byte("new-binary"), 0o755)
+			_ = os.WriteFile(p, []byte("new-binary"), 0o755)
 			return p, nil
 		},
 		applyFn: func(newBinaryPath, currentBinaryPath string) error {
@@ -144,7 +146,9 @@ func TestUpdateCommand_AlreadyCurrent(t *testing.T) {
 func TestUpdateCommand_ChecksumMismatch(t *testing.T) {
 	dir := t.TempDir()
 	binaryPath := filepath.Join(dir, "mint")
-	os.WriteFile(binaryPath, []byte("old"), 0o755)
+	if err := os.WriteFile(binaryPath, []byte("old"), 0o755); err != nil {
+		t.Fatalf("writing binary: %v", err)
+	}
 
 	extractCalled := false
 	mock := &mockUpdater{
@@ -153,7 +157,7 @@ func TestUpdateCommand_ChecksumMismatch(t *testing.T) {
 		},
 		downloadFn: func(ctx context.Context, release *selfupdate.Release, destDir string) (string, error) {
 			p := filepath.Join(destDir, "mint.tar.gz")
-			os.WriteFile(p, []byte("archive"), 0o644)
+			_ = os.WriteFile(p, []byte("archive"), 0o644)
 			return p, nil
 		},
 		downloadChecksumFn: func(ctx context.Context, release *selfupdate.Release) (string, error) {
@@ -319,7 +323,7 @@ func TestUpdateCommand_FlowOrder(t *testing.T) {
 		downloadFn: func(ctx context.Context, release *selfupdate.Release, destDir string) (string, error) {
 			steps = append(steps, "download")
 			p := filepath.Join(destDir, "archive.tar.gz")
-			os.WriteFile(p, []byte("data"), 0o644)
+			_ = os.WriteFile(p, []byte("data"), 0o644)
 			return p, nil
 		},
 		downloadChecksumFn: func(ctx context.Context, release *selfupdate.Release) (string, error) {
@@ -333,7 +337,7 @@ func TestUpdateCommand_FlowOrder(t *testing.T) {
 		extractFn: func(archivePath, destDir string) (string, error) {
 			steps = append(steps, "extract")
 			p := filepath.Join(destDir, "mint")
-			os.WriteFile(p, []byte("bin"), 0o755)
+			_ = os.WriteFile(p, []byte("bin"), 0o755)
 			return p, nil
 		},
 		applyFn: func(newBinaryPath, currentBinaryPath string) error {
@@ -344,7 +348,9 @@ func TestUpdateCommand_FlowOrder(t *testing.T) {
 
 	dir := t.TempDir()
 	binaryPath := filepath.Join(dir, "mint")
-	os.WriteFile(binaryPath, []byte("old"), 0o755)
+	if err := os.WriteFile(binaryPath, []byte("old"), 0o755); err != nil {
+		t.Fatalf("writing binary: %v", err)
+	}
 
 	cmd := newUpdateCommandWithDeps(&updateDeps{
 		updater:    mock,

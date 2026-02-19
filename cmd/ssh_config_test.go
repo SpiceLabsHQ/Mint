@@ -219,7 +219,9 @@ func TestSSHConfigCommand_WarnsOnHandEdits(t *testing.T) {
 
 	// Write a tampered block manually — inner content does not match the checksum.
 	tampered := "# mint:begin default\nHost mint-default\n    HostName 1.2.3.4\n    User root\n    Port 41122\n    IdentityFile ~/.config/mint/ssh_key_default\n    IdentitiesOnly yes\n    ProxyCommand echo tampered\n# mint:end default\n# mint:checksum:0000000000000000000000000000000000000000000000000000000000000000\n"
-	os.WriteFile(sshConfigPath, []byte(tampered), 0o600)
+	if err := os.WriteFile(sshConfigPath, []byte(tampered), 0o600); err != nil {
+		t.Fatalf("writing ssh config: %v", err)
+	}
 
 	buf := new(bytes.Buffer)
 	rootCmd := NewRootCommand()
@@ -297,7 +299,9 @@ func TestSSHConfigCommand_PreservesExistingContent(t *testing.T) {
 	sshConfigPath := filepath.Join(sshDir, "config")
 
 	existing := "Host myserver\n    HostName example.com\n    User admin\n"
-	os.WriteFile(sshConfigPath, []byte(existing), 0o600)
+	if err := os.WriteFile(sshConfigPath, []byte(existing), 0o600); err != nil {
+		t.Fatalf("writing ssh config: %v", err)
+	}
 
 	buf := new(bytes.Buffer)
 	rootCmd := NewRootCommand()
