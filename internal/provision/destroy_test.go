@@ -472,3 +472,135 @@ func TestDestroyRunResult(t *testing.T) {
 		t.Error("result.EIPReleased should be true")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Tests: Destroyer WithLogger and structured logging
+// ---------------------------------------------------------------------------
+
+func TestDestroyerWithLoggerLogsTerminateInstances(t *testing.T) {
+	m := newDestroyHappyMocks()
+	d := m.build()
+
+	logger := &mockLogger{}
+	d.WithLogger(logger)
+
+	err := d.Run(context.Background(), "alice", "default", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	entry, found := logger.findEntry("TerminateInstances")
+	if !found {
+		t.Fatal("logger.Log not called with operation=TerminateInstances")
+	}
+	if entry.service != "ec2" {
+		t.Errorf("service = %q, want %q", entry.service, "ec2")
+	}
+	if entry.duration < 0 {
+		t.Errorf("duration = %v, want >= 0", entry.duration)
+	}
+	if entry.err != nil {
+		t.Errorf("err = %v, want nil on success", entry.err)
+	}
+}
+
+func TestDestroyerWithLoggerLogsDetachVolume(t *testing.T) {
+	m := newDestroyHappyMocks()
+	// Default happy mocks have an in-use volume, so DetachVolume is called.
+	d := m.build()
+
+	logger := &mockLogger{}
+	d.WithLogger(logger)
+
+	err := d.Run(context.Background(), "alice", "default", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	entry, found := logger.findEntry("DetachVolume")
+	if !found {
+		t.Fatal("logger.Log not called with operation=DetachVolume")
+	}
+	if entry.service != "ec2" {
+		t.Errorf("service = %q, want %q", entry.service, "ec2")
+	}
+}
+
+func TestDestroyerWithLoggerLogsDeleteVolume(t *testing.T) {
+	m := newDestroyHappyMocks()
+	d := m.build()
+
+	logger := &mockLogger{}
+	d.WithLogger(logger)
+
+	err := d.Run(context.Background(), "alice", "default", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	entry, found := logger.findEntry("DeleteVolume")
+	if !found {
+		t.Fatal("logger.Log not called with operation=DeleteVolume")
+	}
+	if entry.service != "ec2" {
+		t.Errorf("service = %q, want %q", entry.service, "ec2")
+	}
+}
+
+func TestDestroyerWithLoggerLogsReleaseAddress(t *testing.T) {
+	m := newDestroyHappyMocks()
+	d := m.build()
+
+	logger := &mockLogger{}
+	d.WithLogger(logger)
+
+	err := d.Run(context.Background(), "alice", "default", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	entry, found := logger.findEntry("ReleaseAddress")
+	if !found {
+		t.Fatal("logger.Log not called with operation=ReleaseAddress")
+	}
+	if entry.service != "ec2" {
+		t.Errorf("service = %q, want %q", entry.service, "ec2")
+	}
+}
+
+func TestDestroyerWithLoggerLogsTerminateError(t *testing.T) {
+	m := newDestroyHappyMocks()
+	m.terminate.err = fmt.Errorf("permission denied")
+	d := m.build()
+
+	logger := &mockLogger{}
+	d.WithLogger(logger)
+
+	err := d.Run(context.Background(), "alice", "default", true)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	entry, found := logger.findEntry("TerminateInstances")
+	if !found {
+		t.Fatal("logger.Log not called with operation=TerminateInstances even on failure")
+	}
+	if entry.err == nil {
+		t.Error("expected non-nil err in log entry when TerminateInstances fails")
+	}
+	if !strings.Contains(entry.err.Error(), "permission denied") {
+		t.Errorf("logged err = %q, want to contain %q", entry.err.Error(), "permission denied")
+	}
+}
+
+func TestDestroyerNilLoggerNoChange(t *testing.T) {
+	// When no logger is set, destroy should succeed without panicking.
+	m := newDestroyHappyMocks()
+	d := m.build()
+	// No WithLogger call — logger field is nil.
+
+	err := d.Run(context.Background(), "alice", "default", true)
+	if err != nil {
+		t.Fatalf("unexpected error with nil logger: %v", err)
+	}
+}

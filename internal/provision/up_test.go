@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
@@ -1746,5 +1749,203 @@ func TestProvisionerNoPollOnRunningVM(t *testing.T) {
 
 	if pollCalled {
 		t.Error("bootstrap poll should NOT be called for already-running VM")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Logger mock for structured logging tests
+// ---------------------------------------------------------------------------
+
+type mockLogger struct {
+	mu      sync.Mutex
+	entries []mockLogEntry
+}
+
+type mockLogEntry struct {
+	service   string
+	operation string
+	duration  time.Duration
+	err       error
+}
+
+func (l *mockLogger) Log(service, operation string, duration time.Duration, err error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.entries = append(l.entries, mockLogEntry{
+		service:   service,
+		operation: operation,
+		duration:  duration,
+		err:       err,
+	})
+}
+
+func (l *mockLogger) SetStderr(_ io.Writer) {}
+
+func (l *mockLogger) findEntry(operation string) (mockLogEntry, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, e := range l.entries {
+		if e.operation == operation {
+			return e, true
+		}
+	}
+	return mockLogEntry{}, false
+}
+
+// ---------------------------------------------------------------------------
+// Tests: Provisioner WithLogger and structured logging
+// ---------------------------------------------------------------------------
+
+func TestProvisionerWithLoggerLogsRunInstances(t *testing.T) {
+	m := newUpHappyMocks()
+	p := m.build()
+
+	logger := &mockLogger{}
+	p.WithLogger(logger)
+
+	_, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", defaultConfig())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	entry, found := logger.findEntry("RunInstances")
+	if !found {
+		t.Fatal("logger.Log not called with operation=RunInstances")
+	}
+	if entry.service != "ec2" {
+		t.Errorf("service = %q, want %q", entry.service, "ec2")
+	}
+	if entry.duration < 0 {
+		t.Errorf("duration = %v, want >= 0", entry.duration)
+	}
+	if entry.err != nil {
+		t.Errorf("err = %v, want nil on success", entry.err)
+	}
+}
+
+func TestProvisionerWithLoggerLogsCreateVolume(t *testing.T) {
+	m := newUpHappyMocks()
+	p := m.build()
+
+	logger := &mockLogger{}
+	p.WithLogger(logger)
+
+	_, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", defaultConfig())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	entry, found := logger.findEntry("CreateVolume")
+	if !found {
+		t.Fatal("logger.Log not called with operation=CreateVolume")
+	}
+	if entry.service != "ec2" {
+		t.Errorf("service = %q, want %q", entry.service, "ec2")
+	}
+	if entry.duration < 0 {
+		t.Errorf("duration = %v, want >= 0", entry.duration)
+	}
+}
+
+func TestProvisionerWithLoggerLogsAttachVolume(t *testing.T) {
+	m := newUpHappyMocks()
+	p := m.build()
+
+	logger := &mockLogger{}
+	p.WithLogger(logger)
+
+	_, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", defaultConfig())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	entry, found := logger.findEntry("AttachVolume")
+	if !found {
+		t.Fatal("logger.Log not called with operation=AttachVolume")
+	}
+	if entry.service != "ec2" {
+		t.Errorf("service = %q, want %q", entry.service, "ec2")
+	}
+}
+
+func TestProvisionerWithLoggerLogsAllocateAddress(t *testing.T) {
+	m := newUpHappyMocks()
+	p := m.build()
+
+	logger := &mockLogger{}
+	p.WithLogger(logger)
+
+	_, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", defaultConfig())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	entry, found := logger.findEntry("AllocateAddress")
+	if !found {
+		t.Fatal("logger.Log not called with operation=AllocateAddress")
+	}
+	if entry.service != "ec2" {
+		t.Errorf("service = %q, want %q", entry.service, "ec2")
+	}
+}
+
+func TestProvisionerWithLoggerLogsAssociateAddress(t *testing.T) {
+	m := newUpHappyMocks()
+	p := m.build()
+
+	logger := &mockLogger{}
+	p.WithLogger(logger)
+
+	_, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", defaultConfig())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	entry, found := logger.findEntry("AssociateAddress")
+	if !found {
+		t.Fatal("logger.Log not called with operation=AssociateAddress")
+	}
+	if entry.service != "ec2" {
+		t.Errorf("service = %q, want %q", entry.service, "ec2")
+	}
+}
+
+func TestProvisionerWithLoggerLogsErrorOnRunInstancesFailure(t *testing.T) {
+	m := newUpHappyMocks()
+	m.runInstances.err = fmt.Errorf("insufficient capacity")
+	p := m.build()
+
+	logger := &mockLogger{}
+	p.WithLogger(logger)
+
+	_, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", defaultConfig())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	entry, found := logger.findEntry("RunInstances")
+	if !found {
+		t.Fatal("logger.Log not called with operation=RunInstances even on failure")
+	}
+	if entry.err == nil {
+		t.Error("expected non-nil err in log entry when RunInstances fails")
+	}
+	if !strings.Contains(entry.err.Error(), "insufficient capacity") {
+		t.Errorf("logged err = %q, want to contain %q", entry.err.Error(), "insufficient capacity")
+	}
+}
+
+func TestProvisionerNilLoggerNoChange(t *testing.T) {
+	// When no logger is set, provision should succeed without panicking.
+	m := newUpHappyMocks()
+	p := m.build()
+	// No WithLogger call — logger field is nil.
+
+	result, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", defaultConfig())
+	if err != nil {
+		t.Fatalf("unexpected error with nil logger: %v", err)
+	}
+	if result.InstanceID != "i-new123" {
+		t.Errorf("result.InstanceID = %q, want %q", result.InstanceID, "i-new123")
 	}
 }

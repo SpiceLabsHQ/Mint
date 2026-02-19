@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 
 	mintaws "github.com/nicholasgasior/mint/internal/aws"
+	"github.com/nicholasgasior/mint/internal/logging"
 	"github.com/nicholasgasior/mint/internal/tags"
 	"github.com/nicholasgasior/mint/internal/vm"
 )
@@ -32,6 +34,8 @@ type Destroyer struct {
 	deleteVolume    mintaws.DeleteVolumeAPI
 	describeAddrs   mintaws.DescribeAddressesAPI
 	releaseAddr     mintaws.ReleaseAddressAPI
+
+	logger logging.Logger
 }
 
 // NewDestroyer creates a Destroyer with all required AWS interfaces.
@@ -53,6 +57,13 @@ func NewDestroyer(
 		describeAddrs:   describeAddrs,
 		releaseAddr:     releaseAddr,
 	}
+}
+
+// WithLogger sets the structured logger for AWS API call timing and error logging.
+// When nil (the default), logging is skipped and there is no behavioral change.
+func (d *Destroyer) WithLogger(l logging.Logger) *Destroyer {
+	d.logger = l
+	return d
 }
 
 // Run executes the full destroy flow. It requires confirmed=true to proceed.
@@ -81,9 +92,13 @@ func (d *Destroyer) RunWithResult(ctx context.Context, owner, vmName string, con
 	}
 
 	// Step 2: Terminate instance (root EBS auto-destroys per ADR-0017).
+	tiStart := time.Now()
 	_, err = d.terminate.TerminateInstances(ctx, &ec2.TerminateInstancesInput{
 		InstanceIds: []string{found.ID},
 	})
+	if d.logger != nil {
+		d.logger.Log("ec2", "TerminateInstances", time.Since(tiStart), err)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("terminating instance %s: %w", found.ID, err)
 	}
@@ -123,10 +138,14 @@ func (d *Destroyer) cleanupProjectVolumes(ctx context.Context, owner, vmName str
 
 		// Detach if in-use.
 		if vol.State == ec2types.VolumeStateInUse {
+			dvStart := time.Now()
 			_, err := d.detachVolume.DetachVolume(ctx, &ec2.DetachVolumeInput{
 				VolumeId: aws.String(volID),
 				Force:    aws.Bool(true),
 			})
+			if d.logger != nil {
+				d.logger.Log("ec2", "DetachVolume", time.Since(dvStart), err)
+			}
 			if err != nil {
 				warn := fmt.Sprintf("failed to detach volume %s: %v", volID, err)
 				result.Warnings = append(result.Warnings, warn)
@@ -136,9 +155,13 @@ func (d *Destroyer) cleanupProjectVolumes(ctx context.Context, owner, vmName str
 		}
 
 		// Delete the volume.
+		delStart := time.Now()
 		_, err := d.deleteVolume.DeleteVolume(ctx, &ec2.DeleteVolumeInput{
 			VolumeId: aws.String(volID),
 		})
+		if d.logger != nil {
+			d.logger.Log("ec2", "DeleteVolume", time.Since(delStart), err)
+		}
 		if err != nil {
 			warn := fmt.Sprintf("failed to delete volume %s: %v", volID, err)
 			result.Warnings = append(result.Warnings, warn)
@@ -173,9 +196,13 @@ func (d *Destroyer) cleanupElasticIP(ctx context.Context, owner, vmName string, 
 
 	for _, addr := range out.Addresses {
 		allocID := aws.ToString(addr.AllocationId)
+		raStart := time.Now()
 		_, err := d.releaseAddr.ReleaseAddress(ctx, &ec2.ReleaseAddressInput{
 			AllocationId: aws.String(allocID),
 		})
+		if d.logger != nil {
+			d.logger.Log("ec2", "ReleaseAddress", time.Since(raStart), err)
+		}
 		if err != nil {
 			warn := fmt.Sprintf("failed to release Elastic IP %s: %v", allocID, err)
 			result.Warnings = append(result.Warnings, warn)
