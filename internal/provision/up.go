@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
@@ -17,6 +18,7 @@ import (
 
 	mintaws "github.com/nicholasgasior/mint/internal/aws"
 	"github.com/nicholasgasior/mint/internal/bootstrap"
+	"github.com/nicholasgasior/mint/internal/logging"
 	"github.com/nicholasgasior/mint/internal/tags"
 	"github.com/nicholasgasior/mint/internal/vm"
 )
@@ -82,6 +84,8 @@ type Provisioner struct {
 	verifyBootstrap BootstrapVerifier
 	resolveAMI      AMIResolver
 	pollBootstrap   BootstrapPollFunc
+
+	logger logging.Logger
 }
 
 // NewProvisioner creates a Provisioner with all required AWS interfaces.
@@ -132,6 +136,13 @@ func (p *Provisioner) WithDeleteTags(dt DeleteTagsAPI) *Provisioner {
 // WithBootstrapVerifier overrides the default bootstrap verifier (for testing).
 func (p *Provisioner) WithBootstrapVerifier(v BootstrapVerifier) *Provisioner {
 	p.verifyBootstrap = v
+	return p
+}
+
+// WithLogger sets the structured logger for AWS API call timing and error logging.
+// When nil (the default), logging is skipped and there is no behavioral change.
+func (p *Provisioner) WithLogger(l logging.Logger) *Provisioner {
+	p.logger = l
 	return p
 }
 
@@ -509,7 +520,11 @@ func (p *Provisioner) launchInstance(
 		},
 	}
 
+	start := time.Now()
 	out, err := p.runInstances.RunInstances(ctx, input)
+	if p.logger != nil {
+		p.logger.Log("ec2", "RunInstances", time.Since(start), err)
+	}
 	if err != nil {
 		return "", fmt.Errorf("run instances: %w", err)
 	}
@@ -565,6 +580,7 @@ func (p *Provisioner) createAndAttachVolume(
 		WithComponent(tags.ComponentProjectVolume).
 		Build()
 
+	cvStart := time.Now()
 	createOut, err := p.createVolume.CreateVolume(ctx, &ec2.CreateVolumeInput{
 		AvailabilityZone: aws.String(az),
 		Size:             aws.Int32(sizeGB),
@@ -577,17 +593,24 @@ func (p *Provisioner) createAndAttachVolume(
 			},
 		},
 	})
+	if p.logger != nil {
+		p.logger.Log("ec2", "CreateVolume", time.Since(cvStart), err)
+	}
 	if err != nil {
 		return "", fmt.Errorf("create volume: %w", err)
 	}
 
 	volumeID := aws.ToString(createOut.VolumeId)
 
+	avStart := time.Now()
 	_, err = p.attachVolume.AttachVolume(ctx, &ec2.AttachVolumeInput{
 		VolumeId:   aws.String(volumeID),
 		InstanceId: aws.String(instanceID),
 		Device:     aws.String("/dev/xvdf"),
 	})
+	if p.logger != nil {
+		p.logger.Log("ec2", "AttachVolume", time.Since(avStart), err)
+	}
 	if err != nil {
 		return "", fmt.Errorf("attach volume %s to %s: %w", volumeID, instanceID, err)
 	}
@@ -605,6 +628,7 @@ func (p *Provisioner) allocateAndAssociateEIP(
 		WithComponent(tags.ComponentElasticIP).
 		Build()
 
+	aaStart := time.Now()
 	allocOut, err := p.allocateAddr.AllocateAddress(ctx, &ec2.AllocateAddressInput{
 		Domain: ec2types.DomainTypeVpc,
 		TagSpecifications: []ec2types.TagSpecification{
@@ -614,6 +638,9 @@ func (p *Provisioner) allocateAndAssociateEIP(
 			},
 		},
 	})
+	if p.logger != nil {
+		p.logger.Log("ec2", "AllocateAddress", time.Since(aaStart), err)
+	}
 	if err != nil {
 		return "", "", fmt.Errorf("allocate address: %w", err)
 	}
@@ -621,10 +648,14 @@ func (p *Provisioner) allocateAndAssociateEIP(
 	allocID = aws.ToString(allocOut.AllocationId)
 	publicIP = aws.ToString(allocOut.PublicIp)
 
+	assocStart := time.Now()
 	_, err = p.associateAddr.AssociateAddress(ctx, &ec2.AssociateAddressInput{
 		AllocationId: aws.String(allocID),
 		InstanceId:   aws.String(instanceID),
 	})
+	if p.logger != nil {
+		p.logger.Log("ec2", "AssociateAddress", time.Since(assocStart), err)
+	}
 	if err != nil {
 		return "", "", fmt.Errorf("associate address %s to %s: %w", allocID, instanceID, err)
 	}
