@@ -24,10 +24,14 @@ vendor/
 
 # IDE / Editor
 .idea/
-.vscode/
+.vscode/*
+!.vscode/tasks.json
 *.swp
 *.swo
 *~
+
+# Devcontainer test artifacts
+.mint-test/
 
 # OS
 .DS_Store
