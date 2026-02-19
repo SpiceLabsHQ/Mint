@@ -38,13 +38,8 @@ jobs:
       - name: Lint bootstrap script (syntax check)
         run: bash -n scripts/bootstrap.sh
 
-      - name: ShellCheck
-        run: |
-          if command -v shellcheck &>/dev/null; then
-            shellcheck scripts/bootstrap.sh
-          else
-            echo "shellcheck not installed, skipping"
-          fi
+      - name: Lint shell scripts
+        run: shellcheck --severity=warning scripts/bootstrap.sh
 
       - name: Build
         run: go build ./...
