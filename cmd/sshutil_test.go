@@ -506,7 +506,7 @@ func TestVerifyHostKeyCheckError(t *testing.T) {
 	}
 	t.Cleanup(func() {
 		// Restore permissions so t.TempDir cleanup can remove the file.
-		os.Chmod(knownHostsPath, 0o600)
+		_ = os.Chmod(knownHostsPath, 0o600)
 	})
 
 	scanner := func(host string, port int) (string, string, error) {

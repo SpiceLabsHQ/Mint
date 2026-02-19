@@ -265,7 +265,7 @@ func TestSSHConfigCommand_RemoveFlag(t *testing.T) {
 		"--instance-id", "i-abc123",
 		"--az", "us-east-1a",
 	})
-	rootCmd.Execute()
+	_ = rootCmd.Execute()
 
 	// Now remove it.
 	buf.Reset()

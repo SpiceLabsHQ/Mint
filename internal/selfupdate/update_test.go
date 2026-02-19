@@ -187,7 +187,7 @@ func TestDownload_Success(t *testing.T) {
 
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/gzip")
-		w.Write(tarGz)
+		_, _ = w.Write(tarGz)
 	}))
 	defer srv.Close()
 
@@ -441,7 +441,7 @@ func TestDownloadChecksums_Success(t *testing.T) {
 	checksumContent := "abc123  mint_1.0.0_linux_amd64.tar.gz\ndef456  mint_1.0.0_darwin_arm64.tar.gz\n"
 
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		io.WriteString(w, checksumContent)
+		_, _ = io.WriteString(w, checksumContent)
 	}))
 	defer srv.Close()
 

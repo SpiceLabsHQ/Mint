@@ -68,8 +68,12 @@ func TestCheckKey_KeyChanged(t *testing.T) {
 func TestRecordKey_OverwritesExisting(t *testing.T) {
 	store := newTestStore(t)
 
-	store.RecordKey("myvm", "SHA256:first")
-	store.RecordKey("myvm", "SHA256:second")
+	if err := store.RecordKey("myvm", "SHA256:first"); err != nil {
+		t.Fatalf("record first: %v", err)
+	}
+	if err := store.RecordKey("myvm", "SHA256:second"); err != nil {
+		t.Fatalf("record second: %v", err)
+	}
 
 	matched, _, err := store.CheckKey("myvm", "SHA256:second")
 	if err != nil {
@@ -83,7 +87,9 @@ func TestRecordKey_OverwritesExisting(t *testing.T) {
 func TestRemoveKey(t *testing.T) {
 	store := newTestStore(t)
 
-	store.RecordKey("myvm", "SHA256:abc123")
+	if err := store.RecordKey("myvm", "SHA256:abc123"); err != nil {
+		t.Fatalf("record: %v", err)
+	}
 	if err := store.RemoveKey("myvm"); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
@@ -125,7 +131,9 @@ func TestMultipleVMs(t *testing.T) {
 	}
 
 	// Remove one, other persists.
-	store.RemoveKey("vm-a")
+	if err := store.RemoveKey("vm-a"); err != nil {
+		t.Fatalf("remove vm-a: %v", err)
+	}
 	matched, _, _ = store.CheckKey("vm-a", "SHA256:aaa")
 	if matched {
 		t.Error("vm-a should not match after removal")

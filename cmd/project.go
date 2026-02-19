@@ -343,7 +343,7 @@ func extractProjectName(gitURL string) (string, error) {
 	}
 
 	// Normalize SSH URLs: git@host:path → path
-	urlPath := gitURL
+	var urlPath string
 	if strings.Contains(gitURL, "://") {
 		// HTTPS URL: extract path component.
 		parts := strings.SplitN(gitURL, "://", 2)

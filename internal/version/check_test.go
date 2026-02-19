@@ -12,7 +12,7 @@ import (
 
 func TestCheck_CacheMiss_FetchesFromAPI(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]string{"tag_name": "v1.2.0"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"tag_name": "v1.2.0"})
 	}))
 	defer srv.Close()
 
@@ -39,7 +39,7 @@ func TestCheck_CacheHit_SkipsAPI(t *testing.T) {
 	apiCalled := false
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		apiCalled = true
-		json.NewEncoder(w).Encode(map[string]string{"tag_name": "v2.0.0"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"tag_name": "v2.0.0"})
 	}))
 	defer srv.Close()
 
@@ -71,7 +71,7 @@ func TestCheck_CacheHit_SkipsAPI(t *testing.T) {
 
 func TestCheck_CacheExpired_FetchesFromAPI(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]string{"tag_name": "v3.0.0"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"tag_name": "v3.0.0"})
 	}))
 	defer srv.Close()
 
@@ -124,7 +124,7 @@ func TestCheck_NetworkError_FailsOpen(t *testing.T) {
 
 func TestCheck_InvalidCacheJSON_FetchesFromAPI(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]string{"tag_name": "v2.0.0"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"tag_name": "v2.0.0"})
 	}))
 	defer srv.Close()
 
@@ -145,7 +145,7 @@ func TestCheck_InvalidCacheJSON_FetchesFromAPI(t *testing.T) {
 
 func TestCheck_CacheWritten(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]string{"tag_name": "v1.0.0"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"tag_name": "v1.0.0"})
 	}))
 	defer srv.Close()
 
@@ -205,7 +205,7 @@ func TestCompareSemver(t *testing.T) {
 
 func TestCheck_SameVersion_NoUpdate(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]string{"tag_name": "v1.0.0"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"tag_name": "v1.0.0"})
 	}))
 	defer srv.Close()
 
@@ -224,7 +224,7 @@ func TestCheck_SameVersion_NoUpdate(t *testing.T) {
 
 func TestCheck_DevVersion_SkipsComparison(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]string{"tag_name": "v1.0.0"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"tag_name": "v1.0.0"})
 	}))
 	defer srv.Close()
 
