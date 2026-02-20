@@ -1219,3 +1219,62 @@ func TestDoctorJSONWithFailures(t *testing.T) {
 		t.Error("docker check not found in JSON output")
 	}
 }
+
+// TestDoctorNilClientsSkipsAWSChecks verifies that doctor gracefully reports
+// AWS-dependent checks as SKIP when describeAddresses is nil (no credentials).
+func TestDoctorNilClientsSkipsAWSChecks(t *testing.T) {
+	configDir := t.TempDir()
+	writeValidConfig(t, configDir)
+	sshDir := filepath.Join(t.TempDir(), ".ssh")
+	writeSSHConfigWithBlock(t, sshDir, "default")
+
+	// Simulate credentials unavailable: nil AWS clients, error identity resolver.
+	deps := &doctorDeps{
+		identityResolver:  &errorIdentityResolver{err: fmt.Errorf("no credentials")},
+		describeAddresses: nil, // no AWS clients
+		describe:          nil,
+		configDir:         configDir,
+		sshConfigPath:     filepath.Join(sshDir, "config"),
+	}
+
+	buf := new(bytes.Buffer)
+	cmd := newDoctorCommandWithDeps(deps)
+	root := newDoctorTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"doctor"})
+
+	// doctor should run (not crash), but return an error because credentials FAIL.
+	_ = root.Execute()
+
+	output := buf.String()
+
+	// Credential check must report FAIL.
+	if !strings.Contains(output, "[FAIL]") || !strings.Contains(output, "AWS credentials") {
+		t.Errorf("expected [FAIL] AWS credentials, got: %s", output)
+	}
+
+	// EIP quota check must be SKIP, not a panic or hard error.
+	if !strings.Contains(output, "[SKIP]") || !strings.Contains(output, "EIP") {
+		t.Errorf("expected [SKIP] EIP quota when no AWS clients, got: %s", output)
+	}
+
+	// Local checks (config, SSH config) must still run.
+	if !strings.Contains(output, "SSH config") {
+		t.Errorf("expected SSH config check in output, got: %s", output)
+	}
+}
+
+// TestErrorIdentityResolverReturnsError verifies the new errorIdentityResolver
+// implementation used by doctor in the no-credentials path.
+func TestErrorIdentityResolverReturnsError(t *testing.T) {
+	sentinel := fmt.Errorf("test credential error")
+	r := &errorIdentityResolver{err: sentinel}
+	_, err := r.Resolve(context.Background())
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if err != sentinel {
+		t.Errorf("expected sentinel error, got: %v", err)
+	}
+}

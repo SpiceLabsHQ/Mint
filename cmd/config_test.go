@@ -435,8 +435,9 @@ func TestConfigGetVolumeIOPSAfterSet(t *testing.T) {
 	}
 }
 
-// TestConfigGetRegionNotSetJSON verifies bug #52: config get region returns
-// "(not set)" via --json when region has never been configured.
+// TestConfigGetRegionNotSetJSON verifies that config get region --json returns
+// an empty string (not the human-readable sentinel "(not set)") when the region
+// has never been configured, consistent with `config --json` output.
 func TestConfigGetRegionNotSetJSON(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("MINT_CONFIG_DIR", dir)
@@ -456,8 +457,10 @@ func TestConfigGetRegionNotSetJSON(t *testing.T) {
 		t.Fatalf("config get region --json not valid JSON: %v\nOutput: %s", err, buf.String())
 	}
 
-	if result["region"] != "(not set)" {
-		t.Errorf("JSON region (unset) = %v, want %q", result["region"], "(not set)")
+	// JSON output must be consistent with `config --json`: empty string for unset
+	// region, not the human-readable "(not set)" sentinel.
+	if result["region"] != "" {
+		t.Errorf("JSON region (unset) = %v, want %q (empty string, not sentinel)", result["region"], "")
 	}
 }
 

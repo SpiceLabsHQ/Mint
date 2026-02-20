@@ -57,7 +57,10 @@ func contextWithAWSClients(ctx context.Context, clients *awsClients) context.Con
 // help) return false.
 func commandNeedsAWS(cmdName string) bool {
 	switch cmdName {
-	case "version", "config", "set", "get", "ssh-config", "help", "update":
+	case "version", "config", "set", "get", "ssh-config", "help", "update",
+		// doctor initializes its own AWS clients so it can report credential
+		// failures as a check result rather than a fatal startup error.
+		"doctor":
 		return false
 	default:
 		return true

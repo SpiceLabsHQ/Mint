@@ -5,14 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/ec2"
-	"github.com/aws/aws-sdk-go-v2/service/efs"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
-	"github.com/aws/aws-sdk-go-v2/service/sts"
 
 	"github.com/nicholasgasior/mint/internal/cli"
-	"github.com/nicholasgasior/mint/internal/identity"
 	"github.com/nicholasgasior/mint/internal/provision"
 	"github.com/spf13/cobra"
 )
@@ -33,18 +29,12 @@ func runInit(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
 	cliCtx := cli.FromCommand(cmd)
 
-	// Load AWS config.
-	cfg, err := config.LoadDefaultConfig(ctx)
-	if err != nil {
-		return fmt.Errorf("load AWS config: %w", err)
-	}
-
-	// Resolve owner identity (ADR-0013).
-	stsClient := sts.NewFromConfig(cfg)
-	resolver := identity.NewResolver(stsClient)
-	owner, err := resolver.Resolve(ctx)
-	if err != nil {
-		return fmt.Errorf("resolve identity: %w", err)
+	// Use the shared AWS clients initialized by PersistentPreRunE.  This
+	// avoids a second STS GetCallerIdentity call and ensures the --debug
+	// flag is honoured for all AWS API calls made by init.
+	clients := awsClientsFromContext(ctx)
+	if clients == nil {
+		return fmt.Errorf("AWS clients not configured")
 	}
 
 	vmName := "default"
@@ -52,25 +42,29 @@ func runInit(cmd *cobra.Command, args []string) error {
 		vmName = cliCtx.VM
 	}
 
-	// Wire up AWS clients and run init.
-	ec2Client := ec2.NewFromConfig(cfg)
-	efsClient := efs.NewFromConfig(cfg)
-	iamClient := iam.NewFromConfig(cfg)
+	// IAM is not included in the shared awsClients (it is only needed by
+	// mint init).  Create it from the default config; credentials were
+	// already validated by PersistentPreRunE so this is just client wiring.
+	awsCfg, err := awsconfig.LoadDefaultConfig(ctx)
+	if err != nil {
+		return fmt.Errorf("load AWS config: %w", err)
+	}
+	iamClient := iam.NewFromConfig(awsCfg)
 
 	initializer := provision.NewInitializer(
-		ec2Client, // DescribeVpcsAPI
-		ec2Client, // DescribeSubnetsAPI
-		efsClient, // DescribeFileSystemsAPI
-		iamClient, // GetInstanceProfileAPI
-		ec2Client, // DescribeSecurityGroupsAPI
-		ec2Client, // CreateSecurityGroupAPI
-		ec2Client, // AuthorizeSecurityGroupIngressAPI
-		ec2Client, // CreateTagsAPI
-		efsClient, // DescribeAccessPointsAPI
-		efsClient, // CreateAccessPointAPI
+		clients.ec2Client, // DescribeVpcsAPI
+		clients.ec2Client, // DescribeSubnetsAPI
+		clients.efsClient, // DescribeFileSystemsAPI
+		iamClient,         // GetInstanceProfileAPI
+		clients.ec2Client, // DescribeSecurityGroupsAPI
+		clients.ec2Client, // CreateSecurityGroupAPI
+		clients.ec2Client, // AuthorizeSecurityGroupIngressAPI
+		clients.ec2Client, // CreateTagsAPI
+		clients.efsClient, // DescribeAccessPointsAPI
+		clients.efsClient, // CreateAccessPointAPI
 	)
 
-	result, err := initializer.Run(ctx, owner.Name, owner.ARN, vmName)
+	result, err := initializer.Run(ctx, clients.owner, clients.ownerARN, vmName)
 	if err != nil {
 		return err
 	}
@@ -87,12 +81,12 @@ func printInitResult(cmd *cobra.Command, cliCtx *cli.CLIContext, result *provisi
 
 func printInitJSON(cmd *cobra.Command, result *provision.InitResult) error {
 	data := map[string]any{
-		"vpc_id":           result.VPCID,
-		"efs_id":           result.EFSID,
-		"security_group":   result.SecurityGroup,
-		"sg_created":       result.SGCreated,
-		"access_point_id":  result.AccessPointID,
-		"ap_created":       result.APCreated,
+		"vpc_id":          result.VPCID,
+		"efs_id":          result.EFSID,
+		"security_group":  result.SecurityGroup,
+		"sg_created":      result.SGCreated,
+		"access_point_id": result.AccessPointID,
+		"ap_created":      result.APCreated,
 	}
 
 	enc := json.NewEncoder(cmd.OutOrStdout())

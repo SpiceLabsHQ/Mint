@@ -39,22 +39,23 @@ func newConfigGetCommand() *cobra.Command {
 				return err
 			}
 
-			value := configValue(cfg, key)
-
 			cliCtx := cli.FromCommand(cmd)
 			if cliCtx != nil && cliCtx.JSON {
 				enc := json.NewEncoder(cmd.OutOrStdout())
 				enc.SetIndent("", "  ")
-				return enc.Encode(map[string]any{key: value})
+				// Use the raw config value in JSON mode (consistent with
+				// `config --json`) rather than the human-readable sentinel.
+				return enc.Encode(map[string]any{key: configValueRaw(cfg, key)})
 			}
 
-			fmt.Fprintln(cmd.OutOrStdout(), value)
+			fmt.Fprintln(cmd.OutOrStdout(), configValue(cfg, key))
 			return nil
 		},
 	}
 }
 
-// configValue returns the string representation of a config field by key name.
+// configValue returns the human-readable string representation of a config
+// field by key name. Unset fields use display sentinels (e.g., "(not set)").
 func configValue(cfg *config.Config, key string) string {
 	switch key {
 	case "region":
@@ -74,5 +75,28 @@ func configValue(cfg *config.Config, key string) string {
 		return strconv.FormatBool(cfg.SSHConfigApproved)
 	default:
 		return ""
+	}
+}
+
+// configValueRaw returns the actual config field value by key for JSON output.
+// Unlike configValue it does not apply human-readable display transformations
+// (e.g., returns "" for an unset region rather than "(not set)"), keeping the
+// output consistent with `config --json`.
+func configValueRaw(cfg *config.Config, key string) any {
+	switch key {
+	case "region":
+		return cfg.Region
+	case "instance_type":
+		return cfg.InstanceType
+	case "volume_size_gb":
+		return cfg.VolumeSizeGB
+	case "volume_iops":
+		return cfg.VolumeIOPS
+	case "idle_timeout_minutes":
+		return cfg.IdleTimeoutMinutes
+	case "ssh_config_approved":
+		return cfg.SSHConfigApproved
+	default:
+		return nil
 	}
 }

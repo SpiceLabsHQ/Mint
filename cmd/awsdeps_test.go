@@ -21,6 +21,9 @@ func TestCommandNeedsAWS(t *testing.T) {
 		{"get does not need AWS", "get", false},
 		{"ssh-config does not need AWS", "ssh-config", false},
 		{"help does not need AWS", "help", false},
+		// doctor initialises its own AWS clients so it can report credential
+		// failures as a check result rather than a fatal PersistentPreRunE error.
+		{"doctor does not need AWS", "doctor", false},
 		{"up needs AWS", "up", true},
 		{"down needs AWS", "down", true},
 		{"destroy needs AWS", "destroy", true},
