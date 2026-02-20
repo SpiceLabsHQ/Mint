@@ -289,6 +289,76 @@ func TestSSHConfigCommand_RemoveFlag(t *testing.T) {
 	if strings.Contains(string(data), "mint:begin") {
 		t.Error("block not removed")
 	}
+
+	// Must report success, not "not found".
+	output := buf.String()
+	if !strings.Contains(output, "SSH config block removed for VM") {
+		t.Errorf("expected removal success message, got: %q", output)
+	}
+}
+
+func TestSSHConfigCommand_RemoveFlag_BlockNotFound(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("MINT_CONFIG_DIR", configDir)
+
+	// Point to a path that does not exist.
+	sshConfigPath := filepath.Join(t.TempDir(), "nonexistent-config")
+
+	buf := new(bytes.Buffer)
+	rootCmd := NewRootCommand()
+	rootCmd.SetOut(buf)
+	rootCmd.SetErr(buf)
+	rootCmd.SetArgs([]string{
+		"ssh-config",
+		"--remove",
+		"--ssh-config-path", sshConfigPath,
+	})
+
+	err := rootCmd.Execute()
+	if err != nil {
+		t.Fatalf("ssh-config --remove should not error when no block found: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "No SSH config block found for VM") {
+		t.Errorf("expected 'No SSH config block found' message, got: %q", output)
+	}
+	if strings.Contains(output, "SSH config block removed for VM") {
+		t.Errorf("should not print removal success when no block was present, got: %q", output)
+	}
+}
+
+func TestSSHConfigCommand_RemoveFlag_FileExistsNoBlock(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("MINT_CONFIG_DIR", configDir)
+
+	sshDir := t.TempDir()
+	sshConfigPath := filepath.Join(sshDir, "config")
+
+	// Write a file with unrelated content — no mint block.
+	if err := os.WriteFile(sshConfigPath, []byte("Host other\n    HostName other.example.com\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	buf := new(bytes.Buffer)
+	rootCmd := NewRootCommand()
+	rootCmd.SetOut(buf)
+	rootCmd.SetErr(buf)
+	rootCmd.SetArgs([]string{
+		"ssh-config",
+		"--remove",
+		"--ssh-config-path", sshConfigPath,
+	})
+
+	err := rootCmd.Execute()
+	if err != nil {
+		t.Fatalf("ssh-config --remove should not error when block absent: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "No SSH config block found for VM") {
+		t.Errorf("expected 'No SSH config block found' message, got: %q", output)
+	}
 }
 
 func TestSSHConfigCommand_PreservesExistingContent(t *testing.T) {

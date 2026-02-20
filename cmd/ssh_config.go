@@ -124,10 +124,15 @@ func runSSHConfig(cmd *cobra.Command, args []string) error {
 }
 
 func runSSHConfigRemove(cmd *cobra.Command, sshConfigPath, vmName string) error {
-	if err := sshconfig.RemoveManagedBlock(sshConfigPath, vmName); err != nil {
+	found, err := sshconfig.RemoveManagedBlock(sshConfigPath, vmName)
+	if err != nil {
 		return fmt.Errorf("remove ssh config block: %w", err)
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "SSH config block removed for VM %q.\n", vmName)
+	if found {
+		fmt.Fprintf(cmd.OutOrStdout(), "SSH config block removed for VM %q.\n", vmName)
+	} else {
+		fmt.Fprintf(cmd.OutOrStdout(), "No SSH config block found for VM %q.\n", vmName)
+	}
 	return nil
 }
