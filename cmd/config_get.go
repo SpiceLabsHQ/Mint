@@ -58,11 +58,16 @@ func newConfigGetCommand() *cobra.Command {
 func configValue(cfg *config.Config, key string) string {
 	switch key {
 	case "region":
+		if cfg.Region == "" {
+			return "(not set)"
+		}
 		return cfg.Region
 	case "instance_type":
 		return cfg.InstanceType
 	case "volume_size_gb":
 		return strconv.Itoa(cfg.VolumeSizeGB)
+	case "volume_iops":
+		return strconv.Itoa(cfg.VolumeIOPS)
 	case "idle_timeout_minutes":
 		return strconv.Itoa(cfg.IdleTimeoutMinutes)
 	case "ssh_config_approved":

@@ -42,6 +42,7 @@ func printConfigJSON(cmd *cobra.Command, cfg *config.Config) error {
 		"region":               cfg.Region,
 		"instance_type":        cfg.InstanceType,
 		"volume_size_gb":       cfg.VolumeSizeGB,
+		"volume_iops":          cfg.VolumeIOPS,
 		"idle_timeout_minutes": cfg.IdleTimeoutMinutes,
 		"ssh_config_approved":  cfg.SSHConfigApproved,
 	}
@@ -63,11 +64,13 @@ func printConfigHuman(cmd *cobra.Command, cfg *config.Config) error {
 		"region               %s\n"+
 			"instance_type        %s\n"+
 			"volume_size_gb       %d\n"+
+			"volume_iops          %d\n"+
 			"idle_timeout_minutes %d\n"+
 			"ssh_config_approved  %v\n",
 		region,
 		cfg.InstanceType,
 		cfg.VolumeSizeGB,
+		cfg.VolumeIOPS,
 		cfg.IdleTimeoutMinutes,
 		cfg.SSHConfigApproved,
 	)
