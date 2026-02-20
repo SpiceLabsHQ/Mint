@@ -3,7 +3,6 @@ package cmd
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
@@ -16,28 +15,6 @@ import (
 // without calling real AWS APIs. When non-nil it replaces the real EC2
 // validator wired in newConfigSetCommand.
 var instanceTypeValidatorOverride config.InstanceTypeValidatorFunc
-
-// credentialErrorKeywords are substrings found in AWS SDK credential errors.
-// When any of these appear in an instance_type validation error we replace the
-// raw SDK chain with a single actionable message.
-var credentialErrorKeywords = []string{
-	"get credentials",
-	"NoCredentialProviders",
-	"no EC2 IMDS role found",
-	"failed to refresh cached credentials",
-	"credential",
-}
-
-// isCredentialError reports whether err looks like an AWS credential failure.
-func isCredentialError(err error) bool {
-	msg := err.Error()
-	for _, kw := range credentialErrorKeywords {
-		if strings.Contains(msg, kw) {
-			return true
-		}
-	}
-	return false
-}
 
 func newConfigSetCommand() *cobra.Command {
 	return &cobra.Command{

@@ -44,7 +44,7 @@ func newKeyCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "key",
 		Short: "Manage SSH keys",
-		Long:  "Manage SSH keys on the VM. Use subcommands to add or remove keys.",
+		Long:  "Manage SSH keys on the VM. Use subcommands to add keys.",
 	}
 
 	cmd.AddCommand(newKeyAddCommand())

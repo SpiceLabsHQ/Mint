@@ -22,11 +22,14 @@ func NewRootCommand() *cobra.Command {
 			ctx := cli.WithContext(context.Background(), cliCtx)
 
 			// Initialize AWS clients for commands that need them.
-			// Local-only commands (version, config, ssh-config, help)
-			// skip AWS initialization entirely.
-			if commandNeedsAWS(cmd.Name()) {
+			// Local-only commands (version, config, ssh-config, completion,
+			// help) skip AWS initialization entirely.
+			if commandNeedsAWS(cmd) {
 				clients, err := initAWSClients(ctx)
 				if err != nil {
+					if isCredentialError(err) {
+						return fmt.Errorf("AWS credentials unavailable — run \"aws configure\" or set AWS_PROFILE")
+					}
 					return fmt.Errorf("initialize AWS: %w", err)
 				}
 				ctx = contextWithAWSClients(ctx, clients)
