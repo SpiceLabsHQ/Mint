@@ -30,10 +30,12 @@ func TestConfigCommandDisplaysValues(t *testing.T) {
 		"region",
 		"instance_type",
 		"volume_size_gb",
+		"volume_iops",
 		"idle_timeout_minutes",
 		"ssh_config_approved",
 		"m6i.xlarge",
 		"50",
+		"3000",
 		"60",
 		"false",
 	}
@@ -65,7 +67,7 @@ func TestConfigCommandJSONOutput(t *testing.T) {
 		t.Fatalf("config --json output is not valid JSON: %v\nOutput: %s", err, buf.String())
 	}
 
-	expectedKeys := []string{"region", "instance_type", "volume_size_gb", "idle_timeout_minutes", "ssh_config_approved"}
+	expectedKeys := []string{"region", "instance_type", "volume_size_gb", "volume_iops", "idle_timeout_minutes", "ssh_config_approved"}
 	for _, key := range expectedKeys {
 		if _, ok := result[key]; !ok {
 			t.Errorf("JSON output missing key %q", key)
@@ -297,10 +299,10 @@ func TestConfigGetEmptyRegion(t *testing.T) {
 		t.Fatalf("config get error: %v", err)
 	}
 
-	// Empty region should output empty string
-	output := buf.String()
-	if strings.TrimSpace(output) != "" {
-		t.Errorf("config get region (unset) = %q, want empty", output)
+	// Unset region should output "(not set)" to match human display behavior.
+	output := strings.TrimSpace(buf.String())
+	if output != "(not set)" {
+		t.Errorf("config get region (unset) = %q, want %q", output, "(not set)")
 	}
 }
 
@@ -374,5 +376,142 @@ func TestConfigGetJSONOutput(t *testing.T) {
 
 	if result["region"] != "eu-west-1" {
 		t.Errorf("JSON region = %v, want eu-west-1", result["region"])
+	}
+}
+
+// TestConfigGetVolumeIOPS verifies bug #50: config get volume_iops returns the
+// default value (3000) rather than an empty string.
+func TestConfigGetVolumeIOPS(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("MINT_CONFIG_DIR", dir)
+
+	buf := new(bytes.Buffer)
+	rootCmd := NewRootCommand()
+	rootCmd.SetOut(buf)
+	rootCmd.SetErr(buf)
+	rootCmd.SetArgs([]string{"config", "get", "volume_iops"})
+
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("config get volume_iops error: %v", err)
+	}
+
+	output := strings.TrimSpace(buf.String())
+	if output != "3000" {
+		t.Errorf("config get volume_iops = %q, want %q", output, "3000")
+	}
+}
+
+// TestConfigGetVolumeIOPSAfterSet verifies bug #50: config get volume_iops
+// returns the updated value after config set volume_iops.
+func TestConfigGetVolumeIOPSAfterSet(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("MINT_CONFIG_DIR", dir)
+
+	// Set a non-default IOPS value.
+	buf := new(bytes.Buffer)
+	rootCmd := NewRootCommand()
+	rootCmd.SetOut(buf)
+	rootCmd.SetErr(buf)
+	rootCmd.SetArgs([]string{"config", "set", "volume_iops", "6000"})
+
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("config set volume_iops error: %v", err)
+	}
+
+	// Retrieve it via config get.
+	buf.Reset()
+	rootCmd2 := NewRootCommand()
+	rootCmd2.SetOut(buf)
+	rootCmd2.SetErr(buf)
+	rootCmd2.SetArgs([]string{"config", "get", "volume_iops"})
+
+	if err := rootCmd2.Execute(); err != nil {
+		t.Fatalf("config get volume_iops error: %v", err)
+	}
+
+	output := strings.TrimSpace(buf.String())
+	if output != "6000" {
+		t.Errorf("config get volume_iops = %q, want %q", output, "6000")
+	}
+}
+
+// TestConfigGetRegionNotSetJSON verifies bug #52: config get region returns
+// "(not set)" via --json when region has never been configured.
+func TestConfigGetRegionNotSetJSON(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("MINT_CONFIG_DIR", dir)
+
+	buf := new(bytes.Buffer)
+	rootCmd := NewRootCommand()
+	rootCmd.SetOut(buf)
+	rootCmd.SetErr(buf)
+	rootCmd.SetArgs([]string{"--json", "config", "get", "region"})
+
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("config get region --json error: %v", err)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
+		t.Fatalf("config get region --json not valid JSON: %v\nOutput: %s", err, buf.String())
+	}
+
+	if result["region"] != "(not set)" {
+		t.Errorf("JSON region (unset) = %v, want %q", result["region"], "(not set)")
+	}
+}
+
+// TestConfigHumanDisplayIncludesVolumeIOPS verifies bug #49: the human-readable
+// config display includes the volume_iops row.
+func TestConfigHumanDisplayIncludesVolumeIOPS(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("MINT_CONFIG_DIR", dir)
+
+	buf := new(bytes.Buffer)
+	rootCmd := NewRootCommand()
+	rootCmd.SetOut(buf)
+	rootCmd.SetErr(buf)
+	rootCmd.SetArgs([]string{"config"})
+
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("config error: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "volume_iops") {
+		t.Errorf("human config output missing %q row:\n%s", "volume_iops", output)
+	}
+	if !strings.Contains(output, "3000") {
+		t.Errorf("human config output missing default IOPS value %q:\n%s", "3000", output)
+	}
+}
+
+// TestConfigJSONIncludesVolumeIOPS verifies bug #49: the --json config output
+// includes the volume_iops key.
+func TestConfigJSONIncludesVolumeIOPS(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("MINT_CONFIG_DIR", dir)
+
+	buf := new(bytes.Buffer)
+	rootCmd := NewRootCommand()
+	rootCmd.SetOut(buf)
+	rootCmd.SetErr(buf)
+	rootCmd.SetArgs([]string{"config", "--json"})
+
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("config --json error: %v", err)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
+		t.Fatalf("config --json not valid JSON: %v\nOutput: %s", err, buf.String())
+	}
+
+	if _, ok := result["volume_iops"]; !ok {
+		t.Errorf("JSON config output missing key %q", "volume_iops")
+	}
+	// Default IOPS is 3000; JSON numbers unmarshal as float64.
+	if result["volume_iops"] != float64(3000) {
+		t.Errorf("JSON volume_iops = %v, want 3000", result["volume_iops"])
 	}
 }
