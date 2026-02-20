@@ -22,7 +22,7 @@ import (
 
 const (
 	// DefaultAPIEndpoint is the GitHub API endpoint for the latest release.
-	DefaultAPIEndpoint = "https://api.github.com/repos/nicholasgasior/mint/releases/latest"
+	DefaultAPIEndpoint = "https://api.github.com/repos/SpiceLabsHQ/Mint/releases/latest"
 
 	// maxBinarySize is the maximum allowed size for the extracted binary
 	// (256 MB). Prevents unbounded extraction from malicious archives.

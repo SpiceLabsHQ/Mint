@@ -485,10 +485,14 @@ func fixFailedComponents(ctx context.Context, deps *doctorDeps, v *vm.VM, prefix
 func checkCredentials(ctx context.Context, deps *doctorDeps) checkResult {
 	owner, err := deps.identityResolver.Resolve(ctx)
 	if err != nil {
+		msg := fmt.Sprintf("could not resolve identity: %v", err)
+		if isCredentialError(err) {
+			msg = `not configured — run "aws configure" or set AWS_PROFILE`
+		}
 		return checkResult{
 			name:    "AWS credentials",
 			status:  "FAIL",
-			message: fmt.Sprintf("could not resolve identity: %v", err),
+			message: msg,
 		}
 	}
 	return checkResult{
