@@ -6,7 +6,7 @@
     "ghcr.io/devcontainers/features/aws-cli:1": {}
   },
 
-  "postCreateCommand": "sudo rm -f /etc/apt/sources.list.d/yarn.list && sudo apt-get update && sudo apt-get install -y openssh-client mosh tmux jq netcat-openbsd && go mod download && go generate ./... && curl -fsSL https://claude.ai/install.sh | bash",
+  "postCreateCommand": "sudo rm -f /etc/apt/sources.list.d/yarn.list && sudo apt-get update && sudo apt-get install -y openssh-client mosh tmux jq netcat-openbsd && go mod download && go generate ./... && curl -fsSL https://claude.ai/install.sh | bash && claude plugin marketplace add SpiceLabsHQ/claude-marketplace && claude plugin install reaper@spice-labs",
 
   "remoteEnv": {
     "MINT_CONFIG_DIR": "${containerWorkspaceFolder}/.mint-test"
