@@ -115,6 +115,37 @@ func TestCheckLatest_APIError(t *testing.T) {
 	}
 }
 
+// TestCheckLatest_404FriendlyMessage verifies Bug #70: when GitHub returns 404
+// (no releases published yet), the error should be user-friendly rather than
+// the opaque "GitHub API returned status 404".
+func TestCheckLatest_404FriendlyMessage(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	u := &Updater{
+		Client:         srv.Client(),
+		CurrentVersion: "v1.0.0",
+		APIEndpoint:    srv.URL + "/releases/latest",
+	}
+
+	_, err := u.CheckLatest(context.Background())
+	if err == nil {
+		t.Fatal("expected error for 404 response")
+	}
+
+	errMsg := err.Error()
+	// Must NOT say the opaque "GitHub API returned status 404".
+	if strings.Contains(errMsg, "status 404") {
+		t.Errorf("error should not expose raw status code, got: %s", errMsg)
+	}
+	// Must explain what happened in a user-friendly way.
+	if !strings.Contains(errMsg, "no releases") {
+		t.Errorf("error should mention 'no releases', got: %s", errMsg)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // VerifyChecksum tests — now verifies archive hash, not extracted binary
 // ---------------------------------------------------------------------------

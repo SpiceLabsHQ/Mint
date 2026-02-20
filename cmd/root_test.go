@@ -1,10 +1,60 @@
 package cmd
 
 import (
+	"bytes"
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
 )
+
+// TestJSONCredentialErrorOutput verifies Bug #67: when --json is set and AWS
+// credentials are unavailable, the error output must be valid JSON on stdout,
+// not plaintext on stderr.
+func TestJSONCredentialErrorOutput(t *testing.T) {
+	// We use the real root command with a command that needs AWS (list).
+	// Without real credentials, PersistentPreRunE will fail with a credential error.
+	// In JSON mode it should write JSON to stdout and return a silent error.
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+
+	rootCmd := NewRootCommand()
+	rootCmd.SetOut(stdout)
+	rootCmd.SetErr(stderr)
+	rootCmd.SetArgs([]string{"--json", "list"})
+
+	err := rootCmd.Execute()
+	// Expect an error (no creds in test environment).
+	if err == nil {
+		// If we have real creds somehow, skip this check.
+		t.Skip("skipping: real AWS credentials appear to be available")
+	}
+
+	// The error message must be empty (silentExitError) so main.go doesn't
+	// double-print to stderr.
+	if msg := err.Error(); msg != "" {
+		t.Errorf("expected empty error message (silentExitError) in JSON mode, got: %q", msg)
+	}
+
+	// Stderr must be empty — no duplicate plaintext error.
+	if stderrContent := stderr.String(); stderrContent != "" {
+		t.Errorf("expected empty stderr in JSON mode, got: %q", stderrContent)
+	}
+
+	// Stdout must contain valid JSON with an "error" key.
+	stdoutContent := strings.TrimSpace(stdout.String())
+	if stdoutContent == "" {
+		t.Fatal("expected JSON output on stdout, got empty")
+	}
+	var result map[string]any
+	if err2 := json.Unmarshal([]byte(stdoutContent), &result); err2 != nil {
+		t.Fatalf("stdout is not valid JSON: %v\noutput: %s", err2, stdoutContent)
+	}
+	if _, ok := result["error"]; !ok {
+		t.Errorf("JSON output missing 'error' key, got: %s", stdoutContent)
+	}
+}
 
 func TestPhase2CommandsRegistered(t *testing.T) {
 	root := NewRootCommand()

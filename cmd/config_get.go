@@ -16,7 +16,16 @@ func newConfigGetCommand() *cobra.Command {
 		Use:   "get <key>",
 		Short: "Get a configuration value",
 		Long:  "Print a single configuration value from ~/.config/mint/config.toml.",
-		Args:  cobra.ExactArgs(1),
+		Args: func(cmd *cobra.Command, args []string) error {
+			validKeys := config.ValidKeys()
+			if len(args) == 0 {
+				return fmt.Errorf("key is required\nValid keys: %s", strings.Join(validKeys, ", "))
+			}
+			if len(args) > 1 {
+				return fmt.Errorf("accepts 1 key, got %d", len(args))
+			}
+			return nil
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			key := args[0]
 

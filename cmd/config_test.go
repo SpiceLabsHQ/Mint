@@ -343,6 +343,35 @@ func TestConfigGetRequiresArgs(t *testing.T) {
 	}
 }
 
+// TestConfigGetNoArgsShowsValidKeys verifies Bug #68: when no key is given,
+// the error message should list valid keys rather than the generic cobra
+// "accepts 1 arg(s), received 0" message.
+func TestConfigGetNoArgsShowsValidKeys(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("MINT_CONFIG_DIR", dir)
+
+	buf := new(bytes.Buffer)
+	rootCmd := NewRootCommand()
+	rootCmd.SetOut(buf)
+	rootCmd.SetErr(buf)
+	rootCmd.SetArgs([]string{"config", "get"})
+
+	err := rootCmd.Execute()
+	if err == nil {
+		t.Fatal("config get without args should fail")
+	}
+
+	errMsg := err.Error()
+	// Must list valid keys (at minimum "region") so the user knows what to provide.
+	if !strings.Contains(errMsg, "region") {
+		t.Errorf("error should list valid keys, got: %s", errMsg)
+	}
+	// Must NOT expose the unhelpful generic cobra phrasing.
+	if strings.Contains(errMsg, "accepts 1 arg(s)") {
+		t.Errorf("error should not use generic cobra phrasing, got: %s", errMsg)
+	}
+}
+
 func TestConfigGetJSONOutput(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("MINT_CONFIG_DIR", dir)

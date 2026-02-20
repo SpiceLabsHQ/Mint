@@ -69,7 +69,7 @@ func runSSHConfig(cmd *cobra.Command, args []string) error {
 
 	hostname, _ := cmd.Flags().GetString("hostname")
 	if hostname == "" {
-		return fmt.Errorf("--hostname is required (public IP or hostname of the VM)")
+		return fmt.Errorf("--hostname is required\n\nTip: mint ssh-config is called automatically by mint up.\nTo add manually: mint ssh-config --hostname <ip> --instance-id <id> --az <az>")
 	}
 
 	instanceID, _ := cmd.Flags().GetString("instance-id")

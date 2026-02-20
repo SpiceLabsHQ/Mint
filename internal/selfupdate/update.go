@@ -92,6 +92,9 @@ func (u *Updater) CheckLatest(ctx context.Context) (*Release, error) {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, fmt.Errorf("no releases found — mint may be running a pre-release version")
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("GitHub API returned status %d", resp.StatusCode)
 	}

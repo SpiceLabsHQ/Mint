@@ -1265,6 +1265,84 @@ func TestDoctorNilClientsSkipsAWSChecks(t *testing.T) {
 	}
 }
 
+// TestDoctorJSONFailureSilentOnStderr verifies Bug #66: when --json is set and
+// checks fail, the error must NOT appear as plaintext on stderr. The JSON
+// itself encodes the failure status. main.go must suppress the empty-message
+// sentinel error returned by silentExitError.
+func TestDoctorJSONFailureSilentOnStderr(t *testing.T) {
+	deps, _ := newHappyDoctorDepsWithVM(t)
+	// Make a check fail.
+	runner := &mockDoctorRemoteRunner{
+		responses: map[string]mockRemoteResponse{
+			"df":           {output: []byte("Use%\n 42%\n")},
+			"docker":       {err: fmt.Errorf("not found")},
+			"devcontainer": {output: []byte("0.52.1\n")},
+			"tmux":         {output: []byte("tmux 3.3a\n")},
+			"mosh-server":  {output: []byte("mosh 1.4.0\n")},
+		},
+	}
+	deps.remoteRun = runner.run
+
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+	cmd := newDoctorCommandWithDeps(deps)
+	root := newDoctorTestRoot(cmd)
+	root.SetOut(stdout)
+	root.SetErr(stderr)
+	root.SetArgs([]string{"doctor", "--json"})
+
+	err := root.Execute()
+	// Must return an error (so main.go can exit 1).
+	if err == nil {
+		t.Fatal("expected error from failed docker check in JSON mode")
+	}
+
+	// The error message itself must be empty (silentExitError) so that
+	// main.go does not print anything extra to stderr.
+	if msg := err.Error(); msg != "" {
+		t.Errorf("expected empty error message (silentExitError) in JSON mode, got: %q", msg)
+	}
+
+	// stderr must be empty — no duplicate error text.
+	if stderrContent := stderr.String(); stderrContent != "" {
+		t.Errorf("expected empty stderr in JSON mode, got: %q", stderrContent)
+	}
+
+	// stdout must still contain valid JSON.
+	var results []checkResultJSON
+	if err2 := json.Unmarshal(stdout.Bytes(), &results); err2 != nil {
+		t.Fatalf("stdout not valid JSON: %v\noutput: %s", err2, stdout.String())
+	}
+}
+
+// TestDoctorSSHConfigMissingHelpfulMessage verifies Bug #69: when the SSH
+// config block is missing, the WARN message should tell users to run
+// mint up, not mint ssh-config.
+func TestDoctorSSHConfigMissingHelpfulMessage(t *testing.T) {
+	deps := newHappyDoctorDeps(t)
+	// Redirect SSH config path to a missing path so the check sees no block.
+	deps.sshConfigPath = "/nonexistent/path/.ssh/config"
+
+	buf := new(bytes.Buffer)
+	cmd := newDoctorCommandWithDeps(deps)
+	root := newDoctorTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"doctor"})
+
+	_ = root.Execute()
+
+	output := buf.String()
+	// The message must NOT tell users to run mint ssh-config directly.
+	if strings.Contains(output, "run mint ssh-config") {
+		t.Errorf("WARN message should not say 'run mint ssh-config' (confusing for users), got: %s", output)
+	}
+	// The message must mention mint up.
+	if !strings.Contains(output, "mint up") {
+		t.Errorf("expected WARN message to mention 'mint up', got: %s", output)
+	}
+}
+
 // TestErrorIdentityResolverReturnsError verifies the new errorIdentityResolver
 // implementation used by doctor in the no-credentials path.
 func TestErrorIdentityResolverReturnsError(t *testing.T) {

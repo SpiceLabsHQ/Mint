@@ -582,7 +582,7 @@ func checkSSHConfig(deps *doctorDeps) checkResult {
 		return checkResult{
 			name:    "SSH config",
 			status:  "WARN",
-			message: "SSH config file not found — run mint ssh-config",
+			message: "SSH config file not found — run mint up to configure SSH automatically",
 		}
 	}
 
@@ -591,7 +591,7 @@ func checkSSHConfig(deps *doctorDeps) checkResult {
 		return checkResult{
 			name:    "SSH config",
 			status:  "WARN",
-			message: "no mint managed block found — run mint ssh-config",
+			message: "no mint managed block found — run mint up to configure SSH automatically",
 		}
 	}
 
@@ -671,10 +671,13 @@ func printResultsJSON(w io.Writer, results []checkResult) error {
 		return fmt.Errorf("encoding JSON: %w", err)
 	}
 
-	// Check for failures after JSON output.
+	// Check for failures after JSON output. Use silentExitError so that
+	// main.go exits 1 (signalling failure to scripts) without printing
+	// an additional plaintext message to stderr — the JSON already encodes
+	// the failure status (Bug #66).
 	for _, r := range results {
 		if r.status == "FAIL" {
-			return fmt.Errorf("one or more checks failed")
+			return silentExitError{}
 		}
 	}
 	return nil
