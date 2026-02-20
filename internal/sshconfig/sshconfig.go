@@ -177,17 +177,26 @@ func WriteManagedBlock(configPath, vmName, block string) error {
 
 // RemoveManagedBlock removes the managed block for the given VM from the
 // SSH config file. Does not error if the file or block doesn't exist.
-func RemoveManagedBlock(configPath, vmName string) error {
+// Returns (true, nil) when a block was found and removed, (false, nil) when
+// the file doesn't exist or no block was present, and (false, err) on I/O failure.
+func RemoveManagedBlock(configPath, vmName string) (bool, error) {
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil
+			return false, nil
 		}
-		return fmt.Errorf("read ssh config: %w", err)
+		return false, fmt.Errorf("read ssh config: %w", err)
 	}
 
-	content := removeManagedBlockFromContent(string(data), vmName)
-	return os.WriteFile(configPath, []byte(content), 0o600)
+	content := string(data)
+	// Check whether the block is actually present before removing it.
+	_, found := ReadManagedBlock(content, vmName)
+
+	updated := removeManagedBlockFromContent(content, vmName)
+	if err := os.WriteFile(configPath, []byte(updated), 0o600); err != nil {
+		return false, err
+	}
+	return found, nil
 }
 
 // removeManagedBlockFromContent removes the managed block for vmName from

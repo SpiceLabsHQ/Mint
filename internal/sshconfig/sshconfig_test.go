@@ -339,8 +339,12 @@ func TestRemoveManagedBlock(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	if err := RemoveManagedBlock(path, "testvm"); err != nil {
+	found, err := RemoveManagedBlock(path, "testvm")
+	if err != nil {
 		t.Fatalf("remove: %v", err)
+	}
+	if !found {
+		t.Error("expected found=true when block was present")
 	}
 
 	data, _ := os.ReadFile(path)
@@ -361,9 +365,13 @@ func TestRemoveManagedBlock_NoBlock(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	// Should not error when block doesn't exist.
-	if err := RemoveManagedBlock(path, "nonexistent"); err != nil {
+	// Should not error when block doesn't exist, and should report found=false.
+	found, err := RemoveManagedBlock(path, "nonexistent")
+	if err != nil {
 		t.Fatalf("remove nonexistent block should not error: %v", err)
+	}
+	if found {
+		t.Error("expected found=false when no block was present")
 	}
 }
 
@@ -371,8 +379,12 @@ func TestRemoveManagedBlock_FileNotExist(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "nonexistent")
 
-	// Should not error when file doesn't exist.
-	if err := RemoveManagedBlock(path, "testvm"); err != nil {
+	// Should not error when file doesn't exist, and should report found=false.
+	found, err := RemoveManagedBlock(path, "testvm")
+	if err != nil {
 		t.Fatalf("remove from nonexistent file should not error: %v", err)
+	}
+	if found {
+		t.Error("expected found=false when file does not exist")
 	}
 }
