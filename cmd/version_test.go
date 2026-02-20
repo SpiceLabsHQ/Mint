@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -56,6 +57,95 @@ func TestVersionCommandDevDefaults(t *testing.T) {
 	}
 	if !strings.Contains(output, "unknown") {
 		t.Errorf("expected 'unknown' default date, got: %s", output)
+	}
+}
+
+func TestVersionCommandJSONOutput(t *testing.T) {
+	// --json flag must produce valid JSON with version, commit, date fields
+	buf := new(bytes.Buffer)
+	rootCmd := NewRootCommand()
+	rootCmd.SetOut(buf)
+	rootCmd.SetErr(buf)
+	rootCmd.SetArgs([]string{"--json", "version"})
+
+	err := rootCmd.Execute()
+	if err != nil {
+		t.Fatalf("version --json returned error: %v", err)
+	}
+
+	output := buf.String()
+
+	// Output must be valid JSON
+	var result map[string]string
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("version --json output is not valid JSON: %v\noutput: %s", err, output)
+	}
+
+	// Must contain version, commit, date keys
+	if _, ok := result["version"]; !ok {
+		t.Errorf("JSON output missing 'version' key, got: %s", output)
+	}
+	if _, ok := result["commit"]; !ok {
+		t.Errorf("JSON output missing 'commit' key, got: %s", output)
+	}
+	if _, ok := result["date"]; !ok {
+		t.Errorf("JSON output missing 'date' key, got: %s", output)
+	}
+
+	// Dev defaults must appear in values
+	if result["version"] != "dev" {
+		t.Errorf("expected version 'dev', got: %q", result["version"])
+	}
+	if result["commit"] != "none" {
+		t.Errorf("expected commit 'none', got: %q", result["commit"])
+	}
+	if result["date"] != "unknown" {
+		t.Errorf("expected date 'unknown', got: %q", result["date"])
+	}
+}
+
+func TestVersionCommandJSONOutputHasTrailingNewline(t *testing.T) {
+	// JSON output must end with a trailing newline (standard for CLI tools)
+	buf := new(bytes.Buffer)
+	rootCmd := NewRootCommand()
+	rootCmd.SetOut(buf)
+	rootCmd.SetErr(buf)
+	rootCmd.SetArgs([]string{"--json", "version"})
+
+	err := rootCmd.Execute()
+	if err != nil {
+		t.Fatalf("version --json returned error: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.HasSuffix(output, "\n") {
+		t.Errorf("version --json output missing trailing newline, got: %q", output)
+	}
+}
+
+func TestVersionCommandPlainTextUnchangedWhenNoJSONFlag(t *testing.T) {
+	// Without --json, output must remain plain text (not JSON)
+	buf := new(bytes.Buffer)
+	rootCmd := NewRootCommand()
+	rootCmd.SetOut(buf)
+	rootCmd.SetErr(buf)
+	rootCmd.SetArgs([]string{"version"})
+
+	err := rootCmd.Execute()
+	if err != nil {
+		t.Fatalf("version command returned error: %v", err)
+	}
+
+	output := buf.String()
+
+	// Must NOT be JSON — plain text uses "key: value" format, not curly braces
+	if strings.HasPrefix(strings.TrimSpace(output), "{") {
+		t.Errorf("version without --json should not produce JSON, got: %s", output)
+	}
+
+	// Must still contain the plain-text labels
+	if !strings.Contains(output, "mint version:") {
+		t.Errorf("plain text output missing 'mint version:' label, got: %s", output)
 	}
 }
 
