@@ -182,6 +182,55 @@ func TestInitAWSClientsProfilePropagation(t *testing.T) {
 	})
 }
 
+func TestInitAWSClientsNonExistentProfileError(t *testing.T) {
+	// When a non-existent profile is requested, initAWSClients must return a
+	// friendly error message instead of the raw SDK error string.
+	t.Run("flag profile not found returns friendly error", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Setenv("MINT_CONFIG_DIR", dir)
+
+		cliCtx := &cli.CLIContext{Profile: "ghost-profile"}
+		ctx := cli.WithContext(context.Background(), cliCtx)
+
+		_, err := initAWSClients(ctx)
+		if err == nil {
+			t.Fatal("expected error for non-existent profile, got nil")
+		}
+		want := `profile "ghost-profile" not found — check ~/.aws/config or run "aws configure"`
+		if err.Error() != want {
+			t.Errorf("error = %q, want %q", err.Error(), want)
+		}
+	})
+
+	t.Run("config profile not found returns friendly error", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Setenv("MINT_CONFIG_DIR", dir)
+
+		cfg := &config.Config{
+			InstanceType:       "m6i.xlarge",
+			VolumeSizeGB:       50,
+			VolumeIOPS:         3000,
+			IdleTimeoutMinutes: 60,
+			AWSProfile:         "config-ghost-profile",
+		}
+		if err := config.Save(cfg, dir); err != nil {
+			t.Fatalf("Save() error: %v", err)
+		}
+
+		cliCtx := &cli.CLIContext{Profile: ""}
+		ctx := cli.WithContext(context.Background(), cliCtx)
+
+		_, err := initAWSClients(ctx)
+		if err == nil {
+			t.Fatal("expected error for non-existent profile, got nil")
+		}
+		want := `profile "config-ghost-profile" not found — check ~/.aws/config or run "aws configure"`
+		if err.Error() != want {
+			t.Errorf("error = %q, want %q", err.Error(), want)
+		}
+	})
+}
+
 func TestInitAWSClientsRegionWiring(t *testing.T) {
 	// When a Config with a non-empty Region is stored in context (simulated by
 	// wiring a mint config into clients), initAWSClients should pass

@@ -143,6 +143,9 @@ func initAWSClients(ctx context.Context) (*awsClients, error) {
 
 	cfg, err := awscfg.LoadDefaultConfig(ctx, opts...)
 	if err != nil {
+		if strings.Contains(err.Error(), "failed to get shared config profile") {
+			return nil, fmt.Errorf("profile %q not found — check ~/.aws/config or run \"aws configure\"", effectiveProfile)
+		}
 		return nil, fmt.Errorf("load AWS config: %w", err)
 	}
 
