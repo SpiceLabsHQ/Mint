@@ -156,6 +156,7 @@ Resources:
   # ---------------------------------------------------------------------------
   MintEfsFileSystem:
     Type: AWS::EFS::FileSystem
+    DeletionPolicy: Retain
     Properties:
       Encrypted: true
       PerformanceMode: generalPurpose

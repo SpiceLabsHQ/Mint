@@ -27,7 +27,7 @@ aws ec2 describe-subnets \
   --output table
 ```
 
-Then deploy the stack, passing each subnet as a parameter. A typical 3-AZ region looks like this:
+Then deploy the stack, passing each subnet as a parameter. A typical 4-AZ region looks like this:
 
 ```bash
 aws cloudformation deploy \
@@ -38,7 +38,9 @@ aws cloudformation deploy \
     VpcId="$VPC_ID" \
     Subnet1="subnet-aaaa1111" \
     Subnet2="subnet-bbbb2222" \
-    Subnet3="subnet-cccc3333"
+    Subnet3="subnet-cccc3333" \
+    Subnet4="subnet-dddd4444"
+    # Add Subnet4+ for 4-AZ regions (us-west-2, us-east-1 have 4)
 ```
 
 Replace the subnet IDs with the values from the previous command. Only `Subnet1` is required; provide as many as your region has (up to 6). EFS mount targets are created in each subnet so VMs in any AZ can access the filesystem.
@@ -70,10 +72,18 @@ aws iam get-instance-profile \
   --query 'InstanceProfile.Arn' \
   --output text
 
-# EFS filesystem exists and is tagged
+# EFS filesystem exists and is available
+# LifeCycleState is the resource availability state (available/creating), not the lifecycle policy
 aws efs describe-file-systems \
   --query 'FileSystems[?Name==`mint-efs`].[FileSystemId,LifeCycleState]' \
   --output table
+
+# EFS lifecycle policy — use describe-lifecycle-configuration (separate API from describe-file-systems)
+# Expected output: {"LifecyclePolicies":[{"TransitionToIA":"AFTER_30_DAYS"}]}
+EFS_ID=$(aws efs describe-file-systems \
+  --query 'FileSystems[?Name==`mint-efs`].FileSystemId' \
+  --output text)
+aws efs describe-lifecycle-configuration --file-system-id "$EFS_ID"
 
 # Security group exists with self-referencing NFS rule
 aws ec2 describe-security-groups \
@@ -81,6 +91,15 @@ aws ec2 describe-security-groups \
   --query 'SecurityGroups[0].[GroupId,Description]' \
   --output text
 ```
+
+> **Note:** IAM roles and instance profiles are **not** indexed by `resourcegroupstaggingapi`.
+> Running `aws resourcegroupstaggingapi get-resources --tag-filters Key=mint,Values=true` will
+> silently omit them even when they exist and are correctly tagged. Use the IAM API directly to
+> verify the role tags:
+>
+> ```bash
+> aws iam list-role-tags --role-name mint-instance-role
+> ```
 
 ## What Gets Created
 
@@ -177,6 +196,15 @@ Grants mount, write, and root access to the specific Mint EFS filesystem. The re
 
 Allows VMs to write structured logs to CloudWatch under the `/mint/` log group prefix. Scoped to Mint's log groups only. This provides centralized operational visibility across all VMs without requiring SSH access to read logs.
 
+**Log group naming convention:** All Mint log groups use the `/mint/<component>` pattern. Expected log groups:
+
+| Log Group | Written By |
+|-----------|-----------|
+| `/mint/bootstrap` | Bootstrap script (`scripts/bootstrap.sh`) — instance initialization events |
+| `/mint/idle-detection` | Idle detector systemd timer — session checks and auto-stop decisions |
+
+The IAM resource ARN `arn:aws:logs:REGION:ACCOUNT_ID:log-group:/mint/*` covers any log group path starting with `/mint/` — in AWS IAM, `*` matches any character sequence including `/`, so `/mint/foo/bar` would also be covered. By convention, Mint uses single-level paths (`/mint/<component>`); the expected log groups are `/mint/bootstrap` and `/mint/idle-detection`.
+
 ### Security model and scoping
 
 This policy follows the **trusted-team security model** (ADR-0005). Key design decisions:
@@ -225,7 +253,16 @@ GoReleaser's `brews:` stanza (in `.goreleaser.yaml`) generates `Formula/mint.rb`
 
 ## Tear Down
 
-Deleting the stack removes all admin-created resources. User data stored on EFS will be lost.
+`MintEfsFileSystem` carries `DeletionPolicy: Retain`, so `delete-stack` removes the IAM
+roles, security groups, and mount targets but **leaves the EFS filesystem intact**. User
+data is not automatically destroyed.
+
+**Before deleting the stack**, ensure:
+
+- All Mint VMs are destroyed (`mint destroy` for each VM)
+- No EFS access points remain (created by `mint init` per user) — delete them first:
+  `aws efs delete-access-point --access-point-id <id>`
+- The EFS filesystem has no remaining mount targets outside this stack
 
 ```bash
 aws cloudformation delete-stack --stack-name mint-admin
@@ -234,9 +271,17 @@ aws cloudformation delete-stack --stack-name mint-admin
 aws cloudformation wait stack-delete-complete --stack-name mint-admin
 ```
 
-**Before deleting**, ensure:
-- All Mint VMs are destroyed (`mint destroy` for each VM)
-- No EFS access points remain (created by `mint init` per user) -- delete them first with `aws efs delete-access-point`
-- The EFS filesystem has no remaining mount targets outside this stack
+After `delete-stack` completes the EFS filesystem still exists and continues to accrue
+storage charges. To permanently delete it:
 
-If the delete fails due to a non-empty EFS filesystem or active mount targets, CloudFormation will report the specific resource blocking deletion.
+```bash
+EFS_ID=$(aws efs describe-file-systems \
+  --query "FileSystems[?Tags[?Key=='mint' && Value=='true']] | [0].FileSystemId" \
+  --output text)
+aws efs delete-file-system --file-system-id "$EFS_ID"
+```
+
+**Test / scratch environments**: deleting the EFS is fine — there is nothing worth keeping.
+
+**Production teardown**: migrate or snapshot user data before running `delete-file-system`.
+EFS does not offer a built-in snapshot; use AWS Backup or `rsync` to an S3 bucket first.
