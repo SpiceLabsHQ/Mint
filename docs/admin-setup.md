@@ -90,6 +90,15 @@ aws ec2 describe-security-groups \
   --output text
 ```
 
+> **Note:** IAM roles and instance profiles are **not** indexed by `resourcegroupstaggingapi`.
+> Running `aws resourcegroupstaggingapi get-resources --tag-filters Key=mint,Values=true` will
+> silently omit them even when they exist and are correctly tagged. Use the IAM API directly to
+> verify the role tags:
+>
+> ```bash
+> aws iam list-role-tags --role-name mint-instance-role
+> ```
+
 ## What Gets Created
 
 | Resource | Name | Purpose |
