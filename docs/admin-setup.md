@@ -70,10 +70,18 @@ aws iam get-instance-profile \
   --query 'InstanceProfile.Arn' \
   --output text
 
-# EFS filesystem exists and is tagged
+# EFS filesystem exists and is available
+# LifeCycleState is the resource availability state (available/creating), not the lifecycle policy
 aws efs describe-file-systems \
   --query 'FileSystems[?Name==`mint-efs`].[FileSystemId,LifeCycleState]' \
   --output table
+
+# EFS lifecycle policy — use describe-lifecycle-configuration (separate API from describe-file-systems)
+# Expected output: {"LifecyclePolicies":[{"TransitionToIA":"AFTER_30_DAYS"}]}
+EFS_ID=$(aws efs describe-file-systems \
+  --query 'FileSystems[?Name==`mint-efs`].FileSystemId' \
+  --output text)
+aws efs describe-lifecycle-configuration --file-system-id "$EFS_ID"
 
 # Security group exists with self-referencing NFS rule
 aws ec2 describe-security-groups \
