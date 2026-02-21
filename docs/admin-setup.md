@@ -27,7 +27,7 @@ aws ec2 describe-subnets \
   --output table
 ```
 
-Then deploy the stack, passing each subnet as a parameter. A typical 3-AZ region looks like this:
+Then deploy the stack, passing each subnet as a parameter. A typical 4-AZ region looks like this:
 
 ```bash
 aws cloudformation deploy \
@@ -38,7 +38,9 @@ aws cloudformation deploy \
     VpcId="$VPC_ID" \
     Subnet1="subnet-aaaa1111" \
     Subnet2="subnet-bbbb2222" \
-    Subnet3="subnet-cccc3333"
+    Subnet3="subnet-cccc3333" \
+    Subnet4="subnet-dddd4444"
+    # Add Subnet4+ for 4-AZ regions (us-west-2, us-east-1 have 4)
 ```
 
 Replace the subnet IDs with the values from the previous command. Only `Subnet1` is required; provide as many as your region has (up to 6). EFS mount targets are created in each subnet so VMs in any AZ can access the filesystem.
@@ -193,6 +195,15 @@ Grants mount, write, and root access to the specific Mint EFS filesystem. The re
 ```
 
 Allows VMs to write structured logs to CloudWatch under the `/mint/` log group prefix. Scoped to Mint's log groups only. This provides centralized operational visibility across all VMs without requiring SSH access to read logs.
+
+**Log group naming convention:** All Mint log groups use the `/mint/<component>` pattern. Expected log groups:
+
+| Log Group | Written By |
+|-----------|-----------|
+| `/mint/bootstrap` | Bootstrap script (`scripts/bootstrap.sh`) — instance initialization events |
+| `/mint/idle-detection` | Idle detector systemd timer — session checks and auto-stop decisions |
+
+The IAM resource ARN `arn:aws:logs:REGION:ACCOUNT_ID:log-group:/mint/*` uses a single-level wildcard. This covers `/mint/bootstrap` and `/mint/idle-detection` but would not cover a path like `/mint/foo/bar` (two levels below `/mint/`). All current and planned Mint log groups are one level deep, so no policy change is needed as components are added.
 
 ### Security model and scoping
 
