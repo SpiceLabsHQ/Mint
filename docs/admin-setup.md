@@ -253,7 +253,16 @@ GoReleaser's `brews:` stanza (in `.goreleaser.yaml`) generates `Formula/mint.rb`
 
 ## Tear Down
 
-Deleting the stack removes all admin-created resources. User data stored on EFS will be lost.
+`MintEfsFileSystem` carries `DeletionPolicy: Retain`, so `delete-stack` removes the IAM
+roles, security groups, and mount targets but **leaves the EFS filesystem intact**. User
+data is not automatically destroyed.
+
+**Before deleting the stack**, ensure:
+
+- All Mint VMs are destroyed (`mint destroy` for each VM)
+- No EFS access points remain (created by `mint init` per user) — delete them first:
+  `aws efs delete-access-point --access-point-id <id>`
+- The EFS filesystem has no remaining mount targets outside this stack
 
 ```bash
 aws cloudformation delete-stack --stack-name mint-admin
@@ -262,9 +271,17 @@ aws cloudformation delete-stack --stack-name mint-admin
 aws cloudformation wait stack-delete-complete --stack-name mint-admin
 ```
 
-**Before deleting**, ensure:
-- All Mint VMs are destroyed (`mint destroy` for each VM)
-- No EFS access points remain (created by `mint init` per user) -- delete them first with `aws efs delete-access-point`
-- The EFS filesystem has no remaining mount targets outside this stack
+After `delete-stack` completes the EFS filesystem still exists and continues to accrue
+storage charges. To permanently delete it:
 
-If the delete fails due to a non-empty EFS filesystem or active mount targets, CloudFormation will report the specific resource blocking deletion.
+```bash
+EFS_ID=$(aws efs describe-file-systems \
+  --query "FileSystems[?Tags[?Key=='mint' && Value=='true']] | [0].FileSystemId" \
+  --output text)
+aws efs delete-file-system --file-system-id "$EFS_ID"
+```
+
+**Test / scratch environments**: deleting the EFS is fine — there is nothing worth keeping.
+
+**Production teardown**: migrate or snapshot user data before running `delete-file-system`.
+EFS does not offer a built-in snapshot; use AWS Backup or `rsync` to an S3 bucket first.
