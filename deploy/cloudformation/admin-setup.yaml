@@ -1,9 +1,10 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
-  Mint admin one-time setup — creates shared infrastructure for all Mint users
+  Mint admin one-time setup - creates shared infrastructure for all Mint users
   in this account/region. Deploys IAM role and instance profile for Mint VMs,
   an encrypted EFS filesystem for persistent user storage, and a self-referencing
-  security group for NFS access. See docs/admin-setup.md for usage.
+  security group for NFS access.
+  See https://github.com/SpiceLabsHQ/Mint/blob/main/docs/admin-setup.md for usage.
 
 Parameters:
   VpcId:
