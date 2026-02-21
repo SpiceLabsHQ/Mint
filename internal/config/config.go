@@ -30,6 +30,7 @@ type Config struct {
 	VolumeIOPS         int    `mapstructure:"volume_iops"         toml:"volume_iops"`
 	IdleTimeoutMinutes int    `mapstructure:"idle_timeout_minutes" toml:"idle_timeout_minutes"`
 	SSHConfigApproved  bool   `mapstructure:"ssh_config_approved" toml:"ssh_config_approved"`
+	AWSProfile         string `mapstructure:"aws_profile"         toml:"aws_profile"`
 
 	// InstanceTypeValidator is an optional callback for AWS API validation.
 	// Set by the cmd layer when an EC2 client is available. Not serialized.
@@ -47,6 +48,7 @@ var validators = map[string]validator{
 	"volume_iops":          validateVolumeIOPS,
 	"idle_timeout_minutes": validateIdleTimeoutMinutes,
 	"ssh_config_approved":  validateSSHConfigApproved,
+	"aws_profile":          validateAWSProfile,
 }
 
 // ValidKeys returns the sorted list of valid config key names.
@@ -120,6 +122,7 @@ func Save(cfg *Config, configDir string) error {
 	v.Set("volume_iops", cfg.VolumeIOPS)
 	v.Set("idle_timeout_minutes", cfg.IdleTimeoutMinutes)
 	v.Set("ssh_config_approved", cfg.SSHConfigApproved)
+	v.Set("aws_profile", cfg.AWSProfile)
 
 	path := filepath.Join(configDir, "config.toml")
 	if err := v.WriteConfigAs(path); err != nil {
@@ -165,6 +168,8 @@ func (c *Config) Set(key, value string) error {
 		c.IdleTimeoutMinutes = n
 	case "ssh_config_approved":
 		c.SSHConfigApproved = value == "true"
+	case "aws_profile":
+		c.AWSProfile = value
 	}
 
 	return nil
@@ -230,5 +235,13 @@ func validateSSHConfigApproved(value string) error {
 	if value != "true" && value != "false" {
 		return fmt.Errorf("%q is not a valid boolean (use true or false)", value)
 	}
+	return nil
+}
+
+// validateAWSProfile accepts any non-empty string (no format constraint beyond
+// being a valid profile name) or an empty string to clear the setting.
+func validateAWSProfile(value string) error {
+	// Any string — including empty (to clear) — is valid. AWS profile names
+	// have no enforced format constraint in the SDK.
 	return nil
 }

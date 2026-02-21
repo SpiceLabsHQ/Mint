@@ -289,7 +289,10 @@ func TestUpdateCommand_NoArgs(t *testing.T) {
 }
 
 func TestUpdateCommand_ExcludedFromAWS(t *testing.T) {
-	if commandNeedsAWS("update") {
+	root := &cobra.Command{Use: "mint"}
+	cmd := &cobra.Command{Use: "update"}
+	root.AddCommand(cmd)
+	if commandNeedsAWS(cmd) {
 		t.Error("update command should be excluded from AWS initialization")
 	}
 }

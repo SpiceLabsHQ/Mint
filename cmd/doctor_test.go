@@ -1219,3 +1219,140 @@ func TestDoctorJSONWithFailures(t *testing.T) {
 		t.Error("docker check not found in JSON output")
 	}
 }
+
+// TestDoctorNilClientsSkipsAWSChecks verifies that doctor gracefully reports
+// AWS-dependent checks as SKIP when describeAddresses is nil (no credentials).
+func TestDoctorNilClientsSkipsAWSChecks(t *testing.T) {
+	configDir := t.TempDir()
+	writeValidConfig(t, configDir)
+	sshDir := filepath.Join(t.TempDir(), ".ssh")
+	writeSSHConfigWithBlock(t, sshDir, "default")
+
+	// Simulate credentials unavailable: nil AWS clients, error identity resolver.
+	deps := &doctorDeps{
+		identityResolver:  &errorIdentityResolver{err: fmt.Errorf("no credentials")},
+		describeAddresses: nil, // no AWS clients
+		describe:          nil,
+		configDir:         configDir,
+		sshConfigPath:     filepath.Join(sshDir, "config"),
+	}
+
+	buf := new(bytes.Buffer)
+	cmd := newDoctorCommandWithDeps(deps)
+	root := newDoctorTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"doctor"})
+
+	// doctor should run (not crash), but return an error because credentials FAIL.
+	_ = root.Execute()
+
+	output := buf.String()
+
+	// Credential check must report FAIL.
+	if !strings.Contains(output, "[FAIL]") || !strings.Contains(output, "AWS credentials") {
+		t.Errorf("expected [FAIL] AWS credentials, got: %s", output)
+	}
+
+	// EIP quota check must be SKIP, not a panic or hard error.
+	if !strings.Contains(output, "[SKIP]") || !strings.Contains(output, "EIP") {
+		t.Errorf("expected [SKIP] EIP quota when no AWS clients, got: %s", output)
+	}
+
+	// Local checks (config, SSH config) must still run.
+	if !strings.Contains(output, "SSH config") {
+		t.Errorf("expected SSH config check in output, got: %s", output)
+	}
+}
+
+// TestDoctorJSONFailureSilentOnStderr verifies Bug #66: when --json is set and
+// checks fail, the error must NOT appear as plaintext on stderr. The JSON
+// itself encodes the failure status. main.go must suppress the empty-message
+// sentinel error returned by silentExitError.
+func TestDoctorJSONFailureSilentOnStderr(t *testing.T) {
+	deps, _ := newHappyDoctorDepsWithVM(t)
+	// Make a check fail.
+	runner := &mockDoctorRemoteRunner{
+		responses: map[string]mockRemoteResponse{
+			"df":           {output: []byte("Use%\n 42%\n")},
+			"docker":       {err: fmt.Errorf("not found")},
+			"devcontainer": {output: []byte("0.52.1\n")},
+			"tmux":         {output: []byte("tmux 3.3a\n")},
+			"mosh-server":  {output: []byte("mosh 1.4.0\n")},
+		},
+	}
+	deps.remoteRun = runner.run
+
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+	cmd := newDoctorCommandWithDeps(deps)
+	root := newDoctorTestRoot(cmd)
+	root.SetOut(stdout)
+	root.SetErr(stderr)
+	root.SetArgs([]string{"doctor", "--json"})
+
+	err := root.Execute()
+	// Must return an error (so main.go can exit 1).
+	if err == nil {
+		t.Fatal("expected error from failed docker check in JSON mode")
+	}
+
+	// The error message itself must be empty (silentExitError) so that
+	// main.go does not print anything extra to stderr.
+	if msg := err.Error(); msg != "" {
+		t.Errorf("expected empty error message (silentExitError) in JSON mode, got: %q", msg)
+	}
+
+	// stderr must be empty — no duplicate error text.
+	if stderrContent := stderr.String(); stderrContent != "" {
+		t.Errorf("expected empty stderr in JSON mode, got: %q", stderrContent)
+	}
+
+	// stdout must still contain valid JSON.
+	var results []checkResultJSON
+	if err2 := json.Unmarshal(stdout.Bytes(), &results); err2 != nil {
+		t.Fatalf("stdout not valid JSON: %v\noutput: %s", err2, stdout.String())
+	}
+}
+
+// TestDoctorSSHConfigMissingHelpfulMessage verifies Bug #69: when the SSH
+// config block is missing, the WARN message should tell users to run
+// mint up, not mint ssh-config.
+func TestDoctorSSHConfigMissingHelpfulMessage(t *testing.T) {
+	deps := newHappyDoctorDeps(t)
+	// Redirect SSH config path to a missing path so the check sees no block.
+	deps.sshConfigPath = "/nonexistent/path/.ssh/config"
+
+	buf := new(bytes.Buffer)
+	cmd := newDoctorCommandWithDeps(deps)
+	root := newDoctorTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"doctor"})
+
+	_ = root.Execute()
+
+	output := buf.String()
+	// The message must NOT tell users to run mint ssh-config directly.
+	if strings.Contains(output, "run mint ssh-config") {
+		t.Errorf("WARN message should not say 'run mint ssh-config' (confusing for users), got: %s", output)
+	}
+	// The message must mention mint up.
+	if !strings.Contains(output, "mint up") {
+		t.Errorf("expected WARN message to mention 'mint up', got: %s", output)
+	}
+}
+
+// TestErrorIdentityResolverReturnsError verifies the new errorIdentityResolver
+// implementation used by doctor in the no-credentials path.
+func TestErrorIdentityResolverReturnsError(t *testing.T) {
+	sentinel := fmt.Errorf("test credential error")
+	r := &errorIdentityResolver{err: sentinel}
+	_, err := r.Resolve(context.Background())
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if err != sentinel {
+		t.Errorf("expected sentinel error, got: %v", err)
+	}
+}

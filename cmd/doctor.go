@@ -42,9 +42,8 @@ type doctorDeps struct {
 	owner             string
 }
 
-// cachedOwnerResolver is the production implementation of identityResolverAPI.
-// Since PersistentPreRunE already resolves the identity, this just returns
-// the cached value without making another STS call.
+// cachedOwnerResolver is a production implementation of identityResolverAPI
+// that returns a pre-resolved owner without making another STS call.
 type cachedOwnerResolver struct {
 	name string
 	arn  string
@@ -52,6 +51,18 @@ type cachedOwnerResolver struct {
 
 func (c *cachedOwnerResolver) Resolve(_ context.Context) (*identity.Owner, error) {
 	return &identity.Owner{Name: c.name, ARN: c.arn}, nil
+}
+
+// errorIdentityResolver is an identityResolverAPI implementation that always
+// returns a fixed error. Used by doctor when AWS credentials are unavailable so
+// that checkCredentials can report the failure as a check result rather than
+// crashing the command.
+type errorIdentityResolver struct {
+	err error
+}
+
+func (e *errorIdentityResolver) Resolve(_ context.Context) (*identity.Owner, error) {
+	return nil, e.err
 }
 
 // newDoctorCommand creates the production doctor command.
@@ -74,11 +85,21 @@ func newDoctorCommandWithDeps(deps *doctorDeps) *cobra.Command {
 			if deps != nil {
 				return runDoctor(cmd, deps)
 			}
-			clients := awsClientsFromContext(cmd.Context())
-			if clients == nil {
-				return fmt.Errorf("AWS clients not configured")
-			}
+
 			configDir := config.DefaultConfigDir()
+
+			// doctor initializes its own AWS clients (commandNeedsAWS returns false
+			// for doctor) so that a credential failure is surfaced as a check result
+			// rather than a fatal startup error. When credentials are unavailable,
+			// non-AWS checks (config, SSH config) still run.
+			clients, awsErr := initAWSClients(cmd.Context())
+			if awsErr != nil {
+				return runDoctor(cmd, &doctorDeps{
+					identityResolver: &errorIdentityResolver{err: awsErr},
+					configDir:        configDir,
+					sshConfigPath:    defaultSSHConfigPath(),
+				})
+			}
 			return runDoctor(cmd, &doctorDeps{
 				identityResolver: &cachedOwnerResolver{
 					name: clients.owner,
@@ -464,10 +485,14 @@ func fixFailedComponents(ctx context.Context, deps *doctorDeps, v *vm.VM, prefix
 func checkCredentials(ctx context.Context, deps *doctorDeps) checkResult {
 	owner, err := deps.identityResolver.Resolve(ctx)
 	if err != nil {
+		msg := fmt.Sprintf("could not resolve identity: %v", err)
+		if isCredentialError(err) {
+			msg = `not configured — run "aws configure", set AWS_PROFILE, or use --profile`
+		}
 		return checkResult{
 			name:    "AWS credentials",
 			status:  "FAIL",
-			message: fmt.Sprintf("could not resolve identity: %v", err),
+			message: msg,
 		}
 	}
 	return checkResult{
@@ -557,7 +582,7 @@ func checkSSHConfig(deps *doctorDeps) checkResult {
 		return checkResult{
 			name:    "SSH config",
 			status:  "WARN",
-			message: "SSH config file not found — run mint ssh-config",
+			message: "SSH config file not found — run mint up to configure SSH automatically",
 		}
 	}
 
@@ -566,7 +591,7 @@ func checkSSHConfig(deps *doctorDeps) checkResult {
 		return checkResult{
 			name:    "SSH config",
 			status:  "WARN",
-			message: "no mint managed block found — run mint ssh-config",
+			message: "no mint managed block found — run mint up to configure SSH automatically",
 		}
 	}
 
@@ -578,8 +603,16 @@ func checkSSHConfig(deps *doctorDeps) checkResult {
 }
 
 // checkEIPQuota checks the number of allocated Elastic IPs against the default
-// limit of 5. Warns if >= 4 are allocated.
+// limit of 5. Warns if >= 4 are allocated. Returns SKIP when AWS clients are
+// unavailable (e.g., no credentials).
 func checkEIPQuota(ctx context.Context, deps *doctorDeps) checkResult {
+	if deps.describeAddresses == nil {
+		return checkResult{
+			name:    "EIP quota",
+			status:  "SKIP",
+			message: "skipped — AWS credentials unavailable",
+		}
+	}
 	out, err := deps.describeAddresses.DescribeAddresses(ctx, &ec2.DescribeAddressesInput{})
 	if err != nil {
 		return checkResult{
@@ -638,10 +671,13 @@ func printResultsJSON(w io.Writer, results []checkResult) error {
 		return fmt.Errorf("encoding JSON: %w", err)
 	}
 
-	// Check for failures after JSON output.
+	// Check for failures after JSON output. Use silentExitError so that
+	// main.go exits 1 (signalling failure to scripts) without printing
+	// an additional plaintext message to stderr — the JSON already encodes
+	// the failure status (Bug #66).
 	for _, r := range results {
 		if r.status == "FAIL" {
-			return fmt.Errorf("one or more checks failed")
+			return silentExitError{}
 		}
 	}
 	return nil

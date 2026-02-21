@@ -17,7 +17,12 @@ var bootstrapScript []byte
 
 func main() {
 	if err := cmd.ExecuteWithBootstrapScript(bootstrapScript); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		// silentExitError has an empty message — it signals failure without
+		// printing (the command already reported the error, e.g., via JSON
+		// output on stdout). Only print when the message is non-empty.
+		if msg := err.Error(); msg != "" {
+			fmt.Fprintln(os.Stderr, msg)
+		}
 		os.Exit(1)
 	}
 }

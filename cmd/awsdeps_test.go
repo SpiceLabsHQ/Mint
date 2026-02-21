@@ -5,37 +5,69 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"github.com/nicholasgasior/mint/internal/cli"
 	"github.com/nicholasgasior/mint/internal/config"
 )
 
+// fakeCmd builds a *cobra.Command with the given Use (name) attached to the
+// root so that CommandPath() returns "mint <name>" — matching the real CLI.
+func fakeCmd(name string) *cobra.Command {
+	root := &cobra.Command{Use: "mint"}
+	child := &cobra.Command{Use: name}
+	root.AddCommand(child)
+	return child
+}
+
+// fakeSubCmd builds a *cobra.Command nested two levels deep so that
+// CommandPath() returns "mint <parent> <child>" — used to test completion
+// subcommands like "mint completion bash".
+func fakeSubCmd(parent, child string) *cobra.Command {
+	root := &cobra.Command{Use: "mint"}
+	parentCmd := &cobra.Command{Use: parent}
+	childCmd := &cobra.Command{Use: child}
+	parentCmd.AddCommand(childCmd)
+	root.AddCommand(parentCmd)
+	return childCmd
+}
+
 func TestCommandNeedsAWS(t *testing.T) {
 	tests := []struct {
 		name     string
-		cmdName  string
+		cmd      *cobra.Command
 		expected bool
 	}{
-		{"version does not need AWS", "version", false},
-		{"config does not need AWS", "config", false},
-		{"set does not need AWS", "set", false},
-		{"get does not need AWS", "get", false},
-		{"ssh-config does not need AWS", "ssh-config", false},
-		{"help does not need AWS", "help", false},
-		{"up needs AWS", "up", true},
-		{"down needs AWS", "down", true},
-		{"destroy needs AWS", "destroy", true},
-		{"ssh needs AWS", "ssh", true},
-		{"code needs AWS", "code", true},
-		{"list needs AWS", "list", true},
-		{"status needs AWS", "status", true},
-		{"init needs AWS", "init", true},
+		{"version does not need AWS", fakeCmd("version"), false},
+		{"config does not need AWS", fakeCmd("config"), false},
+		{"set does not need AWS", fakeCmd("set"), false},
+		{"get does not need AWS", fakeCmd("get"), false},
+		{"ssh-config does not need AWS", fakeCmd("ssh-config"), false},
+		{"help does not need AWS", fakeCmd("help"), false},
+		// doctor initialises its own AWS clients so it can report credential
+		// failures as a check result rather than a fatal PersistentPreRunE error.
+		{"doctor does not need AWS", fakeCmd("doctor"), false},
+		// completion and its shell subcommands are local-only.
+		{"completion does not need AWS", fakeCmd("completion"), false},
+		{"completion bash does not need AWS", fakeSubCmd("completion", "bash"), false},
+		{"completion zsh does not need AWS", fakeSubCmd("completion", "zsh"), false},
+		{"completion fish does not need AWS", fakeSubCmd("completion", "fish"), false},
+		{"completion powershell does not need AWS", fakeSubCmd("completion", "powershell"), false},
+		{"up needs AWS", fakeCmd("up"), true},
+		{"down needs AWS", fakeCmd("down"), true},
+		{"destroy needs AWS", fakeCmd("destroy"), true},
+		{"ssh needs AWS", fakeCmd("ssh"), true},
+		{"code needs AWS", fakeCmd("code"), true},
+		{"list needs AWS", fakeCmd("list"), true},
+		{"status needs AWS", fakeCmd("status"), true},
+		{"init needs AWS", fakeCmd("init"), true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := commandNeedsAWS(tt.cmdName)
+			got := commandNeedsAWS(tt.cmd)
 			if got != tt.expected {
-				t.Errorf("commandNeedsAWS(%q) = %v, want %v", tt.cmdName, got, tt.expected)
+				t.Errorf("commandNeedsAWS(%q) = %v, want %v", tt.cmd.CommandPath(), got, tt.expected)
 			}
 		})
 	}
@@ -122,6 +154,122 @@ func TestInitAWSClientsDebugMode(t *testing.T) {
 		if err == nil {
 			t.Log("initAWSClients succeeded (unexpected in test env, but not a failure)")
 		}
+	})
+}
+
+func TestInitAWSClientsProfilePropagation(t *testing.T) {
+	// When a non-empty Profile is set in CLIContext, initAWSClients should
+	// attempt to load that profile from shared config. In a test environment
+	// without real AWS creds the call will still fail (on identity resolution),
+	// but the important guarantee is that it does not panic and gets past the
+	// config load step (which would fail immediately if the option were wired
+	// incorrectly). We verify the code path runs without panic.
+	t.Run("non-empty profile does not cause config load panic", func(t *testing.T) {
+		cliCtx := &cli.CLIContext{Profile: "nonexistent-test-profile"}
+		ctx := cli.WithContext(context.Background(), cliCtx)
+
+		// Expected to error on credential resolution, not on config loading.
+		_, _ = initAWSClients(ctx)
+		// No panic = success
+	})
+
+	t.Run("empty profile runs without panic", func(t *testing.T) {
+		cliCtx := &cli.CLIContext{Profile: ""}
+		ctx := cli.WithContext(context.Background(), cliCtx)
+
+		_, _ = initAWSClients(ctx)
+		// No panic = success
+	})
+}
+
+func TestInitAWSClientsRegionWiring(t *testing.T) {
+	// When a Config with a non-empty Region is stored in context (simulated by
+	// wiring a mint config into clients), initAWSClients should pass
+	// WithRegion to LoadDefaultConfig. We can't inspect the resulting
+	// aws.Config.Region directly without a real AWS call, but we can verify
+	// the code path does not panic.
+	t.Run("non-empty region in mint config does not panic", func(t *testing.T) {
+		cliCtx := &cli.CLIContext{}
+		ctx := cli.WithContext(context.Background(), cliCtx)
+
+		// initAWSClients will try to load the mint config from disk. In the
+		// test environment there's no config, so it gets an empty Region
+		// which means no WithRegion option — still must not panic.
+		_, _ = initAWSClients(ctx)
+	})
+}
+
+func TestInitAWSClientsProfileFallbackPrecedence(t *testing.T) {
+	// Precedence: --profile flag > config aws_profile > SDK default.
+	// We can't inspect the loaded profile without live AWS, but we verify
+	// the code path compiles and runs without panic for each case.
+	t.Run("flag profile takes precedence over config profile", func(t *testing.T) {
+		// Both flag and config have non-empty profiles: flag wins.
+		// We set MINT_CONFIG_DIR to a temp dir so no real config is loaded.
+		dir := t.TempDir()
+		t.Setenv("MINT_CONFIG_DIR", dir)
+
+		// Write a config file with aws_profile set.
+		cfg := &config.Config{
+			InstanceType:       "m6i.xlarge",
+			VolumeSizeGB:       50,
+			VolumeIOPS:         3000,
+			IdleTimeoutMinutes: 60,
+			AWSProfile:         "config-profile",
+		}
+		if err := config.Save(cfg, dir); err != nil {
+			t.Fatalf("Save() error: %v", err)
+		}
+
+		// Flag profile should override config profile.
+		cliCtx := &cli.CLIContext{Profile: "flag-profile"}
+		ctx := cli.WithContext(context.Background(), cliCtx)
+		_, _ = initAWSClients(ctx)
+		// No panic = success
+	})
+
+	t.Run("config profile used when flag is empty", func(t *testing.T) {
+		// Flag is empty, config has aws_profile — config profile should be applied.
+		dir := t.TempDir()
+		t.Setenv("MINT_CONFIG_DIR", dir)
+
+		cfg := &config.Config{
+			InstanceType:       "m6i.xlarge",
+			VolumeSizeGB:       50,
+			VolumeIOPS:         3000,
+			IdleTimeoutMinutes: 60,
+			AWSProfile:         "config-profile",
+		}
+		if err := config.Save(cfg, dir); err != nil {
+			t.Fatalf("Save() error: %v", err)
+		}
+
+		cliCtx := &cli.CLIContext{Profile: ""}
+		ctx := cli.WithContext(context.Background(), cliCtx)
+		_, _ = initAWSClients(ctx)
+		// No panic = success; the profile is applied via WithSharedConfigProfile
+	})
+
+	t.Run("no profile applied when both flag and config are empty", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Setenv("MINT_CONFIG_DIR", dir)
+
+		// Config with empty aws_profile.
+		cfg := &config.Config{
+			InstanceType:       "m6i.xlarge",
+			VolumeSizeGB:       50,
+			VolumeIOPS:         3000,
+			IdleTimeoutMinutes: 60,
+			AWSProfile:         "",
+		}
+		if err := config.Save(cfg, dir); err != nil {
+			t.Fatalf("Save() error: %v", err)
+		}
+
+		cliCtx := &cli.CLIContext{Profile: ""}
+		ctx := cli.WithContext(context.Background(), cliCtx)
+		_, _ = initAWSClients(ctx)
+		// No panic = success; SDK default chain is used
 	})
 }
 

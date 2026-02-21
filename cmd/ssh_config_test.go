@@ -361,6 +361,31 @@ func TestSSHConfigCommand_RemoveFlag_FileExistsNoBlock(t *testing.T) {
 	}
 }
 
+// TestSSHConfigCommand_NoArgsHelpfulMessage verifies Bug #69: when no flags
+// are provided at all (no --remove, no --hostname), the error message should
+// be helpful and mention that mint up handles this automatically.
+func TestSSHConfigCommand_NoArgsHelpfulMessage(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("MINT_CONFIG_DIR", configDir)
+
+	buf := new(bytes.Buffer)
+	rootCmd := NewRootCommand()
+	rootCmd.SetOut(buf)
+	rootCmd.SetErr(buf)
+	rootCmd.SetArgs([]string{"ssh-config"})
+
+	err := rootCmd.Execute()
+	if err == nil {
+		t.Fatal("ssh-config without flags should fail")
+	}
+
+	errMsg := err.Error()
+	// Must mention mint up so users know the primary workflow.
+	if !strings.Contains(errMsg, "mint up") {
+		t.Errorf("error should mention 'mint up', got: %s", errMsg)
+	}
+}
+
 func TestSSHConfigCommand_PreservesExistingContent(t *testing.T) {
 	configDir := t.TempDir()
 	t.Setenv("MINT_CONFIG_DIR", configDir)

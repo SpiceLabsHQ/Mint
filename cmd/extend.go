@@ -15,6 +15,26 @@ import (
 	"github.com/nicholasgasior/mint/internal/vm"
 )
 
+// validateExtendArgs is a cobra Args function that validates the optional
+// [minutes] argument before AWS initialization runs in PersistentPreRunE.
+// This ensures argument errors are reported immediately rather than after a
+// (potentially slow or failing) credential check.
+func validateExtendArgs(_ *cobra.Command, args []string) error {
+	if len(args) > 1 {
+		return fmt.Errorf("accepts at most 1 arg(s), received %d", len(args))
+	}
+	if len(args) == 1 {
+		n, err := strconv.Atoi(args[0])
+		if err != nil {
+			return fmt.Errorf("invalid minutes %q: must be a number", args[0])
+		}
+		if n < 15 {
+			return fmt.Errorf("minutes must be >= 15 (got %d)", n)
+		}
+	}
+	return nil
+}
+
 // extendDeps holds the injectable dependencies for the extend command.
 type extendDeps struct {
 	describe    mintaws.DescribeInstancesAPI
@@ -39,7 +59,7 @@ func newExtendCommandWithDeps(deps *extendDeps) *cobra.Command {
 			"Defaults to the configured idle_timeout_minutes (from config). " +
 			"Pass a number of minutes as an argument to override the default. " +
 			"Minimum value is 15 minutes.",
-		Args: cobra.MaximumNArgs(1),
+		Args: validateExtendArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if deps != nil {
 				return runExtend(cmd, deps, args)

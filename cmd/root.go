@@ -8,6 +8,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// Ensure silentExitError satisfies the error interface (compile-time check).
+var _ error = silentExitError{}
+
 // NewRootCommand creates and returns the root cobra command with all global
 // persistent flags registered. Subcommands are attached here.
 func NewRootCommand() *cobra.Command {
@@ -15,6 +18,7 @@ func NewRootCommand() *cobra.Command {
 		Use:           "mint",
 		Short:         "Provision and manage EC2-based development environments",
 		Long:          "Provision and manage EC2-based development environments for running Claude Code.",
+		Version:       version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
@@ -22,12 +26,25 @@ func NewRootCommand() *cobra.Command {
 			ctx := cli.WithContext(context.Background(), cliCtx)
 
 			// Initialize AWS clients for commands that need them.
-			// Local-only commands (version, config, ssh-config, help)
-			// skip AWS initialization entirely.
-			if commandNeedsAWS(cmd.Name()) {
+			// Local-only commands (version, config, ssh-config, completion,
+			// help) skip AWS initialization entirely.
+			if commandNeedsAWS(cmd) {
 				clients, err := initAWSClients(ctx)
 				if err != nil {
-					return fmt.Errorf("initialize AWS: %w", err)
+					friendlyMsg := fmt.Sprintf("initialize AWS: %v", err)
+					if isCredentialError(err) {
+						friendlyMsg = `AWS credentials unavailable — run "aws configure", set AWS_PROFILE, or use --profile`
+					}
+					// In JSON mode, write structured error to stdout so machine
+					// consumers get valid JSON instead of plaintext on stderr
+					// (Bug #67). Use silentExitError so main.go doesn't
+					// double-print.
+					if cliCtx.JSON {
+						cmd.SetContext(ctx)
+						fmt.Fprintf(cmd.OutOrStdout(), "{\"error\":%q}\n", friendlyMsg)
+						return silentExitError{}
+					}
+					return fmt.Errorf("%s", friendlyMsg)
 				}
 				ctx = contextWithAWSClients(ctx, clients)
 			}
@@ -37,12 +54,17 @@ func NewRootCommand() *cobra.Command {
 		},
 	}
 
+	// Set a consistent version template so `mint --version` prints
+	// "mint version dev" rather than cobra's default "mint version dev\n".
+	rootCmd.SetVersionTemplate("mint version {{.Version}}\n")
+
 	// Global flags matching CLI UX conventions (ADR-0012)
 	rootCmd.PersistentFlags().Bool("verbose", false, "Show progress steps")
 	rootCmd.PersistentFlags().Bool("debug", false, "Show AWS SDK details")
 	rootCmd.PersistentFlags().Bool("json", false, "Machine-readable JSON output")
 	rootCmd.PersistentFlags().Bool("yes", false, "Skip confirmation on destructive operations")
 	rootCmd.PersistentFlags().String("vm", "default", "Target VM name")
+	rootCmd.PersistentFlags().String("profile", "", "AWS profile name (overrides AWS_PROFILE)")
 
 	// Register subcommands
 	rootCmd.AddCommand(newVersionCommand())

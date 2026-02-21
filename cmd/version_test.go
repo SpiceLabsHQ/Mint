@@ -180,6 +180,29 @@ func TestRootCommandShowsHelp(t *testing.T) {
 	}
 }
 
+// TestVersionFlagOnRoot verifies Bug #64: mint --version should work.
+// Cobra registers the --version flag automatically when rootCmd.Version is set.
+func TestVersionFlagOnRoot(t *testing.T) {
+	buf := new(bytes.Buffer)
+	rootCmd := NewRootCommand()
+	rootCmd.SetOut(buf)
+	rootCmd.SetErr(buf)
+	rootCmd.SetArgs([]string{"--version"})
+
+	err := rootCmd.Execute()
+	if err != nil {
+		t.Fatalf("mint --version returned error: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "mint") {
+		t.Errorf("mint --version output missing 'mint', got: %s", output)
+	}
+	if !strings.Contains(output, "dev") {
+		t.Errorf("mint --version output missing version string, got: %s", output)
+	}
+}
+
 func TestGlobalFlagsExist(t *testing.T) {
 	rootCmd := NewRootCommand()
 

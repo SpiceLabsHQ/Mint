@@ -7,6 +7,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -16,6 +17,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/efs"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
+	"github.com/spf13/cobra"
 
 	"github.com/nicholasgasior/mint/internal/cli"
 	"github.com/nicholasgasior/mint/internal/config"
@@ -52,12 +54,44 @@ func contextWithAWSClients(ctx context.Context, clients *awsClients) context.Con
 	return context.WithValue(ctx, awsClientsKey{}, clients)
 }
 
+// credentialErrorKeywords are substrings found in AWS SDK credential errors.
+// When any of these appear we replace the raw SDK chain with a single
+// actionable message. Shared with PersistentPreRunE and config set.
+var credentialErrorKeywords = []string{
+	"get credentials",
+	"NoCredentialProviders",
+	"no EC2 IMDS role found",
+	"failed to refresh cached credentials",
+	"credential",
+}
+
+// isCredentialError reports whether err looks like an AWS credential failure.
+func isCredentialError(err error) bool {
+	msg := err.Error()
+	for _, kw := range credentialErrorKeywords {
+		if strings.Contains(msg, kw) {
+			return true
+		}
+	}
+	return false
+}
+
 // commandNeedsAWS returns true if the command requires AWS client
 // initialization. Commands that operate locally (version, config, ssh-config,
-// help) return false.
-func commandNeedsAWS(cmdName string) bool {
-	switch cmdName {
-	case "version", "config", "set", "get", "ssh-config", "help", "update":
+// completion, help) return false.
+func commandNeedsAWS(cmd *cobra.Command) bool {
+	// Check the full command path so that "mint completion bash" is excluded
+	// by detecting the "completion" ancestor — cmd.Name() alone would return
+	// the shell name ("bash", "zsh", …) which is ambiguous.
+	path := cmd.CommandPath()
+	if strings.Contains(path, " completion") {
+		return false
+	}
+	switch cmd.Name() {
+	case "version", "config", "set", "get", "ssh-config", "help", "update",
+		// doctor initializes its own AWS clients so it can report credential
+		// failures as a check result rather than a fatal startup error.
+		"doctor":
 		return false
 	default:
 		return true
@@ -70,11 +104,41 @@ func commandNeedsAWS(cmdName string) bool {
 func initAWSClients(ctx context.Context) (*awsClients, error) {
 	var opts []func(*awscfg.LoadOptions) error
 
+	cliCtx := cli.FromContext(ctx)
+
 	// ADR-0012: Wire --debug flag to AWS SDK request/response logging.
-	if cliCtx := cli.FromContext(ctx); cliCtx != nil && cliCtx.Debug {
+	if cliCtx != nil && cliCtx.Debug {
 		opts = append(opts, awscfg.WithClientLogMode(
 			aws.LogRequest|aws.LogResponse,
 		))
+	}
+
+	// Load mint user preferences early so we can wire the profile and region
+	// before calling LoadDefaultConfig. This ensures the SDK uses the
+	// mint-configured values when no environment variables are set.
+	mintCfg, err := config.Load(config.DefaultConfigDir())
+	if err != nil {
+		return nil, fmt.Errorf("load mint config: %w", err)
+	}
+
+	// Determine effective profile: --profile flag > config aws_profile > SDK default chain.
+	// The flag always takes precedence; if not set, fall back to the stored config value.
+	effectiveProfile := ""
+	if cliCtx != nil {
+		effectiveProfile = cliCtx.Profile
+	}
+	if effectiveProfile == "" {
+		effectiveProfile = mintCfg.AWSProfile
+	}
+	if effectiveProfile != "" {
+		opts = append(opts, awscfg.WithSharedConfigProfile(effectiveProfile))
+	}
+
+	// Wire the mint config region to AWS SDK region selection.
+	// An empty Region means no override; the SDK resolves region from
+	// environment variables, shared config, and EC2 instance metadata.
+	if mintCfg.Region != "" {
+		opts = append(opts, awscfg.WithRegion(mintCfg.Region))
 	}
 
 	cfg, err := awscfg.LoadDefaultConfig(ctx, opts...)
@@ -88,12 +152,6 @@ func initAWSClients(ctx context.Context) (*awsClients, error) {
 	owner, err := resolver.Resolve(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("resolve identity: %w", err)
-	}
-
-	// Load mint user preferences.
-	mintCfg, err := config.Load(config.DefaultConfigDir())
-	if err != nil {
-		return nil, fmt.Errorf("load mint config: %w", err)
 	}
 
 	return &awsClients{

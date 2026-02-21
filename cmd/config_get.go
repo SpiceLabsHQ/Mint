@@ -16,7 +16,16 @@ func newConfigGetCommand() *cobra.Command {
 		Use:   "get <key>",
 		Short: "Get a configuration value",
 		Long:  "Print a single configuration value from ~/.config/mint/config.toml.",
-		Args:  cobra.ExactArgs(1),
+		Args: func(cmd *cobra.Command, args []string) error {
+			validKeys := config.ValidKeys()
+			if len(args) == 0 {
+				return fmt.Errorf("key is required\nValid keys: %s", strings.Join(validKeys, ", "))
+			}
+			if len(args) > 1 {
+				return fmt.Errorf("accepts 1 key, got %d", len(args))
+			}
+			return nil
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			key := args[0]
 
@@ -39,22 +48,23 @@ func newConfigGetCommand() *cobra.Command {
 				return err
 			}
 
-			value := configValue(cfg, key)
-
 			cliCtx := cli.FromCommand(cmd)
 			if cliCtx != nil && cliCtx.JSON {
 				enc := json.NewEncoder(cmd.OutOrStdout())
 				enc.SetIndent("", "  ")
-				return enc.Encode(map[string]any{key: value})
+				// Use the raw config value in JSON mode (consistent with
+				// `config --json`) rather than the human-readable sentinel.
+				return enc.Encode(map[string]any{key: configValueRaw(cfg, key)})
 			}
 
-			fmt.Fprintln(cmd.OutOrStdout(), value)
+			fmt.Fprintln(cmd.OutOrStdout(), configValue(cfg, key))
 			return nil
 		},
 	}
 }
 
-// configValue returns the string representation of a config field by key name.
+// configValue returns the human-readable string representation of a config
+// field by key name. Unset fields use display sentinels (e.g., "(not set)").
 func configValue(cfg *config.Config, key string) string {
 	switch key {
 	case "region":
@@ -72,7 +82,37 @@ func configValue(cfg *config.Config, key string) string {
 		return strconv.Itoa(cfg.IdleTimeoutMinutes)
 	case "ssh_config_approved":
 		return strconv.FormatBool(cfg.SSHConfigApproved)
+	case "aws_profile":
+		if cfg.AWSProfile == "" {
+			return "(not set)"
+		}
+		return cfg.AWSProfile
 	default:
 		return ""
+	}
+}
+
+// configValueRaw returns the actual config field value by key for JSON output.
+// Unlike configValue it does not apply human-readable display transformations
+// (e.g., returns "" for an unset region rather than "(not set)"), keeping the
+// output consistent with `config --json`.
+func configValueRaw(cfg *config.Config, key string) any {
+	switch key {
+	case "region":
+		return cfg.Region
+	case "instance_type":
+		return cfg.InstanceType
+	case "volume_size_gb":
+		return cfg.VolumeSizeGB
+	case "volume_iops":
+		return cfg.VolumeIOPS
+	case "idle_timeout_minutes":
+		return cfg.IdleTimeoutMinutes
+	case "ssh_config_approved":
+		return cfg.SSHConfigApproved
+	case "aws_profile":
+		return cfg.AWSProfile
+	default:
+		return nil
 	}
 }
