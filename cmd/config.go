@@ -45,6 +45,7 @@ func printConfigJSON(cmd *cobra.Command, cfg *config.Config) error {
 		"volume_iops":          cfg.VolumeIOPS,
 		"idle_timeout_minutes": cfg.IdleTimeoutMinutes,
 		"ssh_config_approved":  cfg.SSHConfigApproved,
+		"aws_profile":          cfg.AWSProfile,
 	}
 
 	enc := json.NewEncoder(cmd.OutOrStdout())
@@ -60,19 +61,26 @@ func printConfigHuman(cmd *cobra.Command, cfg *config.Config) error {
 		region = "(not set)"
 	}
 
+	awsProfile := cfg.AWSProfile
+	if awsProfile == "" {
+		awsProfile = "(not set)"
+	}
+
 	_, err := fmt.Fprintf(w,
 		"region               %s\n"+
 			"instance_type        %s\n"+
 			"volume_size_gb       %d\n"+
 			"volume_iops          %d\n"+
 			"idle_timeout_minutes %d\n"+
-			"ssh_config_approved  %v\n",
+			"ssh_config_approved  %v\n"+
+			"aws_profile          %s\n",
 		region,
 		cfg.InstanceType,
 		cfg.VolumeSizeGB,
 		cfg.VolumeIOPS,
 		cfg.IdleTimeoutMinutes,
 		cfg.SSHConfigApproved,
+		awsProfile,
 	)
 	return err
 }

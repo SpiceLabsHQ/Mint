@@ -82,6 +82,11 @@ func configValue(cfg *config.Config, key string) string {
 		return strconv.Itoa(cfg.IdleTimeoutMinutes)
 	case "ssh_config_approved":
 		return strconv.FormatBool(cfg.SSHConfigApproved)
+	case "aws_profile":
+		if cfg.AWSProfile == "" {
+			return "(not set)"
+		}
+		return cfg.AWSProfile
 	default:
 		return ""
 	}
@@ -105,6 +110,8 @@ func configValueRaw(cfg *config.Config, key string) any {
 		return cfg.IdleTimeoutMinutes
 	case "ssh_config_approved":
 		return cfg.SSHConfigApproved
+	case "aws_profile":
+		return cfg.AWSProfile
 	default:
 		return nil
 	}

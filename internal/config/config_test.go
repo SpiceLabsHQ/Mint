@@ -249,6 +249,7 @@ func TestValidKeys(t *testing.T) {
 		"volume_iops":          true,
 		"idle_timeout_minutes": true,
 		"ssh_config_approved":  true,
+		"aws_profile":          true,
 	}
 
 	if len(keys) != len(expected) {
@@ -259,6 +260,96 @@ func TestValidKeys(t *testing.T) {
 		if !expected[k] {
 			t.Errorf("unexpected key %q in ValidKeys()", k)
 		}
+	}
+}
+
+func TestSetAWSProfile(t *testing.T) {
+	dir := t.TempDir()
+	cfg, _ := Load(dir)
+
+	tests := []struct {
+		name    string
+		value   string
+		wantErr bool
+		want    string
+	}{
+		{"non-empty profile accepted", "myprofile", false, "myprofile"},
+		{"profile with hyphens accepted", "my-work-profile", false, "my-work-profile"},
+		{"profile with underscores accepted", "corp_dev", false, "corp_dev"},
+		{"empty clears profile", "", false, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := cfg.Set("aws_profile", tt.value)
+			if tt.wantErr && err == nil {
+				t.Errorf("Set(aws_profile, %q) expected error, got nil", tt.value)
+			}
+			if !tt.wantErr {
+				if err != nil {
+					t.Errorf("Set(aws_profile, %q) unexpected error: %v", tt.value, err)
+				}
+				if cfg.AWSProfile != tt.want {
+					t.Errorf("AWSProfile = %q, want %q", cfg.AWSProfile, tt.want)
+				}
+			}
+		})
+	}
+}
+
+func TestSaveAndLoadAWSProfile(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &Config{
+		Region:             "us-west-2",
+		InstanceType:       "m6i.xlarge",
+		VolumeSizeGB:       50,
+		VolumeIOPS:         3000,
+		IdleTimeoutMinutes: 60,
+		AWSProfile:         "my-work-profile",
+	}
+
+	if err := Save(cfg, dir); err != nil {
+		t.Fatalf("Save() unexpected error: %v", err)
+	}
+
+	loaded, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load() unexpected error: %v", err)
+	}
+
+	if loaded.AWSProfile != "my-work-profile" {
+		t.Errorf("AWSProfile = %q, want %q", loaded.AWSProfile, "my-work-profile")
+	}
+}
+
+func TestAWSProfileDefaultIsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	cfg, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load() unexpected error: %v", err)
+	}
+	if cfg.AWSProfile != "" {
+		t.Errorf("AWSProfile default = %q, want empty string", cfg.AWSProfile)
+	}
+}
+
+func TestSetAWSProfileRoundtrip(t *testing.T) {
+	dir := t.TempDir()
+	cfg, _ := Load(dir)
+
+	if err := cfg.Set("aws_profile", "staging"); err != nil {
+		t.Fatalf("Set(aws_profile, staging) error: %v", err)
+	}
+	if err := Save(cfg, dir); err != nil {
+		t.Fatalf("Save() error: %v", err)
+	}
+
+	loaded, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if loaded.AWSProfile != "staging" {
+		t.Errorf("AWSProfile = %q, want %q", loaded.AWSProfile, "staging")
 	}
 }
 

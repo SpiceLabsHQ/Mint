@@ -113,19 +113,25 @@ func initAWSClients(ctx context.Context) (*awsClients, error) {
 		))
 	}
 
-	// Wire --profile flag to AWS SDK shared config profile selection.
-	// Empty string means no override; the SDK falls back to AWS_PROFILE or
-	// the default profile.
-	if cliCtx != nil && cliCtx.Profile != "" {
-		opts = append(opts, awscfg.WithSharedConfigProfile(cliCtx.Profile))
-	}
-
-	// Load mint user preferences early so we can wire the region before
-	// calling LoadDefaultConfig. This ensures the SDK uses the mint-configured
-	// region when no AWS_DEFAULT_REGION environment variable is set.
+	// Load mint user preferences early so we can wire the profile and region
+	// before calling LoadDefaultConfig. This ensures the SDK uses the
+	// mint-configured values when no environment variables are set.
 	mintCfg, err := config.Load(config.DefaultConfigDir())
 	if err != nil {
 		return nil, fmt.Errorf("load mint config: %w", err)
+	}
+
+	// Determine effective profile: --profile flag > config aws_profile > SDK default chain.
+	// The flag always takes precedence; if not set, fall back to the stored config value.
+	effectiveProfile := ""
+	if cliCtx != nil {
+		effectiveProfile = cliCtx.Profile
+	}
+	if effectiveProfile == "" {
+		effectiveProfile = mintCfg.AWSProfile
+	}
+	if effectiveProfile != "" {
+		opts = append(opts, awscfg.WithSharedConfigProfile(effectiveProfile))
 	}
 
 	// Wire the mint config region to AWS SDK region selection.

@@ -199,6 +199,80 @@ func TestInitAWSClientsRegionWiring(t *testing.T) {
 	})
 }
 
+func TestInitAWSClientsProfileFallbackPrecedence(t *testing.T) {
+	// Precedence: --profile flag > config aws_profile > SDK default.
+	// We can't inspect the loaded profile without live AWS, but we verify
+	// the code path compiles and runs without panic for each case.
+	t.Run("flag profile takes precedence over config profile", func(t *testing.T) {
+		// Both flag and config have non-empty profiles: flag wins.
+		// We set MINT_CONFIG_DIR to a temp dir so no real config is loaded.
+		dir := t.TempDir()
+		t.Setenv("MINT_CONFIG_DIR", dir)
+
+		// Write a config file with aws_profile set.
+		cfg := &config.Config{
+			InstanceType:       "m6i.xlarge",
+			VolumeSizeGB:       50,
+			VolumeIOPS:         3000,
+			IdleTimeoutMinutes: 60,
+			AWSProfile:         "config-profile",
+		}
+		if err := config.Save(cfg, dir); err != nil {
+			t.Fatalf("Save() error: %v", err)
+		}
+
+		// Flag profile should override config profile.
+		cliCtx := &cli.CLIContext{Profile: "flag-profile"}
+		ctx := cli.WithContext(context.Background(), cliCtx)
+		_, _ = initAWSClients(ctx)
+		// No panic = success
+	})
+
+	t.Run("config profile used when flag is empty", func(t *testing.T) {
+		// Flag is empty, config has aws_profile — config profile should be applied.
+		dir := t.TempDir()
+		t.Setenv("MINT_CONFIG_DIR", dir)
+
+		cfg := &config.Config{
+			InstanceType:       "m6i.xlarge",
+			VolumeSizeGB:       50,
+			VolumeIOPS:         3000,
+			IdleTimeoutMinutes: 60,
+			AWSProfile:         "config-profile",
+		}
+		if err := config.Save(cfg, dir); err != nil {
+			t.Fatalf("Save() error: %v", err)
+		}
+
+		cliCtx := &cli.CLIContext{Profile: ""}
+		ctx := cli.WithContext(context.Background(), cliCtx)
+		_, _ = initAWSClients(ctx)
+		// No panic = success; the profile is applied via WithSharedConfigProfile
+	})
+
+	t.Run("no profile applied when both flag and config are empty", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Setenv("MINT_CONFIG_DIR", dir)
+
+		// Config with empty aws_profile.
+		cfg := &config.Config{
+			InstanceType:       "m6i.xlarge",
+			VolumeSizeGB:       50,
+			VolumeIOPS:         3000,
+			IdleTimeoutMinutes: 60,
+			AWSProfile:         "",
+		}
+		if err := config.Save(cfg, dir); err != nil {
+			t.Fatalf("Save() error: %v", err)
+		}
+
+		cliCtx := &cli.CLIContext{Profile: ""}
+		ctx := cli.WithContext(context.Background(), cliCtx)
+		_, _ = initAWSClients(ctx)
+		// No panic = success; SDK default chain is used
+	})
+}
+
 func TestAWSClients_IdleTimeout(t *testing.T) {
 	t.Run("returns config value", func(t *testing.T) {
 		clients := &awsClients{
