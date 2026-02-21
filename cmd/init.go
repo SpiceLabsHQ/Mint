@@ -45,7 +45,15 @@ func runInit(cmd *cobra.Command, args []string) error {
 	// IAM is not included in the shared awsClients (it is only needed by
 	// mint init).  Create it from the default config; credentials were
 	// already validated by PersistentPreRunE so this is just client wiring.
-	awsCfg, err := awsconfig.LoadDefaultConfig(ctx)
+	var awsOpts []func(*awsconfig.LoadOptions) error
+
+	// Pass --profile so the IAM client uses the same AWS profile as the
+	// rest of the mint command invocation.
+	if cliCtx != nil && cliCtx.Profile != "" {
+		awsOpts = append(awsOpts, awsconfig.WithSharedConfigProfile(cliCtx.Profile))
+	}
+
+	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, awsOpts...)
 	if err != nil {
 		return fmt.Errorf("load AWS config: %w", err)
 	}

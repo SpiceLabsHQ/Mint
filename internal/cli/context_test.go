@@ -15,6 +15,7 @@ func newTestCommand(flags map[string]any) *cobra.Command {
 	cmd.PersistentFlags().Bool("json", false, "")
 	cmd.PersistentFlags().Bool("yes", false, "")
 	cmd.PersistentFlags().String("vm", "default", "")
+	cmd.PersistentFlags().String("profile", "", "")
 
 	// Override values by parsing args
 	var args []string
@@ -190,5 +191,46 @@ func TestFromCommandWithoutContextReturnsNil(t *testing.T) {
 	retrieved := FromCommand(cmd)
 	if retrieved != nil {
 		t.Error("FromCommand should return nil when no context is set on command")
+	}
+}
+
+func TestNewCLIContextProfileDefault(t *testing.T) {
+	cmd := newTestCommand(nil)
+	ctx := NewCLIContext(cmd)
+
+	if ctx.Profile != "" {
+		t.Errorf("Profile should default to empty string, got %q", ctx.Profile)
+	}
+}
+
+func TestNewCLIContextProfileFlag(t *testing.T) {
+	cmd := newTestCommand(map[string]any{
+		"profile": "my-aws-profile",
+	})
+	ctx := NewCLIContext(cmd)
+
+	if ctx.Profile != "my-aws-profile" {
+		t.Errorf("Profile should be %q, got %q", "my-aws-profile", ctx.Profile)
+	}
+}
+
+func TestFromContextRoundTripProfile(t *testing.T) {
+	original := &CLIContext{
+		Verbose: false,
+		Debug:   false,
+		JSON:    false,
+		Yes:     false,
+		VM:      "default",
+		Profile: "staging-profile",
+	}
+
+	goCtx := WithContext(context.Background(), original)
+	retrieved := FromContext(goCtx)
+
+	if retrieved == nil {
+		t.Fatal("FromContext returned nil")
+	}
+	if retrieved.Profile != original.Profile {
+		t.Errorf("Profile mismatch after round-trip: got %q, want %q", retrieved.Profile, original.Profile)
 	}
 }

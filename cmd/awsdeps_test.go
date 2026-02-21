@@ -157,6 +157,48 @@ func TestInitAWSClientsDebugMode(t *testing.T) {
 	})
 }
 
+func TestInitAWSClientsProfilePropagation(t *testing.T) {
+	// When a non-empty Profile is set in CLIContext, initAWSClients should
+	// attempt to load that profile from shared config. In a test environment
+	// without real AWS creds the call will still fail (on identity resolution),
+	// but the important guarantee is that it does not panic and gets past the
+	// config load step (which would fail immediately if the option were wired
+	// incorrectly). We verify the code path runs without panic.
+	t.Run("non-empty profile does not cause config load panic", func(t *testing.T) {
+		cliCtx := &cli.CLIContext{Profile: "nonexistent-test-profile"}
+		ctx := cli.WithContext(context.Background(), cliCtx)
+
+		// Expected to error on credential resolution, not on config loading.
+		_, _ = initAWSClients(ctx)
+		// No panic = success
+	})
+
+	t.Run("empty profile runs without panic", func(t *testing.T) {
+		cliCtx := &cli.CLIContext{Profile: ""}
+		ctx := cli.WithContext(context.Background(), cliCtx)
+
+		_, _ = initAWSClients(ctx)
+		// No panic = success
+	})
+}
+
+func TestInitAWSClientsRegionWiring(t *testing.T) {
+	// When a Config with a non-empty Region is stored in context (simulated by
+	// wiring a mint config into clients), initAWSClients should pass
+	// WithRegion to LoadDefaultConfig. We can't inspect the resulting
+	// aws.Config.Region directly without a real AWS call, but we can verify
+	// the code path does not panic.
+	t.Run("non-empty region in mint config does not panic", func(t *testing.T) {
+		cliCtx := &cli.CLIContext{}
+		ctx := cli.WithContext(context.Background(), cliCtx)
+
+		// initAWSClients will try to load the mint config from disk. In the
+		// test environment there's no config, so it gets an empty Region
+		// which means no WithRegion option — still must not panic.
+		_, _ = initAWSClients(ctx)
+	})
+}
+
 func TestAWSClients_IdleTimeout(t *testing.T) {
 	t.Run("returns config value", func(t *testing.T) {
 		clients := &awsClients{

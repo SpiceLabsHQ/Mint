@@ -7,6 +7,7 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	mintaws "github.com/nicholasgasior/mint/internal/aws"
+	"github.com/nicholasgasior/mint/internal/cli"
 	"github.com/nicholasgasior/mint/internal/config"
 	"github.com/spf13/cobra"
 )
@@ -41,9 +42,18 @@ func newConfigSetCommand() *cobra.Command {
 				// available. Without a region we cannot query a specific
 				// region's instance type catalog, so cfg.Set falls back to
 				// its basic check.
+				var awsOpts []func(*awsconfig.LoadOptions) error
+				awsOpts = append(awsOpts, awsconfig.WithRegion(cfg.Region))
+
+				// Pass --profile so the instance type query uses the same
+				// AWS profile as the rest of the mint command.
+				if cliCtx := cli.FromCommand(cmd); cliCtx != nil && cliCtx.Profile != "" {
+					awsOpts = append(awsOpts, awsconfig.WithSharedConfigProfile(cliCtx.Profile))
+				}
+
 				awsCfg, err := awsconfig.LoadDefaultConfig(
 					context.Background(),
-					awsconfig.WithRegion(cfg.Region),
+					awsOpts...,
 				)
 				if err == nil {
 					ec2Client := ec2.NewFromConfig(awsCfg)
@@ -61,7 +71,7 @@ func newConfigSetCommand() *cobra.Command {
 				// it with a single friendly message so the user knows exactly
 				// what to do.
 				if key == "instance_type" && isCredentialError(err) {
-					return fmt.Errorf(`cannot validate instance type: AWS credentials unavailable — run "aws configure" or set AWS_PROFILE`)
+					return fmt.Errorf(`cannot validate instance type: AWS credentials unavailable — run "aws configure", set AWS_PROFILE, or use --profile`)
 				}
 				return err
 			}

@@ -104,11 +104,35 @@ func commandNeedsAWS(cmd *cobra.Command) bool {
 func initAWSClients(ctx context.Context) (*awsClients, error) {
 	var opts []func(*awscfg.LoadOptions) error
 
+	cliCtx := cli.FromContext(ctx)
+
 	// ADR-0012: Wire --debug flag to AWS SDK request/response logging.
-	if cliCtx := cli.FromContext(ctx); cliCtx != nil && cliCtx.Debug {
+	if cliCtx != nil && cliCtx.Debug {
 		opts = append(opts, awscfg.WithClientLogMode(
 			aws.LogRequest|aws.LogResponse,
 		))
+	}
+
+	// Wire --profile flag to AWS SDK shared config profile selection.
+	// Empty string means no override; the SDK falls back to AWS_PROFILE or
+	// the default profile.
+	if cliCtx != nil && cliCtx.Profile != "" {
+		opts = append(opts, awscfg.WithSharedConfigProfile(cliCtx.Profile))
+	}
+
+	// Load mint user preferences early so we can wire the region before
+	// calling LoadDefaultConfig. This ensures the SDK uses the mint-configured
+	// region when no AWS_DEFAULT_REGION environment variable is set.
+	mintCfg, err := config.Load(config.DefaultConfigDir())
+	if err != nil {
+		return nil, fmt.Errorf("load mint config: %w", err)
+	}
+
+	// Wire the mint config region to AWS SDK region selection.
+	// An empty Region means no override; the SDK resolves region from
+	// environment variables, shared config, and EC2 instance metadata.
+	if mintCfg.Region != "" {
+		opts = append(opts, awscfg.WithRegion(mintCfg.Region))
 	}
 
 	cfg, err := awscfg.LoadDefaultConfig(ctx, opts...)
@@ -122,12 +146,6 @@ func initAWSClients(ctx context.Context) (*awsClients, error) {
 	owner, err := resolver.Resolve(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("resolve identity: %w", err)
-	}
-
-	// Load mint user preferences.
-	mintCfg, err := config.Load(config.DefaultConfigDir())
-	if err != nil {
-		return nil, fmt.Errorf("load mint config: %w", err)
 	}
 
 	return &awsClients{

@@ -487,7 +487,7 @@ func checkCredentials(ctx context.Context, deps *doctorDeps) checkResult {
 	if err != nil {
 		msg := fmt.Sprintf("could not resolve identity: %v", err)
 		if isCredentialError(err) {
-			msg = `not configured — run "aws configure" or set AWS_PROFILE`
+			msg = `not configured — run "aws configure", set AWS_PROFILE, or use --profile`
 		}
 		return checkResult{
 			name:    "AWS credentials",

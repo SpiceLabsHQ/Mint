@@ -114,6 +114,17 @@ func TestKeyHasAddSubcommand(t *testing.T) {
 	}
 }
 
+func TestProfileFlagRegistered(t *testing.T) {
+	root := NewRootCommand()
+	flag := root.PersistentFlags().Lookup("profile")
+	if flag == nil {
+		t.Fatal("expected --profile flag to be registered on root PersistentFlags")
+	}
+	if flag.DefValue != "" {
+		t.Errorf("--profile default should be empty string, got %q", flag.DefValue)
+	}
+}
+
 func TestPhase3CommandsRegistered(t *testing.T) {
 	root := NewRootCommand()
 

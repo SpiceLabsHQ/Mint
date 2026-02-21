@@ -33,7 +33,7 @@ func NewRootCommand() *cobra.Command {
 				if err != nil {
 					friendlyMsg := fmt.Sprintf("initialize AWS: %v", err)
 					if isCredentialError(err) {
-						friendlyMsg = `AWS credentials unavailable — run "aws configure" or set AWS_PROFILE`
+						friendlyMsg = `AWS credentials unavailable — run "aws configure", set AWS_PROFILE, or use --profile`
 					}
 					// In JSON mode, write structured error to stdout so machine
 					// consumers get valid JSON instead of plaintext on stderr
@@ -64,6 +64,7 @@ func NewRootCommand() *cobra.Command {
 	rootCmd.PersistentFlags().Bool("json", false, "Machine-readable JSON output")
 	rootCmd.PersistentFlags().Bool("yes", false, "Skip confirmation on destructive operations")
 	rootCmd.PersistentFlags().String("vm", "default", "Target VM name")
+	rootCmd.PersistentFlags().String("profile", "", "AWS profile name (overrides AWS_PROFILE)")
 
 	// Register subcommands
 	rootCmd.AddCommand(newVersionCommand())

@@ -18,6 +18,7 @@ type CLIContext struct {
 	JSON    bool
 	Yes     bool
 	VM      string
+	Profile string
 }
 
 // NewCLIContext extracts global flag values from a cobra command's persistent
@@ -31,6 +32,7 @@ func NewCLIContext(cmd *cobra.Command) *CLIContext {
 	jsonFlag, _ := pflags.GetBool("json")
 	yes, _ := pflags.GetBool("yes")
 	vm, _ := pflags.GetString("vm")
+	profile, _ := pflags.GetString("profile")
 
 	return &CLIContext{
 		Verbose: verbose,
@@ -38,6 +40,7 @@ func NewCLIContext(cmd *cobra.Command) *CLIContext {
 		JSON:    jsonFlag,
 		Yes:     yes,
 		VM:      vm,
+		Profile: profile,
 	}
 }
 
