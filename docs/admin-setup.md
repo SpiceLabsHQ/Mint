@@ -203,7 +203,7 @@ Allows VMs to write structured logs to CloudWatch under the `/mint/` log group p
 | `/mint/bootstrap` | Bootstrap script (`scripts/bootstrap.sh`) — instance initialization events |
 | `/mint/idle-detection` | Idle detector systemd timer — session checks and auto-stop decisions |
 
-The IAM resource ARN `arn:aws:logs:REGION:ACCOUNT_ID:log-group:/mint/*` uses a single-level wildcard. This covers `/mint/bootstrap` and `/mint/idle-detection` but would not cover a path like `/mint/foo/bar` (two levels below `/mint/`). All current and planned Mint log groups are one level deep, so no policy change is needed as components are added.
+The IAM resource ARN `arn:aws:logs:REGION:ACCOUNT_ID:log-group:/mint/*` covers any log group path starting with `/mint/` — in AWS IAM, `*` matches any character sequence including `/`, so `/mint/foo/bar` would also be covered. By convention, Mint uses single-level paths (`/mint/<component>`); the expected log groups are `/mint/bootstrap` and `/mint/idle-detection`.
 
 ### Security model and scoping
 
