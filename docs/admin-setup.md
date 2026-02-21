@@ -39,8 +39,7 @@ aws cloudformation deploy \
     Subnet1="subnet-aaaa1111" \
     Subnet2="subnet-bbbb2222" \
     Subnet3="subnet-cccc3333" \
-    Subnet4="subnet-dddd4444"
-    # Add Subnet4+ for 4-AZ regions (us-west-2, us-east-1 have 4)
+    Subnet4="subnet-dddd4444"  # 4-AZ example; add Subnet5/Subnet6 for regions with more AZs (e.g. us-east-1 has 6)
 ```
 
 Replace the subnet IDs with the values from the previous command. Only `Subnet1` is required; provide as many as your region has (up to 6). EFS mount targets are created in each subnet so VMs in any AZ can access the filesystem.
