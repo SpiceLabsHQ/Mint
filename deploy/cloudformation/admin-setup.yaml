@@ -146,6 +146,11 @@ Resources:
       InstanceProfileName: mint-instance-profile
       Roles:
         - !Ref MintInstanceRole
+      Tags:
+        - Key: mint
+          Value: "true"
+        - Key: "mint:component"
+          Value: admin
 
   # ---------------------------------------------------------------------------
   # EFS Filesystem — persistent storage for user configuration (ADR-0004).
