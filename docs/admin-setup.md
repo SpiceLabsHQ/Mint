@@ -76,7 +76,14 @@ aws iam get-instance-profile \
 aws efs describe-file-systems \
   --query 'FileSystems[?Name==`mint-efs`].[FileSystemId,LifeCycleState]' \
   --output table
+```
 
+> **Note:** `describe-file-systems` does not return lifecycle policy information — the
+> `LifecyclePolicies` field does not exist in this API's response, so any JMESPath query
+> for it returns `null`. Use `describe-lifecycle-configuration` to read the actual
+> lifecycle configuration.
+
+```bash
 # EFS lifecycle policy — use describe-lifecycle-configuration (separate API from describe-file-systems)
 # Expected output: {"LifecyclePolicies":[{"TransitionToIA":"AFTER_30_DAYS"}]}
 EFS_ID=$(aws efs describe-file-systems \
