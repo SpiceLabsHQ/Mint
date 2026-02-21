@@ -39,8 +39,7 @@ aws cloudformation deploy \
     Subnet1="subnet-aaaa1111" \
     Subnet2="subnet-bbbb2222" \
     Subnet3="subnet-cccc3333" \
-    Subnet4="subnet-dddd4444"
-    # Add Subnet4+ for 4-AZ regions (us-west-2, us-east-1 have 4)
+    Subnet4="subnet-dddd4444"  # 4-AZ example; add Subnet5/Subnet6 for regions with more AZs (e.g. us-east-1 has 6)
 ```
 
 Replace the subnet IDs with the values from the previous command. Only `Subnet1` is required; provide as many as your region has (up to 6). EFS mount targets are created in each subnet so VMs in any AZ can access the filesystem.
@@ -77,7 +76,14 @@ aws iam get-instance-profile \
 aws efs describe-file-systems \
   --query 'FileSystems[?Name==`mint-efs`].[FileSystemId,LifeCycleState]' \
   --output table
+```
 
+> **Note:** `describe-file-systems` does not return lifecycle policy information — the
+> `LifecyclePolicies` field does not exist in this API's response, so any JMESPath query
+> for it returns `null`. Use `describe-lifecycle-configuration` to read the actual
+> lifecycle configuration.
+
+```bash
 # EFS lifecycle policy — use describe-lifecycle-configuration (separate API from describe-file-systems)
 # Expected output: {"LifecyclePolicies":[{"TransitionToIA":"AFTER_30_DAYS"}]}
 EFS_ID=$(aws efs describe-file-systems \
