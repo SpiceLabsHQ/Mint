@@ -1886,3 +1886,125 @@ func TestProvisionerNilLoggerNoChange(t *testing.T) {
 		t.Errorf("result.InstanceID = %q, want %q", result.InstanceID, "i-new123")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Tests: handleExistingVM bootstrap status checking (fix for #97)
+// ---------------------------------------------------------------------------
+
+func runningVMInstance(instanceID, publicIP, bootstrapStatus string) *ec2.DescribeInstancesOutput {
+	tags := []ec2types.Tag{
+		{Key: aws.String("mint:vm"), Value: aws.String("default")},
+		{Key: aws.String("mint:owner"), Value: aws.String("alice")},
+	}
+	if bootstrapStatus != "" {
+		tags = append(tags, ec2types.Tag{
+			Key:   aws.String("mint:bootstrap"),
+			Value: aws.String(bootstrapStatus),
+		})
+	}
+	return &ec2.DescribeInstancesOutput{
+		Reservations: []ec2types.Reservation{{
+			Instances: []ec2types.Instance{{
+				InstanceId:      aws.String(instanceID),
+				InstanceType:    ec2types.InstanceTypeM6iXlarge,
+				PublicIpAddress: aws.String(publicIP),
+				State: &ec2types.InstanceState{
+					Name: ec2types.InstanceStateNameRunning,
+				},
+				Tags: tags,
+			}},
+		}},
+	}
+}
+
+func TestHandleExistingVMBootstrapComplete(t *testing.T) {
+	m := newUpHappyMocks()
+	m.describeInstances.output = runningVMInstance("i-running1", "54.0.0.2", "complete")
+	p := m.build()
+
+	result, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", defaultConfig())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.InstanceID != "i-running1" {
+		t.Errorf("InstanceID = %q, want %q", result.InstanceID, "i-running1")
+	}
+	if result.BootstrapError != nil {
+		t.Errorf("BootstrapError should be nil for complete bootstrap, got: %v", result.BootstrapError)
+	}
+	if !result.AlreadyRunning {
+		t.Error("AlreadyRunning should be true for existing running VM")
+	}
+}
+
+func TestHandleExistingVMBootstrapPending(t *testing.T) {
+	m := newUpHappyMocks()
+	m.describeInstances.output = runningVMInstance("i-running1", "54.0.0.2", "pending")
+	p := m.build()
+
+	result, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", defaultConfig())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.InstanceID != "i-running1" {
+		t.Errorf("InstanceID = %q, want %q", result.InstanceID, "i-running1")
+	}
+	// Pending bootstrap must NOT set BootstrapError — that's for failed only.
+	// But AlreadyRunning must be true so printUpHuman knows to show in-progress message.
+	if !result.AlreadyRunning {
+		t.Error("AlreadyRunning should be true for existing running VM")
+	}
+	// BootstrapStatus must be surfaced so the caller can distinguish pending from complete.
+	if result.BootstrapStatus != "pending" {
+		t.Errorf("BootstrapStatus = %q, want %q", result.BootstrapStatus, "pending")
+	}
+}
+
+func TestHandleExistingVMBootstrapFailed(t *testing.T) {
+	m := newUpHappyMocks()
+	m.describeInstances.output = runningVMInstance("i-running1", "54.0.0.2", "failed")
+	p := m.build()
+
+	result, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", defaultConfig())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.InstanceID != "i-running1" {
+		t.Errorf("InstanceID = %q, want %q", result.InstanceID, "i-running1")
+	}
+	if !result.AlreadyRunning {
+		t.Error("AlreadyRunning should be true for existing running VM")
+	}
+	if result.BootstrapError == nil {
+		t.Fatal("BootstrapError should be non-nil for failed bootstrap")
+	}
+	if !strings.Contains(result.BootstrapError.Error(), "bootstrap failed") {
+		t.Errorf("BootstrapError = %q, want substring %q", result.BootstrapError.Error(), "bootstrap failed")
+	}
+	if !strings.Contains(result.BootstrapError.Error(), "mint recreate") {
+		t.Errorf("BootstrapError = %q, should mention 'mint recreate'", result.BootstrapError.Error())
+	}
+}
+
+func TestHandleExistingVMBootstrapStatusEmpty(t *testing.T) {
+	// When the bootstrap tag is absent (e.g. very old VM), treat as pending.
+	m := newUpHappyMocks()
+	m.describeInstances.output = runningVMInstance("i-running1", "54.0.0.2", "")
+	p := m.build()
+
+	result, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", defaultConfig())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !result.AlreadyRunning {
+		t.Error("AlreadyRunning should be true for existing running VM")
+	}
+	// No error — unknown status is treated as pending, not failed.
+	if result.BootstrapError != nil {
+		t.Errorf("BootstrapError should be nil for unknown/empty bootstrap status, got: %v", result.BootstrapError)
+	}
+}
