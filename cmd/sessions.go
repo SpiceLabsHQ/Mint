@@ -116,6 +116,13 @@ func runSessions(cmd *cobra.Command, deps *sessionsDeps) error {
 		if isTmuxNoSessionsError(err) {
 			return writeSessionsOutput(cmd.OutOrStdout(), nil, jsonOutput)
 		}
+		if isSSHConnectionError(err) {
+			return fmt.Errorf(
+				"cannot connect to VM %q (port 41122 refused).\n"+
+					"Bootstrap may be incomplete — run 'mint doctor' for details.",
+				vmName,
+			)
+		}
 		return fmt.Errorf("listing tmux sessions: %w", err)
 	}
 

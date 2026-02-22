@@ -32,6 +32,74 @@ func (m *mockSendKeyForRemote) SendSSHPublicKey(ctx context.Context, params *ec2
 // Verify interface compliance at compile time.
 var _ mintaws.SendSSHPublicKeyAPI = (*mockSendKeyForRemote)(nil)
 
+// --- isSSHConnectionError tests ---
+
+func TestIsSSHConnectionError(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{
+			// SSH connection-refused errors include both "exit status 255" and
+			// "Connection refused" in the message. The discriminating signal is
+			// "Connection refused", not the exit code alone.
+			name:     "exit status 255 with Connection refused in error string",
+			err:      fmt.Errorf("remote command failed: exit status 255 (stderr: ssh: connect to host 1.2.3.4 port 41122: Connection refused)"),
+			expected: true,
+		},
+		{
+			name:     "Connection refused in stderr",
+			err:      fmt.Errorf("remote command failed: exit status 255 (stderr: ssh: connect to host 10.0.0.1 port 41122: Connection refused)"),
+			expected: true,
+		},
+		{
+			name:     "Connection timed out in stderr",
+			err:      fmt.Errorf("remote command failed: exit status 255 (stderr: ssh: connect to host 10.0.0.1 port 41122: Connection timed out)"),
+			expected: true,
+		},
+		{
+			name:     "Connection refused without exit status 255",
+			err:      fmt.Errorf("some other error: Connection refused"),
+			expected: true,
+		},
+		{
+			name:     "Connection timed out without exit status 255",
+			err:      fmt.Errorf("Connection timed out"),
+			expected: true,
+		},
+		{
+			name:     "auth failure error is not SSH connection error",
+			err:      fmt.Errorf("remote command failed: exit status 255 (stderr: ubuntu@1.2.3.4: Permission denied (publickey))"),
+			expected: false,
+		},
+		{
+			name:     "generic remote command error is not SSH connection error",
+			err:      fmt.Errorf("remote command failed: exit status 1"),
+			expected: false,
+		},
+		{
+			name:     "nil error returns false",
+			err:      nil,
+			expected: false,
+		},
+		{
+			name:     "unrelated error returns false",
+			err:      fmt.Errorf("something completely unrelated"),
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isSSHConnectionError(tt.err)
+			if got != tt.expected {
+				t.Errorf("isSSHConnectionError(%v) = %v, want %v", tt.err, got, tt.expected)
+			}
+		})
+	}
+}
+
 func TestRemoteCommandRunnerType(t *testing.T) {
 	// Verify that defaultRemoteRunner satisfies the RemoteCommandRunner type.
 	var runner RemoteCommandRunner = defaultRemoteRunner

@@ -1343,6 +1343,76 @@ func TestDoctorSSHConfigMissingHelpfulMessage(t *testing.T) {
 	}
 }
 
+// TestDoctorSSHConnectionErrorWrapped verifies that when SSH commands fail with
+// a connection-refused error (port 41122), the doctor check result message
+// includes bootstrap-aware context rather than a raw SSH error.
+func TestDoctorSSHConnectionErrorWrapped(t *testing.T) {
+	deps, _ := newHappyDoctorDepsWithVM(t)
+	sshConnErr := fmt.Errorf("remote command failed: exit status 255 (stderr: ssh: connect to host 1.2.3.4 port 41122: Connection refused)")
+	runner := &mockDoctorRemoteRunner{
+		responses: map[string]mockRemoteResponse{
+			"df":           {err: sshConnErr},
+			"docker":       {err: sshConnErr},
+			"devcontainer": {err: sshConnErr},
+			"tmux":         {err: sshConnErr},
+			"mosh-server":  {err: sshConnErr},
+		},
+	}
+	deps.remoteRun = runner.run
+
+	buf := new(bytes.Buffer)
+	cmd := newDoctorCommandWithDeps(deps)
+	root := newDoctorTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"doctor"})
+
+	_ = root.Execute()
+
+	output := buf.String()
+
+	// Disk usage check should mention bootstrap/connection context, not raw error.
+	if !strings.Contains(output, "port 41122 refused") {
+		t.Errorf("expected 'port 41122 refused' in disk check output, got: %s", output)
+	}
+	// Should mention mint doctor for guidance.
+	if !strings.Contains(output, "mint doctor") {
+		t.Errorf("expected 'mint doctor' in connection error output, got: %s", output)
+	}
+}
+
+// TestDoctorSSHConnectionTimedOutWrapped verifies that a "Connection timed out"
+// SSH error is also wrapped with bootstrap-aware context in doctor checks.
+func TestDoctorSSHConnectionTimedOutWrapped(t *testing.T) {
+	deps, _ := newHappyDoctorDepsWithVM(t)
+	sshConnErr := fmt.Errorf("remote command failed: exit status 255 (stderr: ssh: connect to host 1.2.3.4 port 41122: Connection timed out)")
+	runner := &mockDoctorRemoteRunner{
+		responses: map[string]mockRemoteResponse{
+			"df":           {err: sshConnErr},
+			"docker":       {err: sshConnErr},
+			"devcontainer": {err: sshConnErr},
+			"tmux":         {err: sshConnErr},
+			"mosh-server":  {err: sshConnErr},
+		},
+	}
+	deps.remoteRun = runner.run
+
+	buf := new(bytes.Buffer)
+	cmd := newDoctorCommandWithDeps(deps)
+	root := newDoctorTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"doctor"})
+
+	_ = root.Execute()
+
+	output := buf.String()
+
+	if !strings.Contains(output, "port 41122 refused") {
+		t.Errorf("expected 'port 41122 refused' in timed-out connection output, got: %s", output)
+	}
+}
+
 // TestErrorIdentityResolverReturnsError verifies the new errorIdentityResolver
 // implementation used by doctor in the no-credentials path.
 func TestErrorIdentityResolverReturnsError(t *testing.T) {

@@ -151,6 +151,13 @@ func runExtend(cmd *cobra.Command, deps *extendDeps, args []string) error {
 		remoteCmd,
 	)
 	if err != nil {
+		if isSSHConnectionError(err) {
+			return fmt.Errorf(
+				"cannot connect to VM %q (port 41122 refused).\n"+
+					"Bootstrap may be incomplete — run 'mint doctor' for details.",
+				vmName,
+			)
+		}
 		return fmt.Errorf("extending idle timer: %w", err)
 	}
 
