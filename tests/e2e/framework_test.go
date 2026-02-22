@@ -86,14 +86,41 @@ func (s *stubStopInstances) StopInstances(ctx context.Context, params *ec2.StopI
 	return &ec2.StopInstancesOutput{}, nil
 }
 
-// stubRunInstances returns one instance with the configured ID.
+// stubRunInstances returns one instance with the configured ID and a BDM volume.
 type stubRunInstances struct {
 	instanceID string
+	volumeID   string
 }
 
 func (s *stubRunInstances) RunInstances(ctx context.Context, params *ec2.RunInstancesInput, optFns ...func(*ec2.Options)) (*ec2.RunInstancesOutput, error) {
 	return &ec2.RunInstancesOutput{
-		Instances: []ec2types.Instance{{InstanceId: aws.String(s.instanceID)}},
+		Instances: []ec2types.Instance{{
+			InstanceId: aws.String(s.instanceID),
+			BlockDeviceMappings: []ec2types.InstanceBlockDeviceMapping{{
+				DeviceName: aws.String("/dev/xvdf"),
+				Ebs: &ec2types.EbsInstanceBlockDevice{VolumeId: aws.String(s.volumeID)},
+			}},
+		}},
+	}, nil
+}
+
+// captureRunInstances records the RunInstances input for IOPS assertion.
+type captureRunInstances struct {
+	instanceID string
+	volumeID   string
+	lastInput  *ec2.RunInstancesInput
+}
+
+func (c *captureRunInstances) RunInstances(ctx context.Context, params *ec2.RunInstancesInput, optFns ...func(*ec2.Options)) (*ec2.RunInstancesOutput, error) {
+	c.lastInput = params
+	return &ec2.RunInstancesOutput{
+		Instances: []ec2types.Instance{{
+			InstanceId: aws.String(c.instanceID),
+			BlockDeviceMappings: []ec2types.InstanceBlockDeviceMapping{{
+				DeviceName: aws.String("/dev/xvdf"),
+				Ebs: &ec2types.EbsInstanceBlockDevice{VolumeId: aws.String(c.volumeID)},
+			}},
+		}},
 	}, nil
 }
 
@@ -251,7 +278,7 @@ func newFreshProvisioner(instanceID, volumeID, allocationID, publicIP string) *p
 	p := provision.NewProvisioner(
 		&stubDescribeInstances{output: &ec2.DescribeInstancesOutput{}},
 		&stubStartInstances{},
-		&stubRunInstances{instanceID: instanceID},
+		&stubRunInstances{instanceID: instanceID, volumeID: volumeID},
 		&stubDescribeSGsDouble{},
 		&stubDescribeSubnets{},
 		&stubCreateVolume{volumeID: volumeID},
@@ -297,17 +324,17 @@ func newRestartProvisioner(instanceID, vmName, owner, publicIP string) *provisio
 	return p
 }
 
-// newFreshProvisionerWithVolume is like newFreshProvisioner but accepts a
-// caller-owned stubCreateVolume so the caller can inspect lastInput after the
-// provision completes (e.g., to assert IOPS values).
-func newFreshProvisionerWithVolume(instanceID string, volume *stubCreateVolume, allocationID, publicIP string) *provision.Provisioner {
+// newFreshProvisionerCapturingRun is like newFreshProvisioner but accepts a
+// caller-owned captureRunInstances so the caller can inspect lastInput after
+// the provision completes (e.g., to assert IOPS in BlockDeviceMappings).
+func newFreshProvisionerCapturingRun(ri *captureRunInstances, allocationID, publicIP string) *provision.Provisioner {
 	p := provision.NewProvisioner(
 		&stubDescribeInstances{output: &ec2.DescribeInstancesOutput{}},
 		&stubStartInstances{},
-		&stubRunInstances{instanceID: instanceID},
+		ri,
 		&stubDescribeSGsDouble{},
 		&stubDescribeSubnets{},
-		volume,
+		&stubCreateVolume{volumeID: ri.volumeID},
 		&stubAttachVolume{},
 		&stubAllocateAddress{allocationID: allocationID, publicIP: publicIP},
 		&stubAssociateAddress{},

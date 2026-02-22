@@ -433,9 +433,12 @@ func TestWorkflow_ProvisionWithCustomIOPS(t *testing.T) {
 		owner        = "e2e-user"
 	)
 
-	volumeStub := &stubCreateVolume{volumeID: "vol-e2e-iops"}
+	ri := &captureRunInstances{
+		instanceID: instanceID,
+		volumeID:   "vol-e2e-iops",
+	}
 
-	p := newFreshProvisionerWithVolume(instanceID, volumeStub, allocationID, publicIP)
+	p := newFreshProvisionerCapturingRun(ri, allocationID, publicIP)
 	cfg := &e2eConfig{
 		provisioner:         p,
 		describeFileSystems: &stubDescribeFileSystems{filesystemID: "fs-e2e-iops"},
@@ -468,15 +471,19 @@ func TestWorkflow_ProvisionWithCustomIOPS(t *testing.T) {
 		t.Errorf("mint up --volume-iops 6000: output missing instance ID %q\noutput:\n%s", instanceID, stdout)
 	}
 
-	// The CreateVolume stub must have been called with Iops = 6000.
-	if volumeStub.lastInput == nil {
-		t.Fatal("CreateVolume was not called — cannot verify IOPS")
+	// The RunInstances input must contain BlockDeviceMappings with Iops = 6000.
+	if ri.lastInput == nil {
+		t.Fatal("RunInstances was not called — cannot verify IOPS")
 	}
-	if volumeStub.lastInput.Iops == nil {
-		t.Fatal("CreateVolumeInput.Iops is nil; expected aws.Int32(6000)")
+	if len(ri.lastInput.BlockDeviceMappings) == 0 {
+		t.Fatal("RunInstances: no BlockDeviceMappings; expected project EBS in BDM")
 	}
-	if got := aws.ToInt32(volumeStub.lastInput.Iops); got != 6000 {
-		t.Errorf("CreateVolumeInput.Iops = %d, want 6000", got)
+	bdm := ri.lastInput.BlockDeviceMappings[0]
+	if bdm.Ebs == nil {
+		t.Fatal("BlockDeviceMappings[0].Ebs is nil")
+	}
+	if got := aws.ToInt32(bdm.Ebs.Iops); got != 6000 {
+		t.Errorf("BlockDeviceMappings[0].Ebs.Iops = %d, want 6000", got)
 	}
 }
 

@@ -160,9 +160,13 @@ func newTestProvisioner() *provision.Provisioner {
 		&stubUpDescribeInstances{output: &ec2.DescribeInstancesOutput{}},
 		&stubUpStartInstances{output: &ec2.StartInstancesOutput{}},
 		&stubUpRunInstances{output: &ec2.RunInstancesOutput{
-			Instances: []ec2types.Instance{
-				{InstanceId: aws.String("i-test123")},
-			},
+			Instances: []ec2types.Instance{{
+				InstanceId: aws.String("i-test123"),
+				BlockDeviceMappings: []ec2types.InstanceBlockDeviceMapping{{
+					DeviceName: aws.String("/dev/xvdf"),
+					Ebs: &ec2types.EbsInstanceBlockDevice{VolumeId: aws.String("vol-test")},
+				}},
+			}},
 		}},
 		&stubUpDescribeSGs{
 			outputs: []*ec2.DescribeSecurityGroupsOutput{
@@ -892,9 +896,13 @@ func newTestProvisionerWithCreateVolume(cv *captureCreateVolume) *provision.Prov
 		&stubUpDescribeInstances{output: &ec2.DescribeInstancesOutput{}},
 		&stubUpStartInstances{output: &ec2.StartInstancesOutput{}},
 		&stubUpRunInstances{output: &ec2.RunInstancesOutput{
-			Instances: []ec2types.Instance{
-				{InstanceId: aws.String("i-test123")},
-			},
+			Instances: []ec2types.Instance{{
+				InstanceId: aws.String("i-test123"),
+				BlockDeviceMappings: []ec2types.InstanceBlockDeviceMapping{{
+					DeviceName: aws.String("/dev/xvdf"),
+					Ebs: &ec2types.EbsInstanceBlockDevice{VolumeId: aws.String("vol-iops")},
+				}},
+			}},
 		}},
 		&stubUpDescribeSGs{
 			outputs: []*ec2.DescribeSecurityGroupsOutput{
@@ -910,6 +918,56 @@ func newTestProvisionerWithCreateVolume(cv *captureCreateVolume) *provision.Prov
 			}},
 		}},
 		cv,
+		&stubUpAttachVolume{output: &ec2.AttachVolumeOutput{}},
+		&stubUpAllocateAddress{output: &ec2.AllocateAddressOutput{
+			AllocationId: aws.String("eipalloc-test"),
+			PublicIp:     aws.String("54.10.20.30"),
+		}},
+		&stubUpAssociateAddress{output: &ec2.AssociateAddressOutput{}},
+		&stubUpDescribeAddresses{output: &ec2.DescribeAddressesOutput{
+			Addresses: []ec2types.Address{},
+		}},
+		&stubUpCreateTags{output: &ec2.CreateTagsOutput{}},
+		&stubUpDescribeImages{output: &ec2.DescribeImagesOutput{}},
+	)
+	p.WithBootstrapVerifier(func(content []byte) error { return nil })
+	p.WithAMIResolver(func(ctx context.Context, client mintaws.DescribeImagesAPI) (string, error) {
+		return "ami-test", nil
+	})
+	return p
+}
+
+// captureRunInstances records RunInstances input for IOPS assertion.
+type captureRunInstances struct {
+	output *ec2.RunInstancesOutput
+	err    error
+	input  *ec2.RunInstancesInput
+}
+
+func (c *captureRunInstances) RunInstances(ctx context.Context, params *ec2.RunInstancesInput, optFns ...func(*ec2.Options)) (*ec2.RunInstancesOutput, error) {
+	c.input = params
+	return c.output, c.err
+}
+
+func newTestProvisionerCapturingRun(ri *captureRunInstances) *provision.Provisioner {
+	p := provision.NewProvisioner(
+		&stubUpDescribeInstances{output: &ec2.DescribeInstancesOutput{}},
+		&stubUpStartInstances{output: &ec2.StartInstancesOutput{}},
+		ri,
+		&stubUpDescribeSGs{
+			outputs: []*ec2.DescribeSecurityGroupsOutput{
+				{SecurityGroups: []ec2types.SecurityGroup{{GroupId: aws.String("sg-user")}}},
+				{SecurityGroups: []ec2types.SecurityGroup{{GroupId: aws.String("sg-admin")}}},
+			},
+			errs: []error{nil, nil},
+		},
+		&stubUpDescribeSubnets{output: &ec2.DescribeSubnetsOutput{
+			Subnets: []ec2types.Subnet{{
+				SubnetId:         aws.String("subnet-test"),
+				AvailabilityZone: aws.String("us-east-1a"),
+			}},
+		}},
+		&stubUpCreateVolume{output: &ec2.CreateVolumeOutput{VolumeId: aws.String("vol-iops")}},
 		&stubUpAttachVolume{output: &ec2.AttachVolumeOutput{}},
 		&stubUpAllocateAddress{output: &ec2.AllocateAddressOutput{
 			AllocationId: aws.String("eipalloc-test"),
@@ -963,7 +1021,7 @@ func TestUpCommandVolumeIOPSFlagOverridesConfig(t *testing.T) {
 
 func TestUpCommandVolumeIOPSDefault(t *testing.T) {
 	// When volumeIOPS is 0 in deps (no config, no flag), the provisioner
-	// defaults it to 3000 internally.
+	// defaults it to 3000 internally (passed via BlockDeviceMappings in RunInstances).
 	buf := new(bytes.Buffer)
 	cmd := &cobra.Command{}
 	cmd.SetOut(buf)
@@ -972,10 +1030,18 @@ func TestUpCommandVolumeIOPSDefault(t *testing.T) {
 	ctx := cli.WithContext(context.Background(), cliCtx)
 	cmd.SetContext(ctx)
 
-	cv := &captureCreateVolume{output: &ec2.CreateVolumeOutput{VolumeId: aws.String("vol-iops")}}
+	ri := &captureRunInstances{output: &ec2.RunInstancesOutput{
+		Instances: []ec2types.Instance{{
+			InstanceId: aws.String("i-test123"),
+			BlockDeviceMappings: []ec2types.InstanceBlockDeviceMapping{{
+				DeviceName: aws.String("/dev/xvdf"),
+				Ebs: &ec2types.EbsInstanceBlockDevice{VolumeId: aws.String("vol-iops")},
+			}},
+		}},
+	}}
 
 	deps := &upDeps{
-		provisioner:         newTestProvisionerWithCreateVolume(cv),
+		provisioner:         newTestProvisionerCapturingRun(ri),
 		owner:               "testuser",
 		ownerARN:            "arn:aws:iam::123:user/testuser",
 		bootstrapScript:     []byte("#!/bin/bash"),
@@ -990,16 +1056,19 @@ func TestUpCommandVolumeIOPSDefault(t *testing.T) {
 		t.Fatalf("runUp error: %v", err)
 	}
 
-	if cv.input == nil {
-		t.Fatal("CreateVolume was not called")
+	if ri.input == nil {
+		t.Fatal("RunInstances was not called")
 	}
-	if aws.ToInt32(cv.input.Iops) != 3000 {
-		t.Errorf("Iops = %d, want 3000 (default when volumeIOPS is 0)", aws.ToInt32(cv.input.Iops))
+	if len(ri.input.BlockDeviceMappings) == 0 {
+		t.Fatal("RunInstances: no BlockDeviceMappings")
+	}
+	if got := aws.ToInt32(ri.input.BlockDeviceMappings[0].Ebs.Iops); got != 3000 {
+		t.Errorf("BDM Iops = %d, want 3000 (default when volumeIOPS is 0)", got)
 	}
 }
 
 func TestUpCommandVolumeIOPSFromDeps(t *testing.T) {
-	// When volumeIOPS is set in deps, it is passed through to CreateVolumeInput.
+	// When volumeIOPS is set in deps, it is passed through to BlockDeviceMappings in RunInstances.
 	buf := new(bytes.Buffer)
 	cmd := &cobra.Command{}
 	cmd.SetOut(buf)
@@ -1008,10 +1077,18 @@ func TestUpCommandVolumeIOPSFromDeps(t *testing.T) {
 	ctx := cli.WithContext(context.Background(), cliCtx)
 	cmd.SetContext(ctx)
 
-	cv := &captureCreateVolume{output: &ec2.CreateVolumeOutput{VolumeId: aws.String("vol-iops")}}
+	ri := &captureRunInstances{output: &ec2.RunInstancesOutput{
+		Instances: []ec2types.Instance{{
+			InstanceId: aws.String("i-test123"),
+			BlockDeviceMappings: []ec2types.InstanceBlockDeviceMapping{{
+				DeviceName: aws.String("/dev/xvdf"),
+				Ebs: &ec2types.EbsInstanceBlockDevice{VolumeId: aws.String("vol-iops")},
+			}},
+		}},
+	}}
 
 	deps := &upDeps{
-		provisioner:         newTestProvisionerWithCreateVolume(cv),
+		provisioner:         newTestProvisionerCapturingRun(ri),
 		owner:               "testuser",
 		ownerARN:            "arn:aws:iam::123:user/testuser",
 		bootstrapScript:     []byte("#!/bin/bash"),
@@ -1026,11 +1103,14 @@ func TestUpCommandVolumeIOPSFromDeps(t *testing.T) {
 		t.Fatalf("runUp error: %v", err)
 	}
 
-	if cv.input == nil {
-		t.Fatal("CreateVolume was not called")
+	if ri.input == nil {
+		t.Fatal("RunInstances was not called")
 	}
-	if aws.ToInt32(cv.input.Iops) != 6000 {
-		t.Errorf("Iops = %d, want 6000", aws.ToInt32(cv.input.Iops))
+	if len(ri.input.BlockDeviceMappings) == 0 {
+		t.Fatal("RunInstances: no BlockDeviceMappings")
+	}
+	if got := aws.ToInt32(ri.input.BlockDeviceMappings[0].Ebs.Iops); got != 6000 {
+		t.Errorf("BDM Iops = %d, want 6000", got)
 	}
 }
 

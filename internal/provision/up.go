@@ -229,13 +229,39 @@ func (p *Provisioner) Run(ctx context.Context, owner, ownerARN, vmName string, c
 		return nil, fmt.Errorf("finding subnet: %w", err)
 	}
 
+	// Step 7.5: Check for a pending-attach volume BEFORE launch so we know
+	// whether to include BlockDeviceMappings in RunInstances.
+	pendingVolID, pendingVolAZ, pendingErr := p.findPendingAttachVolume(ctx, owner, vmName)
+	if pendingErr != nil {
+		return nil, fmt.Errorf("checking pending-attach volumes: %w", pendingErr)
+	}
+
+	volumeSize := cfg.VolumeSize
+	if volumeSize == 0 {
+		volumeSize = 50
+	}
+	volumeIOPS := cfg.VolumeIOPS
+	if volumeIOPS == 0 {
+		volumeIOPS = 3000
+	}
+
+	// For fresh provisions, create the project EBS via BlockDeviceMappings so
+	// the device is attached before user-data runs (eliminates the race where
+	// bootstrap reaches the EBS step before the volume is attached).
+	// For pending-attach recovery, skip BDM and attach the existing volume after launch.
+	launchVolSize, launchVolIOPS := volumeSize, volumeIOPS
+	if pendingVolID != "" {
+		launchVolSize = 0
+		launchVolIOPS = 0
+	}
+
 	// Step 8: Launch EC2 instance.
-	instanceID, err := p.launchInstance(ctx, amiID, cfg, userSGID, adminSGID, subnetID, owner, ownerARN, vmName)
+	instanceID, bdmVolumeID, err := p.launchInstance(ctx, amiID, cfg, userSGID, adminSGID, subnetID, owner, ownerARN, vmName, launchVolSize, launchVolIOPS)
 	if err != nil {
 		return nil, fmt.Errorf("launching instance: %w", err)
 	}
 
-	// Step 9: Wait for instance to reach running state before attaching EBS.
+	// Step 9: Wait for instance to reach running state.
 	if p.waitRunning != nil {
 		if err := p.waitRunning.Wait(ctx, &ec2.DescribeInstancesInput{
 			InstanceIds: []string{instanceID},
@@ -244,22 +270,10 @@ func (p *Provisioner) Run(ctx context.Context, owner, ownerARN, vmName string, c
 		}
 	}
 
-	// Step 10: Create and attach project EBS volume.
-	// Check for a pending-attach volume first (crash recovery from mint recreate).
-	volumeSize := cfg.VolumeSize
-	if volumeSize == 0 {
-		volumeSize = 50
-	}
-
+	// Step 10: Handle project EBS volume.
 	var volumeID string
-	pendingVolID, pendingVolAZ, pendingErr := p.findPendingAttachVolume(ctx, owner, vmName)
-	if pendingErr != nil {
-		return nil, fmt.Errorf("checking pending-attach volumes: %w", pendingErr)
-	}
-
 	if pendingVolID != "" {
-		// Found a pending-attach volume from a previous recreate.
-		// Verify AZ match before attaching.
+		// Attach the pending-attach volume from a previous mint recreate.
 		if pendingVolAZ != az {
 			return nil, fmt.Errorf(
 				"pending-attach volume %s is in %s but instance launched in %s — "+
@@ -267,8 +281,6 @@ func (p *Provisioner) Run(ctx context.Context, owner, ownerARN, vmName string, c
 				pendingVolID, pendingVolAZ, az,
 			)
 		}
-
-		// Attach the existing volume instead of creating a new one.
 		_, attachErr := p.attachVolume.AttachVolume(ctx, &ec2.AttachVolumeInput{
 			VolumeId:   aws.String(pendingVolID),
 			InstanceId: aws.String(instanceID),
@@ -277,8 +289,6 @@ func (p *Provisioner) Run(ctx context.Context, owner, ownerARN, vmName string, c
 		if attachErr != nil {
 			return nil, fmt.Errorf("attaching pending-attach volume %s to %s: %w", pendingVolID, instanceID, attachErr)
 		}
-
-		// Remove the pending-attach tag via DeleteTags.
 		if p.deleteTags != nil {
 			_, delErr := p.deleteTags.DeleteTags(ctx, &ec2.DeleteTagsInput{
 				Resources: []string{pendingVolID},
@@ -290,18 +300,21 @@ func (p *Provisioner) Run(ctx context.Context, owner, ownerARN, vmName string, c
 				return nil, fmt.Errorf("removing pending-attach tag from %s: %w", pendingVolID, delErr)
 			}
 		}
-
 		volumeID = pendingVolID
 	} else {
-		// No pending-attach volume — create a new one.
-		volumeIOPS := cfg.VolumeIOPS
-		if volumeIOPS == 0 {
-			volumeIOPS = 3000
+		// Volume was created via BlockDeviceMappings at launch.
+		volumeID = bdmVolumeID
+		if volumeID == "" {
+			// Fallback: BDM volume ID not yet populated in RunInstances response;
+			// describe the running instance to get it.
+			var getErr error
+			volumeID, getErr = p.getBDMVolumeID(ctx, instanceID)
+			if getErr != nil {
+				return nil, fmt.Errorf("getting project volume ID for instance %s: %w", instanceID, getErr)
+			}
 		}
-		var createErr error
-		volumeID, createErr = p.createAndAttachVolume(ctx, instanceID, az, volumeSize, volumeIOPS, owner, ownerARN, vmName)
-		if createErr != nil {
-			return nil, fmt.Errorf("creating project volume: %w", createErr)
+		if tagErr := p.tagVolume(ctx, volumeID, owner, ownerARN, vmName); tagErr != nil {
+			return nil, fmt.Errorf("tagging project volume: %w", tagErr)
 		}
 	}
 
@@ -485,14 +498,69 @@ func ReplaceBashVar(s, name, value string) string {
 	return b.String()
 }
 
+// findBDMVolumeID returns the EBS volume ID for the given device name from
+// a RunInstances (or DescribeInstances) block device mapping list.
+func findBDMVolumeID(mappings []ec2types.InstanceBlockDeviceMapping, deviceName string) string {
+	for _, bdm := range mappings {
+		if aws.ToString(bdm.DeviceName) == deviceName && bdm.Ebs != nil {
+			return aws.ToString(bdm.Ebs.VolumeId)
+		}
+	}
+	return ""
+}
+
+// getBDMVolumeID calls DescribeInstances to retrieve the project EBS volume ID
+// from the instance's block device mapping. Used as a fallback when RunInstances
+// does not populate the volume ID in its response.
+func (p *Provisioner) getBDMVolumeID(ctx context.Context, instanceID string) (string, error) {
+	out, err := p.describeInstances.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+		InstanceIds: []string{instanceID},
+	})
+	if err != nil {
+		return "", fmt.Errorf("describe instance %s: %w", instanceID, err)
+	}
+	for _, reservation := range out.Reservations {
+		for _, inst := range reservation.Instances {
+			if id := findBDMVolumeID(inst.BlockDeviceMappings, "/dev/xvdf"); id != "" {
+				return id, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("block device /dev/xvdf not found on instance %s", instanceID)
+}
+
+// tagVolume applies Mint project-volume tags to an EBS volume via CreateTags.
+func (p *Provisioner) tagVolume(ctx context.Context, volumeID, owner, ownerARN, vmName string) error {
+	volumeTags := tags.NewTagBuilder(owner, ownerARN, vmName).
+		WithComponent(tags.ComponentProjectVolume).
+		Build()
+	start := time.Now()
+	_, err := p.createTags.CreateTags(ctx, &ec2.CreateTagsInput{
+		Resources: []string{volumeID},
+		Tags:      volumeTags,
+	})
+	if p.logger != nil {
+		p.logger.Log("ec2", "CreateTags", time.Since(start), err)
+	}
+	if err != nil {
+		return fmt.Errorf("tagging volume %s: %w", volumeID, err)
+	}
+	return nil
+}
+
 // launchInstance runs a new EC2 instance with the given configuration.
+// When projectVolSize > 0, the project EBS volume is created via
+// BlockDeviceMappings so the device is attached before user-data runs.
+// Returns the instance ID and (if available in the response) the BDM volume ID.
 func (p *Provisioner) launchInstance(
 	ctx context.Context,
 	amiID string,
 	cfg ProvisionConfig,
 	userSGID, adminSGID, subnetID string,
 	owner, ownerARN, vmName string,
-) (string, error) {
+	projectVolSize int32,
+	projectVolIOPS int32,
+) (instanceID, bdmVolumeID string, err error) {
 	idleTimeout := cfg.IdleTimeout
 	if idleTimeout == 0 {
 		idleTimeout = 60
@@ -512,13 +580,14 @@ func (p *Provisioner) launchInstance(
 		Build()
 
 	// Add volume size tags for mint status to read back (ADR-0004).
-	projectVolSize := cfg.VolumeSize
-	if projectVolSize == 0 {
-		projectVolSize = 50
+	// Use the configured volume size for display; fall back to 50 if not set.
+	displayVolSize := cfg.VolumeSize
+	if displayVolSize == 0 {
+		displayVolSize = 50
 	}
 	instanceTags = append(instanceTags,
 		ec2types.Tag{Key: aws.String(tags.TagRootVolumeGB), Value: aws.String("200")},
-		ec2types.Tag{Key: aws.String(tags.TagProjectVolumeGB), Value: aws.String(strconv.Itoa(int(projectVolSize)))},
+		ec2types.Tag{Key: aws.String(tags.TagProjectVolumeGB), Value: aws.String(strconv.Itoa(int(displayVolSize)))},
 	)
 
 	instanceType := ec2types.InstanceType(cfg.InstanceType)
@@ -545,20 +614,44 @@ func (p *Provisioner) launchInstance(
 		},
 	}
 
-	start := time.Now()
-	out, err := p.runInstances.RunInstances(ctx, input)
-	if p.logger != nil {
-		p.logger.Log("ec2", "RunInstances", time.Since(start), err)
+	// When provisioning fresh, create the project EBS via BlockDeviceMappings
+	// so it is attached before user-data runs (no race condition).
+	if projectVolSize > 0 {
+		input.BlockDeviceMappings = []ec2types.BlockDeviceMapping{
+			{
+				DeviceName: aws.String("/dev/xvdf"),
+				Ebs: &ec2types.EbsBlockDevice{
+					VolumeSize:          aws.Int32(projectVolSize),
+					VolumeType:          ec2types.VolumeTypeGp3,
+					Iops:                aws.Int32(projectVolIOPS),
+					DeleteOnTermination: aws.Bool(false),
+				},
+			},
+		}
 	}
-	if err != nil {
-		return "", fmt.Errorf("run instances: %w", err)
+
+	start := time.Now()
+	out, launchErr := p.runInstances.RunInstances(ctx, input)
+	if p.logger != nil {
+		p.logger.Log("ec2", "RunInstances", time.Since(start), launchErr)
+	}
+	if launchErr != nil {
+		return "", "", fmt.Errorf("run instances: %w", launchErr)
 	}
 
 	if len(out.Instances) == 0 {
-		return "", fmt.Errorf("run instances returned no instances")
+		return "", "", fmt.Errorf("run instances returned no instances")
 	}
 
-	return aws.ToString(out.Instances[0].InstanceId), nil
+	instanceID = aws.ToString(out.Instances[0].InstanceId)
+
+	// Try to get the BDM volume ID from the RunInstances response.
+	// AWS populates this when the volume is created synchronously at launch.
+	if projectVolSize > 0 {
+		bdmVolumeID = findBDMVolumeID(out.Instances[0].BlockDeviceMappings, "/dev/xvdf")
+	}
+
+	return instanceID, bdmVolumeID, nil
 }
 
 // findPendingAttachVolume checks for a project EBS volume with the
@@ -591,64 +684,6 @@ func (p *Provisioner) findPendingAttachVolume(ctx context.Context, owner, vmName
 
 	vol := out.Volumes[0]
 	return aws.ToString(vol.VolumeId), aws.ToString(vol.AvailabilityZone), nil
-}
-
-// createAndAttachVolume creates a gp3 project EBS volume and attaches it.
-func (p *Provisioner) createAndAttachVolume(
-	ctx context.Context,
-	instanceID, az string,
-	sizeGB int32,
-	iops int32,
-	owner, ownerARN, vmName string,
-) (string, error) {
-	volumeTags := tags.NewTagBuilder(owner, ownerARN, vmName).
-		WithComponent(tags.ComponentProjectVolume).
-		Build()
-
-	cvStart := time.Now()
-	createOut, err := p.createVolume.CreateVolume(ctx, &ec2.CreateVolumeInput{
-		AvailabilityZone: aws.String(az),
-		Size:             aws.Int32(sizeGB),
-		Iops:             aws.Int32(iops),
-		VolumeType:       ec2types.VolumeTypeGp3,
-		TagSpecifications: []ec2types.TagSpecification{
-			{
-				ResourceType: ec2types.ResourceTypeVolume,
-				Tags:         volumeTags,
-			},
-		},
-	})
-	if p.logger != nil {
-		p.logger.Log("ec2", "CreateVolume", time.Since(cvStart), err)
-	}
-	if err != nil {
-		return "", fmt.Errorf("create volume: %w", err)
-	}
-
-	volumeID := aws.ToString(createOut.VolumeId)
-
-	if p.waitVolumeAvailable != nil {
-		if err := p.waitVolumeAvailable.Wait(ctx, &ec2.DescribeVolumesInput{
-			VolumeIds: []string{volumeID},
-		}, 2*time.Minute); err != nil {
-			return "", fmt.Errorf("waiting for volume %s to be available: %w", volumeID, err)
-		}
-	}
-
-	avStart := time.Now()
-	_, err = p.attachVolume.AttachVolume(ctx, &ec2.AttachVolumeInput{
-		VolumeId:   aws.String(volumeID),
-		InstanceId: aws.String(instanceID),
-		Device:     aws.String("/dev/xvdf"),
-	})
-	if p.logger != nil {
-		p.logger.Log("ec2", "AttachVolume", time.Since(avStart), err)
-	}
-	if err != nil {
-		return "", fmt.Errorf("attach volume %s to %s: %w", volumeID, instanceID, err)
-	}
-
-	return volumeID, nil
 }
 
 // allocateAndAssociateEIP allocates an Elastic IP and associates it with the instance.

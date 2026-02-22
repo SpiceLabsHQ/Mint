@@ -224,7 +224,16 @@ func newUpHappyMocks() *upMocks {
 		runInstances: &mockRunInstances{
 			output: &ec2.RunInstancesOutput{
 				Instances: []ec2types.Instance{
-					{InstanceId: aws.String("i-new123")},
+					{
+						InstanceId: aws.String("i-new123"),
+						// BDM volume ID populated in response (normal for synchronous BDM creation).
+						BlockDeviceMappings: []ec2types.InstanceBlockDeviceMapping{{
+							DeviceName: aws.String("/dev/xvdf"),
+							Ebs: &ec2types.EbsInstanceBlockDevice{
+								VolumeId: aws.String("vol-proj1"),
+							},
+						}},
+					},
 				},
 			},
 		},
@@ -471,23 +480,30 @@ func TestProvisionerFullHappyPath(t *testing.T) {
 		t.Errorf("UserData = %q, want %q", aws.ToString(input.UserData), expectedUD)
 	}
 
-	// Verify volume was created with correct size and type.
-	if !m.createVolume.called {
-		t.Fatal("CreateVolume was not called")
+	// Verify project EBS was specified via BlockDeviceMappings in RunInstances.
+	if len(input.BlockDeviceMappings) == 0 {
+		t.Fatal("RunInstances: expected BlockDeviceMappings for project EBS")
 	}
-	if aws.ToInt32(m.createVolume.input.Size) != 50 {
-		t.Errorf("volume Size = %d, want 50", aws.ToInt32(m.createVolume.input.Size))
+	bdm := input.BlockDeviceMappings[0]
+	if aws.ToString(bdm.DeviceName) != "/dev/xvdf" {
+		t.Errorf("BDM DeviceName = %q, want /dev/xvdf", aws.ToString(bdm.DeviceName))
 	}
-	if m.createVolume.input.VolumeType != ec2types.VolumeTypeGp3 {
-		t.Errorf("volume VolumeType = %q, want gp3", m.createVolume.input.VolumeType)
+	if bdm.Ebs == nil {
+		t.Fatal("BDM Ebs is nil")
+	}
+	if aws.ToInt32(bdm.Ebs.VolumeSize) != 50 {
+		t.Errorf("BDM VolumeSize = %d, want 50", aws.ToInt32(bdm.Ebs.VolumeSize))
+	}
+	if bdm.Ebs.VolumeType != ec2types.VolumeTypeGp3 {
+		t.Errorf("BDM VolumeType = %q, want gp3", bdm.Ebs.VolumeType)
+	}
+	if aws.ToBool(bdm.Ebs.DeleteOnTermination) {
+		t.Error("BDM DeleteOnTermination should be false (project data must survive instance termination)")
 	}
 
-	// Verify volume attached with correct device.
-	if !m.attachVolume.called {
-		t.Fatal("AttachVolume was not called")
-	}
-	if aws.ToString(m.attachVolume.input.Device) != "/dev/xvdf" {
-		t.Errorf("attach Device = %q, want %q", aws.ToString(m.attachVolume.input.Device), "/dev/xvdf")
+	// Verify volume was tagged with CreateTags (not separately created).
+	if !m.createTags.called {
+		t.Fatal("CreateTags was not called to tag the BDM volume")
 	}
 
 	// Verify EIP was allocated and associated.
@@ -718,38 +734,6 @@ func TestProvisionerRunInstancesNoInstances(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Tests: Volume creation errors
-// ---------------------------------------------------------------------------
-
-func TestProvisionerCreateVolumeError(t *testing.T) {
-	m := newUpHappyMocks()
-	m.createVolume.err = fmt.Errorf("volume limit exceeded")
-	p := m.build()
-
-	_, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", defaultConfig())
-	if err == nil {
-		t.Fatal("expected error on CreateVolume failure")
-	}
-	if !strings.Contains(err.Error(), "volume limit exceeded") {
-		t.Errorf("error = %q, want substring %q", err.Error(), "volume limit exceeded")
-	}
-}
-
-func TestProvisionerAttachVolumeError(t *testing.T) {
-	m := newUpHappyMocks()
-	m.attachVolume.err = fmt.Errorf("attach failed")
-	p := m.build()
-
-	_, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", defaultConfig())
-	if err == nil {
-		t.Fatal("expected error on AttachVolume failure")
-	}
-	if !strings.Contains(err.Error(), "attach failed") {
-		t.Errorf("error = %q, want substring %q", err.Error(), "attach failed")
-	}
-}
-
-// ---------------------------------------------------------------------------
 // Tests: EIP allocation errors
 // ---------------------------------------------------------------------------
 
@@ -848,8 +832,11 @@ func TestProvisionerDefaultVolumeSize(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if aws.ToInt32(m.createVolume.input.Size) != 50 {
-		t.Errorf("volume Size = %d, want 50 (default)", aws.ToInt32(m.createVolume.input.Size))
+	if !m.runInstances.called || len(m.runInstances.input.BlockDeviceMappings) == 0 {
+		t.Fatal("RunInstances: expected BlockDeviceMappings")
+	}
+	if got := aws.ToInt32(m.runInstances.input.BlockDeviceMappings[0].Ebs.VolumeSize); got != 50 {
+		t.Errorf("BDM VolumeSize = %d, want 50 (default)", got)
 	}
 }
 
@@ -865,8 +852,11 @@ func TestProvisionerCustomVolumeSize(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if aws.ToInt32(m.createVolume.input.Size) != 100 {
-		t.Errorf("volume Size = %d, want 100", aws.ToInt32(m.createVolume.input.Size))
+	if !m.runInstances.called || len(m.runInstances.input.BlockDeviceMappings) == 0 {
+		t.Fatal("RunInstances: expected BlockDeviceMappings")
+	}
+	if got := aws.ToInt32(m.runInstances.input.BlockDeviceMappings[0].Ebs.VolumeSize); got != 100 {
+		t.Errorf("BDM VolumeSize = %d, want 100", got)
 	}
 }
 
@@ -1148,14 +1138,6 @@ func TestProvisionerRun(t *testing.T) {
 			},
 			wantErr:        true,
 			wantErrContain: "EIP quota exceeded",
-		},
-		{
-			name: "create volume error",
-			setup: func(m *upMocks) {
-				m.createVolume.err = fmt.Errorf("volume boom")
-			},
-			wantErr:        true,
-			wantErrContain: "volume boom",
 		},
 		{
 			name: "allocate address error",
@@ -1488,8 +1470,8 @@ func TestProvisionerPendingAttachAZMismatch(t *testing.T) {
 }
 
 func TestProvisionerPendingAttachNoneFound(t *testing.T) {
-	// When no pending-attach volume is found, normal provisioning continues
-	// (a new volume is created).
+	// When no pending-attach volume is found, normal provisioning continues:
+	// the project EBS is created via BlockDeviceMappings in RunInstances.
 	m := newUpHappyMocks()
 	// describeVolumes returns empty (no pending-attach volumes) — this is the default.
 	p := m.build()
@@ -1499,12 +1481,12 @@ func TestProvisionerPendingAttachNoneFound(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Normal flow: CreateVolume should be called.
-	if !m.createVolume.called {
-		t.Error("CreateVolume should be called when no pending-attach volume exists")
+	// Normal flow: BlockDeviceMappings should be present in RunInstances.
+	if len(m.runInstances.input.BlockDeviceMappings) == 0 {
+		t.Error("RunInstances should have BlockDeviceMappings when no pending-attach volume exists")
 	}
 	if result.VolumeID != "vol-proj1" {
-		t.Errorf("result.VolumeID = %q, want %q (newly created)", result.VolumeID, "vol-proj1")
+		t.Errorf("result.VolumeID = %q, want %q (from BDM)", result.VolumeID, "vol-proj1")
 	}
 
 	// DeleteTags should NOT be called.
@@ -1655,8 +1637,7 @@ func TestProvisionerCrashAfterTerminateRecovery(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestProvisionerDefaultVolumeIOPS(t *testing.T) {
-	// When VolumeIOPS is 0 in ProvisionConfig, the AWS call should use the
-	// gp3 AWS default (3000). We verify by checking that Iops is set to 3000.
+	// When VolumeIOPS is 0 in ProvisionConfig, the BDM should use 3000 (gp3 default).
 	m := newUpHappyMocks()
 	p := m.build()
 
@@ -1668,16 +1649,16 @@ func TestProvisionerDefaultVolumeIOPS(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if !m.createVolume.called {
-		t.Fatal("CreateVolume was not called")
+	if !m.runInstances.called || len(m.runInstances.input.BlockDeviceMappings) == 0 {
+		t.Fatal("RunInstances: expected BlockDeviceMappings")
 	}
-	if aws.ToInt32(m.createVolume.input.Iops) != 3000 {
-		t.Errorf("volume Iops = %d, want 3000 (default)", aws.ToInt32(m.createVolume.input.Iops))
+	if got := aws.ToInt32(m.runInstances.input.BlockDeviceMappings[0].Ebs.Iops); got != 3000 {
+		t.Errorf("BDM Iops = %d, want 3000 (default)", got)
 	}
 }
 
 func TestProvisionerCustomVolumeIOPS(t *testing.T) {
-	// When VolumeIOPS is explicitly set, it should be passed to CreateVolume.
+	// When VolumeIOPS is explicitly set, it should be in the BDM.
 	m := newUpHappyMocks()
 	p := m.build()
 
@@ -1689,11 +1670,11 @@ func TestProvisionerCustomVolumeIOPS(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if !m.createVolume.called {
-		t.Fatal("CreateVolume was not called")
+	if !m.runInstances.called || len(m.runInstances.input.BlockDeviceMappings) == 0 {
+		t.Fatal("RunInstances: expected BlockDeviceMappings")
 	}
-	if aws.ToInt32(m.createVolume.input.Iops) != 6000 {
-		t.Errorf("volume Iops = %d, want 6000", aws.ToInt32(m.createVolume.input.Iops))
+	if got := aws.ToInt32(m.runInstances.input.BlockDeviceMappings[0].Ebs.Iops); got != 6000 {
+		t.Errorf("BDM Iops = %d, want 6000", got)
 	}
 }
 
@@ -1709,8 +1690,11 @@ func TestProvisionerMaxVolumeIOPS(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if aws.ToInt32(m.createVolume.input.Iops) != 16000 {
-		t.Errorf("volume Iops = %d, want 16000", aws.ToInt32(m.createVolume.input.Iops))
+	if !m.runInstances.called || len(m.runInstances.input.BlockDeviceMappings) == 0 {
+		t.Fatal("RunInstances: expected BlockDeviceMappings")
+	}
+	if got := aws.ToInt32(m.runInstances.input.BlockDeviceMappings[0].Ebs.Iops); got != 16000 {
+		t.Errorf("BDM Iops = %d, want 16000", got)
 	}
 }
 
@@ -1818,51 +1802,6 @@ func TestProvisionerWithLoggerLogsRunInstances(t *testing.T) {
 	}
 	if entry.err != nil {
 		t.Errorf("err = %v, want nil on success", entry.err)
-	}
-}
-
-func TestProvisionerWithLoggerLogsCreateVolume(t *testing.T) {
-	m := newUpHappyMocks()
-	p := m.build()
-
-	logger := &mockLogger{}
-	p.WithLogger(logger)
-
-	_, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", defaultConfig())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	entry, found := logger.findEntry("CreateVolume")
-	if !found {
-		t.Fatal("logger.Log not called with operation=CreateVolume")
-	}
-	if entry.service != "ec2" {
-		t.Errorf("service = %q, want %q", entry.service, "ec2")
-	}
-	if entry.duration < 0 {
-		t.Errorf("duration = %v, want >= 0", entry.duration)
-	}
-}
-
-func TestProvisionerWithLoggerLogsAttachVolume(t *testing.T) {
-	m := newUpHappyMocks()
-	p := m.build()
-
-	logger := &mockLogger{}
-	p.WithLogger(logger)
-
-	_, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", defaultConfig())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	entry, found := logger.findEntry("AttachVolume")
-	if !found {
-		t.Fatal("logger.Log not called with operation=AttachVolume")
-	}
-	if entry.service != "ec2" {
-		t.Errorf("service = %q, want %q", entry.service, "ec2")
 	}
 }
 

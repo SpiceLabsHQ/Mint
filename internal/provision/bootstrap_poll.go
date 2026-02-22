@@ -24,7 +24,7 @@ import (
 const DefaultPollInterval = 15 * time.Second
 
 // DefaultPollTimeout is the maximum time to wait for bootstrap completion.
-const DefaultPollTimeout = 7 * time.Minute
+const DefaultPollTimeout = 15 * time.Minute
 
 // PollConfig holds configurable timing for the bootstrap polling loop.
 // Tests inject short durations to avoid real sleeping.

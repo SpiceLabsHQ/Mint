@@ -179,7 +179,7 @@ fi
 
 # Format and mount project EBS at /mint/projects
 if [ -n "${MINT_PROJECT_DEV:-}" ]; then
-    _t=90;while [ $_t -gt 0 ]&&[ ! -b "${MINT_PROJECT_DEV}" ];do _r=$(lsblk -rno PKNAME "$(findmnt -no SOURCE /)" 2>/dev/null);_d=$(lsblk -rno NAME,TYPE 2>/dev/null|awk -v r=$_r '$2=="disk"&&$1!=r{print "/dev/"$1;exit}');[ -n "$_d" ]&&{ MINT_PROJECT_DEV=$_d;break;};sleep 5;_t=$((_t-5));done
+    udevadm settle
     log "Setting up project volume ${MINT_PROJECT_DEV} at /mint/projects"
     if ! blkid "${MINT_PROJECT_DEV}" &> /dev/null; then
         mkfs.ext4 -q "${MINT_PROJECT_DEV}"
