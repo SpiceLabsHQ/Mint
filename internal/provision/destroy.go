@@ -16,6 +16,10 @@ import (
 	"github.com/nicholasgasior/mint/internal/vm"
 )
 
+// defaultWaitTerminatedDuration is the maximum time to wait for an instance
+// to reach the terminated state before proceeding to volume cleanup.
+const defaultWaitTerminatedDuration = 10 * time.Minute
+
 // DestroyResult holds the outcome of a successful destroy run.
 type DestroyResult struct {
 	InstanceID     string
@@ -29,6 +33,7 @@ type DestroyResult struct {
 type Destroyer struct {
 	describe        mintaws.DescribeInstancesAPI
 	terminate       mintaws.TerminateInstancesAPI
+	waitTerminated  mintaws.WaitInstanceTerminatedAPI
 	describeVolumes mintaws.DescribeVolumesAPI
 	detachVolume    mintaws.DetachVolumeAPI
 	deleteVolume    mintaws.DeleteVolumeAPI
@@ -63,6 +68,16 @@ func NewDestroyer(
 // When nil (the default), logging is skipped and there is no behavioral change.
 func (d *Destroyer) WithLogger(l logging.Logger) *Destroyer {
 	d.logger = l
+	return d
+}
+
+// WithWaitTerminated sets the waiter used to block until the instance has fully
+// terminated before attempting to delete attached EBS volumes. When nil (the
+// default), no wait is performed and volume cleanup proceeds immediately after
+// TerminateInstances returns. In production, always set this to
+// ec2.NewInstanceTerminatedWaiter(clients.ec2Client) to avoid VolumeInUse errors.
+func (d *Destroyer) WithWaitTerminated(w mintaws.WaitInstanceTerminatedAPI) *Destroyer {
+	d.waitTerminated = w
 	return d
 }
 
@@ -101,6 +116,23 @@ func (d *Destroyer) RunWithResult(ctx context.Context, owner, vmName string, con
 	}
 	if err != nil {
 		return nil, fmt.Errorf("terminating instance %s: %w", found.ID, err)
+	}
+
+	// Step 2.5: Wait for instance to reach terminated state so that project
+	// EBS volumes are released from the instance before we attempt deletion.
+	// Without this wait, DeleteVolume returns VolumeInUse because EC2 detaches
+	// volumes asynchronously after termination (takes 30–60s in practice).
+	if d.waitTerminated != nil {
+		wtStart := time.Now()
+		waitErr := d.waitTerminated.Wait(ctx, &ec2.DescribeInstancesInput{
+			InstanceIds: []string{found.ID},
+		}, defaultWaitTerminatedDuration)
+		if d.logger != nil {
+			d.logger.Log("ec2", "WaitInstanceTerminated", time.Since(wtStart), waitErr)
+		}
+		if waitErr != nil {
+			return nil, fmt.Errorf("waiting for instance %s to terminate: %w", found.ID, waitErr)
+		}
 	}
 
 	// Step 3: Discover and delete project EBS volumes.

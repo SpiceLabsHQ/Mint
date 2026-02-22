@@ -33,6 +33,15 @@ type WaitVolumeAvailableAPI interface {
 // Compile-time check: ec2.VolumeAvailableWaiter satisfies the interface.
 var _ WaitVolumeAvailableAPI = (*ec2.VolumeAvailableWaiter)(nil)
 
+// WaitInstanceTerminatedAPI defines the interface for waiting until an EC2
+// instance reaches the terminated state. Wraps ec2.InstanceTerminatedWaiter.Wait.
+type WaitInstanceTerminatedAPI interface {
+	Wait(ctx context.Context, params *ec2.DescribeInstancesInput, maxWaitDur time.Duration, optFns ...func(*ec2.InstanceTerminatedWaiterOptions)) error
+}
+
+// Compile-time check: ec2.InstanceTerminatedWaiter satisfies the interface.
+var _ WaitInstanceTerminatedAPI = (*ec2.InstanceTerminatedWaiter)(nil)
+
 // ---------------------------------------------------------------------------
 // AMI resolution
 // ---------------------------------------------------------------------------
