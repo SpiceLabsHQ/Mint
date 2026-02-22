@@ -127,11 +127,47 @@ func TestScriptContent(t *testing.T) {
 		{"tmux drift check", "tmux_missing"},
 		{"nodejs drift check", "nodejs_missing"},
 		{"reconcile health logging", "reconciliation complete: health="},
+		// Fix #94: NVMe polling loop replaces udevadm settle
+		{"NVMe polling loop present", "lsblk -rno NAME,TYPE"},
+		{"NVMe polling uses findmnt for root disk", "findmnt -no SOURCE /"},
+		{"NVMe polling timeout 90s", "_t=90"},
+		{"NVMe polling sleep interval", "sleep 5"},
+		// Fix #95: EXIT trap for mint:bootstrap tagging
+		{"EXIT trap registered", "trap '_bootstrap_exit' EXIT"},
+		{"bootstrap ok flag initialised false", "_bootstrap_ok=false"},
+		{"bootstrap ok flag set true on success", "_bootstrap_ok=true"},
+		{"exit trap tags failed on early exit", "mint:bootstrap=failed"},
+		{"exit trap uses pre-captured instance id", "_TRAP_INSTANCE_ID"},
+		{"exit trap uses pre-captured region", "_TRAP_REGION"},
+		{"IMDS token fetched before trap registration", "_IMDS_TOKEN=$(curl"},
 	}
 
 	for _, elem := range requiredElements {
 		if !strings.Contains(script, elem.pattern) {
 			t.Errorf("bootstrap script missing %s (expected to find %q)", elem.desc, elem.pattern)
+		}
+	}
+}
+
+// TestScriptNoUdevadmSettle verifies that the udevadm settle call has been
+// replaced by the NVMe polling loop (Fix #94).  "udevadm settle" may appear in
+// comments, but must not appear as an executable statement (i.e., on a
+// non-comment line).
+func TestScriptNoUdevadmSettle(t *testing.T) {
+	scriptPath := filepath.Join("..", "..", "scripts", "bootstrap.sh")
+	content, err := os.ReadFile(scriptPath)
+	if err != nil {
+		t.Fatalf("failed to read bootstrap script: %v", err)
+	}
+
+	for i, line := range strings.Split(string(content), "\n") {
+		trimmed := strings.TrimSpace(line)
+		// Skip comment lines — "udevadm settle" is allowed in explanatory comments.
+		if strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if strings.Contains(trimmed, "udevadm settle") {
+			t.Errorf("line %d: bootstrap script contains 'udevadm settle' as a command — replace with NVMe polling loop (Fix #94): %q", i+1, line)
 		}
 	}
 }
