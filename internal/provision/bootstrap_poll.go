@@ -8,12 +8,14 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"golang.org/x/term"
 
 	mintaws "github.com/nicholasgasior/mint/internal/aws"
 	"github.com/nicholasgasior/mint/internal/tags"
@@ -36,12 +38,16 @@ type PollConfig struct {
 // BootstrapPoller polls an EC2 instance for bootstrap completion and handles
 // timeout scenarios with user-interactive recovery options.
 type BootstrapPoller struct {
-	describeInstances mintaws.DescribeInstancesAPI
-	stopInstances     mintaws.StopInstancesAPI
+	describeInstances  mintaws.DescribeInstancesAPI
+	stopInstances      mintaws.StopInstancesAPI
 	terminateInstances mintaws.TerminateInstancesAPI
-	createTags        mintaws.CreateTagsAPI
-	output            io.Writer
-	input             io.Reader
+	createTags         mintaws.CreateTagsAPI
+	output             io.Writer
+	input              io.Reader
+
+	// isTerminal reports whether the process stdin is an interactive terminal.
+	// Defaults to a real os.Stdin TTY check; override in tests.
+	isTerminal func() bool
 
 	// Config controls poll interval and timeout. Override for testing.
 	Config PollConfig
@@ -59,12 +65,13 @@ func NewBootstrapPoller(
 	input io.Reader,
 ) *BootstrapPoller {
 	return &BootstrapPoller{
-		describeInstances: describeInstances,
-		stopInstances:     stopInstances,
+		describeInstances:  describeInstances,
+		stopInstances:      stopInstances,
 		terminateInstances: terminateInstances,
-		createTags:        createTags,
-		output:            output,
-		input:             input,
+		createTags:         createTags,
+		output:             output,
+		input:              input,
+		isTerminal:         func() bool { return term.IsTerminal(int(os.Stdin.Fd())) },
 		Config: PollConfig{
 			Interval: DefaultPollInterval,
 			Timeout:  DefaultPollTimeout,
@@ -144,8 +151,15 @@ func (bp *BootstrapPoller) checkBootstrapStatus(ctx context.Context, owner, vmNa
 }
 
 // handleTimeout presents the user with three options when bootstrap does not
-// complete within the timeout window.
+// complete within the timeout window. In non-interactive (non-TTY) contexts
+// it skips the prompt and defaults to leaving the instance running so that
+// CI pipelines and piped invocations do not crash.
 func (bp *BootstrapPoller) handleTimeout(ctx context.Context, instanceID string) error {
+	if !bp.isTerminal() {
+		fmt.Fprintf(bp.output, "Bootstrap timed out. Instance %s left running — SSH in or run 'mint doctor' to investigate.\n", instanceID)
+		return nil
+	}
+
 	fmt.Fprintln(bp.output, "")
 	fmt.Fprintln(bp.output, "Bootstrap did not complete within the timeout period.")
 	fmt.Fprintln(bp.output, "")
