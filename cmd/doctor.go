@@ -316,6 +316,14 @@ func checkDiskUsage(ctx context.Context, deps *doctorDeps, v *vm.VM, prefix stri
 		dfCmd,
 	)
 	if err != nil {
+		if isSSHConnectionError(err) {
+			return checkResult{
+				name:   prefix + "/disk",
+				status: "WARN",
+				message: fmt.Sprintf("cannot connect to VM (port 41122 refused) — "+
+					"bootstrap may be incomplete, run 'mint doctor' for details"),
+			}
+		}
 		return checkResult{
 			name:    prefix + "/disk",
 			status:  "WARN",
@@ -402,11 +410,20 @@ func checkComponents(ctx context.Context, deps *doctorDeps, v *vm.VM, prefix str
 			comp.command,
 		)
 		if err != nil {
-			results = append(results, checkResult{
-				name:    prefix + "/" + comp.name,
-				status:  "FAIL",
-				message: fmt.Sprintf("not found or error: %v", err),
-			})
+			if isSSHConnectionError(err) {
+				results = append(results, checkResult{
+					name:   prefix + "/" + comp.name,
+					status: "FAIL",
+					message: fmt.Sprintf("cannot connect to VM (port 41122 refused) — "+
+						"bootstrap may be incomplete, run 'mint doctor' for details"),
+				})
+			} else {
+				results = append(results, checkResult{
+					name:    prefix + "/" + comp.name,
+					status:  "FAIL",
+					message: fmt.Sprintf("not found or error: %v", err),
+				})
+			}
 			continue
 		}
 

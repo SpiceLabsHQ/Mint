@@ -96,6 +96,22 @@ func runSSH(cmd *cobra.Command, deps *sshDeps, extraArgs []string) error {
 			vmName, found.ID, found.State)
 	}
 
+	// Check bootstrap status before attempting any SSH operation (ADR-0001).
+	// The SSH daemon is not listening until bootstrap completes.
+	switch found.BootstrapStatus {
+	case "pending":
+		return fmt.Errorf(
+			"VM %q bootstrap is not complete (status: pending).\n"+
+				"Run 'mint doctor' for details or 'mint recreate' to rebuild.",
+			vmName,
+		)
+	case "failed":
+		return fmt.Errorf(
+			"VM %q bootstrap failed.\nRun 'mint recreate' to rebuild.",
+			vmName,
+		)
+	}
+
 	// Use availability zone from FindVM (already populated via DescribeInstances).
 	if found.AvailabilityZone == "" {
 		return fmt.Errorf("VM %q (%s) has no availability zone — this is unexpected, try mint destroy && mint up", vmName, found.ID)

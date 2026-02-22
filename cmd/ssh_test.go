@@ -85,6 +85,31 @@ func makeRunningInstanceNoAZ(id, vmName, owner, ip string) *ec2.DescribeInstance
 	}
 }
 
+// makeRunningInstanceWithBootstrap returns a DescribeInstancesOutput for a running
+// instance with the given mint:bootstrap tag value.
+func makeRunningInstanceWithBootstrap(id, vmName, owner, ip, az, bootstrapStatus string) *ec2.DescribeInstancesOutput {
+	return &ec2.DescribeInstancesOutput{
+		Reservations: []ec2types.Reservation{{
+			Instances: []ec2types.Instance{{
+				InstanceId:      aws.String(id),
+				InstanceType:    ec2types.InstanceTypeT3Medium,
+				PublicIpAddress: aws.String(ip),
+				State: &ec2types.InstanceState{
+					Name: ec2types.InstanceStateNameRunning,
+				},
+				Placement: &ec2types.Placement{
+					AvailabilityZone: aws.String(az),
+				},
+				Tags: []ec2types.Tag{
+					{Key: aws.String("mint:vm"), Value: aws.String(vmName)},
+					{Key: aws.String("mint:owner"), Value: aws.String(owner)},
+					{Key: aws.String("mint:bootstrap"), Value: aws.String(bootstrapStatus)},
+				},
+			}},
+		}},
+	}
+}
+
 // makeStoppedInstanceForSSH returns a DescribeInstancesOutput with a stopped instance.
 func makeStoppedInstanceForSSH(id, vmName, owner string) *ec2.DescribeInstancesOutput {
 	return &ec2.DescribeInstancesOutput{
@@ -128,6 +153,112 @@ func newTestRootForSSH() *cobra.Command {
 	root.PersistentFlags().Bool("yes", false, "Skip confirmation on destructive operations")
 	root.PersistentFlags().String("vm", "default", "Target VM name")
 	return root
+}
+
+// TestSSHBootstrapPreCheck verifies that runSSH checks the bootstrap tag
+// before attempting ssh-keyscan or any SSH operation.
+func TestSSHBootstrapPreCheck(t *testing.T) {
+	tests := []struct {
+		name            string
+		bootstrapStatus string
+		wantErr         bool
+		wantErrContain  string
+		wantSendKey     bool
+	}{
+		{
+			name:            "pending bootstrap blocks SSH with actionable message",
+			bootstrapStatus: "pending",
+			wantErr:         true,
+			wantErrContain:  "bootstrap is not complete",
+			wantSendKey:     false,
+		},
+		{
+			name:            "pending bootstrap error mentions mint doctor",
+			bootstrapStatus: "pending",
+			wantErr:         true,
+			wantErrContain:  "mint doctor",
+			wantSendKey:     false,
+		},
+		{
+			name:            "pending bootstrap error mentions mint recreate",
+			bootstrapStatus: "pending",
+			wantErr:         true,
+			wantErrContain:  "mint recreate",
+			wantSendKey:     false,
+		},
+		{
+			name:            "failed bootstrap blocks SSH with actionable message",
+			bootstrapStatus: "failed",
+			wantErr:         true,
+			wantErrContain:  "bootstrap failed",
+			wantSendKey:     false,
+		},
+		{
+			name:            "failed bootstrap error mentions mint recreate",
+			bootstrapStatus: "failed",
+			wantErr:         true,
+			wantErrContain:  "mint recreate",
+			wantSendKey:     false,
+		},
+		{
+			name:            "complete bootstrap proceeds to SSH",
+			bootstrapStatus: "complete",
+			wantErr:         false,
+			wantSendKey:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sendKey := &mockSendSSHPublicKey{
+				output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
+			}
+			describe := &mockDescribeForSSH{
+				output: makeRunningInstanceWithBootstrap(
+					"i-abc123", "default", "alice", "1.2.3.4", "us-east-1a", tt.bootstrapStatus,
+				),
+			}
+
+			var execCalled bool
+			deps := &sshDeps{
+				describe: describe,
+				sendKey:  sendKey,
+				owner:    "alice",
+				runner: func(name string, args ...string) error {
+					execCalled = true
+					return nil
+				},
+				// No TOFU store — avoids ssh-keyscan call on complete.
+			}
+
+			err := runSSHWithDeps(t, deps, "default")
+
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if tt.wantErrContain != "" && !strings.Contains(err.Error(), tt.wantErrContain) {
+					t.Errorf("error %q does not contain %q", err.Error(), tt.wantErrContain)
+				}
+				// Key must NOT have been pushed.
+				if sendKey.called {
+					t.Error("SendSSHPublicKey should not be called when bootstrap is incomplete")
+				}
+				// SSH must NOT have been executed.
+				if execCalled {
+					t.Error("SSH exec should not be called when bootstrap is incomplete")
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if tt.wantSendKey && !sendKey.called {
+				t.Error("SendSSHPublicKey should have been called for complete bootstrap")
+			}
+		})
+	}
 }
 
 func TestSSHCommand(t *testing.T) {

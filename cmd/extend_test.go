@@ -276,6 +276,36 @@ func TestExtendCommand(t *testing.T) {
 			wantRemote:     true,
 		},
 		{
+			name: "SSH connection refused wrapped with bootstrap-aware context",
+			describe: &mockDescribeForExtend{
+				output: makeRunningInstanceForExtend("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
+			},
+			sendKey: &mockSendKeyForExtend{
+				output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
+			},
+			remoteErr:      fmt.Errorf("remote command failed: exit status 255 (stderr: ssh: connect to host 1.2.3.4 port 41122: Connection refused)"),
+			owner:          "alice",
+			idleTimeout:    30,
+			wantErr:        true,
+			wantErrContain: "port 41122 refused",
+			wantRemote:     true,
+		},
+		{
+			name: "SSH connection refused bootstrap context mentions mint doctor",
+			describe: &mockDescribeForExtend{
+				output: makeRunningInstanceForExtend("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
+			},
+			sendKey: &mockSendKeyForExtend{
+				output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
+			},
+			remoteErr:      fmt.Errorf("remote command failed: exit status 255 (stderr: ssh: connect to host 1.2.3.4 port 41122: Connection timed out)"),
+			owner:          "alice",
+			idleTimeout:    30,
+			wantErr:        true,
+			wantErrContain: "mint doctor",
+			wantRemote:     true,
+		},
+		{
 			name: "non-default vm name",
 			describe: &mockDescribeForExtend{
 				output: makeRunningInstanceForExtend("i-dev456", "dev", "bob", "10.0.0.1", "us-west-2a"),

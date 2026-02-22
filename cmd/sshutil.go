@@ -268,6 +268,20 @@ func (t *TOFURemoteRunner) verifyHostKey(host string, port int) error {
 	return nil
 }
 
+// isSSHConnectionError returns true when err indicates an SSH connection
+// failure — specifically "Connection refused" or "Connection timed out".
+// These signatures appear when the SSH daemon is not yet listening
+// (e.g., bootstrap still in progress). Exit status 255 alone is not
+// sufficient because authentication failures also return exit 255.
+func isSSHConnectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "Connection refused") ||
+		strings.Contains(msg, "Connection timed out")
+}
+
 // isTOFUError returns true if the error is a TOFU host key verification
 // error that should be propagated directly rather than masked by
 // command-specific error wrapping.
