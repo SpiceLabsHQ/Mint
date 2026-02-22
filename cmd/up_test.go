@@ -1279,3 +1279,91 @@ func TestUpMultiVMWarningJSONMode(t *testing.T) {
 		t.Errorf("JSON output must not contain warning text, got:\n%s", buf.String())
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Tests: printUpHuman for AlreadyRunning VM with bootstrap status (fix #97)
+// ---------------------------------------------------------------------------
+
+func TestPrintUpHumanAlreadyRunningBootstrapComplete(t *testing.T) {
+	buf := new(bytes.Buffer)
+	cmd := &cobra.Command{}
+	cmd.SetOut(buf)
+
+	result := &provision.ProvisionResult{
+		InstanceID:      "i-running1",
+		PublicIP:        "54.0.0.1",
+		AlreadyRunning:  true,
+		BootstrapStatus: "complete",
+	}
+
+	err := printUpHuman(cmd, result, false)
+	if err != nil {
+		t.Fatalf("printUpHuman error: %v", err)
+	}
+
+	output := buf.String()
+	// Should acknowledge the VM is already running.
+	if !strings.Contains(output, "already running") && !strings.Contains(output, "is running") {
+		t.Errorf("output should mention the VM is already running, got:\n%s", output)
+	}
+	// When bootstrap is actually complete it is correct to say so.
+	if !strings.Contains(output, "Bootstrap complete") {
+		t.Errorf("output should say 'Bootstrap complete' when bootstrap status is complete, got:\n%s", output)
+	}
+}
+
+func TestPrintUpHumanAlreadyRunningBootstrapPending(t *testing.T) {
+	buf := new(bytes.Buffer)
+	cmd := &cobra.Command{}
+	cmd.SetOut(buf)
+
+	result := &provision.ProvisionResult{
+		InstanceID:      "i-running1",
+		PublicIP:        "54.0.0.1",
+		AlreadyRunning:  true,
+		BootstrapStatus: "pending",
+	}
+
+	err := printUpHuman(cmd, result, false)
+	if err != nil {
+		t.Fatalf("printUpHuman error: %v", err)
+	}
+
+	output := buf.String()
+	// Must NOT say "Bootstrap complete." — bootstrap is still in progress.
+	if strings.Contains(output, "Bootstrap complete") {
+		t.Errorf("output must not say 'Bootstrap complete' when status is pending, got:\n%s", output)
+	}
+	// Should indicate bootstrap is still in progress.
+	if !strings.Contains(output, "progress") && !strings.Contains(output, "pending") && !strings.Contains(output, "in progress") {
+		t.Errorf("output should indicate bootstrap is pending/in-progress, got:\n%s", output)
+	}
+}
+
+func TestPrintUpHumanAlreadyRunningBootstrapFailed(t *testing.T) {
+	buf := new(bytes.Buffer)
+	cmd := &cobra.Command{}
+	cmd.SetOut(buf)
+
+	result := &provision.ProvisionResult{
+		InstanceID:     "i-running1",
+		PublicIP:       "54.0.0.1",
+		AlreadyRunning: true,
+		BootstrapError: fmt.Errorf("VM 'default' bootstrap failed. Run 'mint recreate' to rebuild."),
+	}
+
+	err := printUpHuman(cmd, result, false)
+	if err != nil {
+		t.Fatalf("printUpHuman error: %v", err)
+	}
+
+	output := buf.String()
+	// Must NOT say "Bootstrap complete."
+	if strings.Contains(output, "Bootstrap complete") {
+		t.Errorf("output must not say 'Bootstrap complete' when bootstrap failed, got:\n%s", output)
+	}
+	// Should surface the error.
+	if !strings.Contains(output, "bootstrap failed") && !strings.Contains(output, "Bootstrap") {
+		t.Errorf("output should surface bootstrap failure, got:\n%s", output)
+	}
+}

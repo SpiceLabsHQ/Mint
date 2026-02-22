@@ -216,11 +216,13 @@ func printUpResult(cmd *cobra.Command, cliCtx *cli.CLIContext, result *provision
 
 func printUpJSON(cmd *cobra.Command, result *provision.ProvisionResult) error {
 	data := map[string]any{
-		"instance_id":   result.InstanceID,
-		"public_ip":     result.PublicIP,
-		"volume_id":     result.VolumeID,
-		"allocation_id": result.AllocationID,
-		"restarted":     result.Restarted,
+		"instance_id":      result.InstanceID,
+		"public_ip":        result.PublicIP,
+		"volume_id":        result.VolumeID,
+		"allocation_id":    result.AllocationID,
+		"restarted":        result.Restarted,
+		"already_running":  result.AlreadyRunning,
+		"bootstrap_status": result.BootstrapStatus,
 	}
 
 	if result.BootstrapError != nil {
@@ -239,6 +241,23 @@ func printUpHuman(cmd *cobra.Command, result *provision.ProvisionResult, verbose
 		fmt.Fprintf(w, "VM %s restarted.\n", result.InstanceID)
 		if result.PublicIP != "" {
 			fmt.Fprintf(w, "IP            %s\n", result.PublicIP)
+		}
+		return nil
+	}
+
+	if result.AlreadyRunning {
+		// VM was already running when mint up was called.
+		fmt.Fprintf(w, "VM %s is already running.\n", result.InstanceID)
+		if result.PublicIP != "" {
+			fmt.Fprintf(w, "IP            %s\n", result.PublicIP)
+		}
+		if result.BootstrapError != nil {
+			fmt.Fprintf(w, "\nBootstrap error: %v\n", result.BootstrapError)
+		} else if result.BootstrapStatus == tags.BootstrapComplete {
+			fmt.Fprintln(w, "\nBootstrap complete. VM is ready.")
+		} else {
+			// pending, unknown, or empty — don't claim success
+			fmt.Fprintln(w, "\nBootstrap in progress — run 'mint status' to check.")
 		}
 		return nil
 	}

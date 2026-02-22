@@ -38,12 +38,14 @@ type ProvisionConfig struct {
 
 // ProvisionResult holds the outcome of a successful provision run.
 type ProvisionResult struct {
-	InstanceID     string
-	PublicIP       string
-	VolumeID       string
-	AllocationID   string
-	Restarted      bool
-	BootstrapError error // non-nil if bootstrap polling failed/timed out
+	InstanceID      string
+	PublicIP        string
+	VolumeID        string
+	AllocationID    string
+	Restarted       bool
+	AlreadyRunning  bool   // true when the VM was already running (not freshly provisioned or restarted)
+	BootstrapStatus string // the mint:bootstrap tag value at the time of the call ("pending", "complete", "failed", or "")
+	BootstrapError  error  // non-nil if bootstrap polling failed/timed out, or if an existing VM's bootstrap has failed
 }
 
 // BootstrapVerifier is a function that verifies bootstrap script integrity.
@@ -342,6 +344,8 @@ func (p *Provisioner) Run(ctx context.Context, owner, ownerARN, vmName string, c
 }
 
 // handleExistingVM starts a stopped VM or returns info about a running VM.
+// For running VMs, it reads the mint:bootstrap tag to surface the actual
+// bootstrap status rather than implying success for all running VMs.
 func (p *Provisioner) handleExistingVM(ctx context.Context, existing *vm.VM) (*ProvisionResult, error) {
 	if existing.State == string(ec2types.InstanceStateNameStopped) {
 		_, err := p.startInstances.StartInstances(ctx, &ec2.StartInstancesInput{
@@ -358,10 +362,23 @@ func (p *Provisioner) handleExistingVM(ctx context.Context, existing *vm.VM) (*P
 	}
 
 	// VM exists and is running (or in another non-stopped state).
-	return &ProvisionResult{
-		InstanceID: existing.ID,
-		PublicIP:   existing.PublicIP,
-	}, nil
+	// Reflect the actual mint:bootstrap tag so callers never infer success
+	// from the absence of an error when bootstrap may still be pending.
+	result := &ProvisionResult{
+		InstanceID:      existing.ID,
+		PublicIP:        existing.PublicIP,
+		AlreadyRunning:  true,
+		BootstrapStatus: existing.BootstrapStatus,
+	}
+
+	if existing.BootstrapStatus == tags.BootstrapFailed {
+		result.BootstrapError = fmt.Errorf(
+			"VM %q bootstrap failed. Run 'mint recreate' to rebuild.",
+			existing.Name,
+		)
+	}
+
+	return result, nil
 }
 
 // checkEIPQuota checks if the user has room for another EIP allocation.
