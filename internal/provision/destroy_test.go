@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
@@ -94,6 +96,51 @@ func (m *mockReleaseAddress) ReleaseAddress(ctx context.Context, params *ec2.Rel
 	return m.output, m.err
 }
 
+// mockWaitTerminated records call ordering relative to DeleteVolume.
+type mockWaitTerminated struct {
+	err    error
+	called bool
+	// callOrder is incremented by a shared counter so tests can verify
+	// wait happens before delete.
+	callOrder int
+	mu        sync.Mutex
+	counter   *int // pointer to a shared counter (set by test)
+}
+
+func (m *mockWaitTerminated) Wait(ctx context.Context, params *ec2.DescribeInstancesInput, maxWaitDur time.Duration, optFns ...func(*ec2.InstanceTerminatedWaiterOptions)) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.called = true
+	if m.counter != nil {
+		*m.counter++
+		m.callOrder = *m.counter
+	}
+	return m.err
+}
+
+// mockDeleteVolumeOrdered records the call order for ordering checks.
+type mockDeleteVolumeOrdered struct {
+	output    *ec2.DeleteVolumeOutput
+	err       error
+	called    bool
+	inputs    []*ec2.DeleteVolumeInput
+	callOrder int
+	mu        sync.Mutex
+	counter   *int
+}
+
+func (m *mockDeleteVolumeOrdered) DeleteVolume(ctx context.Context, params *ec2.DeleteVolumeInput, optFns ...func(*ec2.Options)) (*ec2.DeleteVolumeOutput, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.called = true
+	m.inputs = append(m.inputs, params)
+	if m.counter != nil {
+		*m.counter++
+		m.callOrder = *m.counter
+	}
+	return m.output, m.err
+}
+
 // ---------------------------------------------------------------------------
 // Helper: build a Destroyer with all mocks
 // ---------------------------------------------------------------------------
@@ -101,6 +148,7 @@ func (m *mockReleaseAddress) ReleaseAddress(ctx context.Context, params *ec2.Rel
 type destroyMocks struct {
 	describe        *mockDestroyDescribeInstances
 	terminate       *mockTerminateInstances
+	waitTerminated  *mockWaitTerminated
 	describeVolumes *mockDestroyDescribeVolumes
 	detachVolume    *mockDetachVolume
 	deleteVolume    *mockDeleteVolume
@@ -130,6 +178,9 @@ func newDestroyHappyMocks() *destroyMocks {
 		terminate: &mockTerminateInstances{
 			output: &ec2.TerminateInstancesOutput{},
 		},
+		// waitTerminated is nil by default — existing tests keep working without a
+		// waiter because WithWaitTerminated is optional (nil = no wait).
+		waitTerminated: nil,
 		describeVolumes: &mockDestroyDescribeVolumes{
 			output: &ec2.DescribeVolumesOutput{
 				Volumes: []ec2types.Volume{{
@@ -159,7 +210,7 @@ func newDestroyHappyMocks() *destroyMocks {
 }
 
 func (m *destroyMocks) build() *Destroyer {
-	return NewDestroyer(
+	d := NewDestroyer(
 		m.describe,
 		m.terminate,
 		m.describeVolumes,
@@ -168,6 +219,10 @@ func (m *destroyMocks) build() *Destroyer {
 		m.describeAddrs,
 		m.releaseAddr,
 	)
+	if m.waitTerminated != nil {
+		d.WithWaitTerminated(m.waitTerminated)
+	}
+	return d
 }
 
 // ---------------------------------------------------------------------------
@@ -602,5 +657,162 @@ func TestDestroyerNilLoggerNoChange(t *testing.T) {
 	err := d.Run(context.Background(), "alice", "default", true)
 	if err != nil {
 		t.Fatalf("unexpected error with nil logger: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests: WaitInstanceTerminated
+// ---------------------------------------------------------------------------
+
+// TestDestroyWaiterCalledBeforeDeleteVolume verifies that when a waiter is
+// configured, Wait is invoked before DeleteVolume. This enforces the ordering
+// that prevents VolumeInUse errors from EC2's async detach on termination.
+func TestDestroyWaiterCalledBeforeDeleteVolume(t *testing.T) {
+	counter := 0
+	wait := &mockWaitTerminated{counter: &counter}
+	del := &mockDeleteVolumeOrdered{
+		output:  &ec2.DeleteVolumeOutput{},
+		counter: &counter,
+	}
+
+	m := newDestroyHappyMocks()
+	m.waitTerminated = wait
+	m.deleteVolume = nil // We override below after building.
+
+	// Build the Destroyer manually so we can inject the ordered delete mock.
+	d := NewDestroyer(
+		m.describe,
+		m.terminate,
+		m.describeVolumes,
+		m.detachVolume,
+		del,
+		m.describeAddrs,
+		m.releaseAddr,
+	).WithWaitTerminated(wait)
+
+	err := d.Run(context.Background(), "alice", "default", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !wait.called {
+		t.Fatal("WaitInstanceTerminated was not called")
+	}
+	if !del.called {
+		t.Fatal("DeleteVolume was not called")
+	}
+	if wait.callOrder >= del.callOrder {
+		t.Errorf("expected Wait (order=%d) to be called before DeleteVolume (order=%d)",
+			wait.callOrder, del.callOrder)
+	}
+}
+
+// TestDestroyWaiterErrorPropagates verifies that a waiter failure is fatal —
+// the error is returned and volume cleanup is skipped.
+func TestDestroyWaiterErrorPropagates(t *testing.T) {
+	wait := &mockWaitTerminated{
+		err: fmt.Errorf("instance did not terminate in time"),
+	}
+
+	del := &mockDeleteVolumeOrdered{output: &ec2.DeleteVolumeOutput{}}
+
+	m := newDestroyHappyMocks()
+	d := NewDestroyer(
+		m.describe,
+		m.terminate,
+		m.describeVolumes,
+		m.detachVolume,
+		del,
+		m.describeAddrs,
+		m.releaseAddr,
+	).WithWaitTerminated(wait)
+
+	err := d.Run(context.Background(), "alice", "default", true)
+	if err == nil {
+		t.Fatal("expected error when waiter fails, got nil")
+	}
+	if !strings.Contains(err.Error(), "instance did not terminate in time") {
+		t.Errorf("error %q does not contain expected message", err.Error())
+	}
+	if del.called {
+		t.Error("DeleteVolume should not be called when waiter fails")
+	}
+}
+
+// TestDestroyNilWaiterSkipsWait verifies that when no waiter is configured
+// (nil), the Destroyer proceeds directly to volume cleanup without blocking.
+// This preserves backward compatibility for callers that do not set a waiter.
+func TestDestroyNilWaiterSkipsWait(t *testing.T) {
+	m := newDestroyHappyMocks()
+	// waitTerminated is nil by default in newDestroyHappyMocks.
+	d := m.build()
+
+	err := d.Run(context.Background(), "alice", "default", true)
+	if err != nil {
+		t.Fatalf("unexpected error with nil waiter: %v", err)
+	}
+	// DeleteVolume should still be called — nil waiter does not block cleanup.
+	if !m.deleteVolume.called {
+		t.Fatal("DeleteVolume should be called even with nil waiter")
+	}
+}
+
+// TestDestroyWaiterLoggedOnSuccess verifies that when a logger is set and the
+// waiter succeeds, WaitInstanceTerminated appears in the structured log.
+func TestDestroyWaiterLoggedOnSuccess(t *testing.T) {
+	wait := &mockWaitTerminated{}
+
+	m := newDestroyHappyMocks()
+	m.waitTerminated = wait
+	d := m.build()
+
+	logger := &mockLogger{}
+	d.WithLogger(logger)
+
+	err := d.Run(context.Background(), "alice", "default", true)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	entry, found := logger.findEntry("WaitInstanceTerminated")
+	if !found {
+		t.Fatal("logger.Log not called with operation=WaitInstanceTerminated")
+	}
+	if entry.service != "ec2" {
+		t.Errorf("service = %q, want %q", entry.service, "ec2")
+	}
+	if entry.err != nil {
+		t.Errorf("err = %v, want nil on success", entry.err)
+	}
+}
+
+// TestDestroyWaiterLoggedOnFailure verifies that waiter failures are captured
+// in the structured log even though they cause the destroy to return an error.
+func TestDestroyWaiterLoggedOnFailure(t *testing.T) {
+	wait := &mockWaitTerminated{
+		err: fmt.Errorf("timeout"),
+	}
+
+	m := newDestroyHappyMocks()
+	m.waitTerminated = wait
+	d := m.build()
+
+	logger := &mockLogger{}
+	d.WithLogger(logger)
+
+	err := d.Run(context.Background(), "alice", "default", true)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	entry, found := logger.findEntry("WaitInstanceTerminated")
+	if !found {
+		t.Fatal("logger.Log not called with operation=WaitInstanceTerminated on failure")
+	}
+	if entry.err == nil {
+		t.Error("expected non-nil err in log entry when waiter fails")
+	}
+	if !strings.Contains(entry.err.Error(), "timeout") {
+		t.Errorf("logged err = %q, want to contain %q", entry.err.Error(), "timeout")
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	awsec2 "github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/spf13/cobra"
 
 	mintaws "github.com/nicholasgasior/mint/internal/aws"
@@ -18,6 +19,7 @@ import (
 type destroyDeps struct {
 	describe        mintaws.DescribeInstancesAPI
 	terminate       mintaws.TerminateInstancesAPI
+	waitTerminated  mintaws.WaitInstanceTerminatedAPI
 	describeVolumes mintaws.DescribeVolumesAPI
 	detachVolume    mintaws.DetachVolumeAPI
 	deleteVolume    mintaws.DeleteVolumeAPI
@@ -53,6 +55,7 @@ func newDestroyCommandWithDeps(deps *destroyDeps) *cobra.Command {
 			return runDestroy(cmd, &destroyDeps{
 				describe:        clients.ec2Client,
 				terminate:       clients.ec2Client,
+				waitTerminated:  awsec2.NewInstanceTerminatedWaiter(clients.ec2Client),
 				describeVolumes: clients.ec2Client,
 				detachVolume:    clients.ec2Client,
 				deleteVolume:    clients.ec2Client,
@@ -128,7 +131,7 @@ func runDestroy(cmd *cobra.Command, deps *destroyDeps) error {
 		deps.deleteVolume,
 		deps.describeAddrs,
 		deps.releaseAddr,
-	)
+	).WithWaitTerminated(deps.waitTerminated)
 
 	if verbose {
 		fmt.Fprintf(w, "Terminating instance %s...\n", found.ID)

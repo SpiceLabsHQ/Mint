@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
@@ -83,6 +84,16 @@ func (m *mockDestroyReleaseAddress) ReleaseAddress(ctx context.Context, params *
 	return m.output, m.err
 }
 
+type mockDestroyWaitTerminated struct {
+	err    error
+	called bool
+}
+
+func (m *mockDestroyWaitTerminated) Wait(ctx context.Context, params *ec2.DescribeInstancesInput, maxWaitDur time.Duration, optFns ...func(*ec2.InstanceTerminatedWaiterOptions)) error {
+	m.called = true
+	return m.err
+}
+
 // ---------------------------------------------------------------------------
 // Helper: create destroyDeps with happy path mocks
 // ---------------------------------------------------------------------------
@@ -95,6 +106,8 @@ func newHappyDestroyDeps(owner string) *destroyDeps {
 		terminate: &mockDestroyTerminateInstances{
 			output: &ec2.TerminateInstancesOutput{},
 		},
+		// waitTerminated is nil by default so existing tests run without a waiter.
+		waitTerminated: nil,
 		describeVolumes: &mockDestroyDescribeVolumes{
 			output: &ec2.DescribeVolumesOutput{
 				Volumes: []ec2types.Volume{{
@@ -288,5 +301,57 @@ func TestDestroyCommand(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests: WaitInstanceTerminated wiring in destroy command
+// ---------------------------------------------------------------------------
+
+// TestDestroyCommandWaiterCalled verifies that when a waitTerminated is set
+// in destroyDeps, it is invoked during command execution.
+func TestDestroyCommandWaiterCalled(t *testing.T) {
+	deps := newHappyDestroyDeps("alice")
+	waiter := &mockDestroyWaitTerminated{}
+	deps.waitTerminated = waiter
+
+	buf := new(bytes.Buffer)
+	cmd := newDestroyCommandWithDeps(deps)
+	root := newDestroyTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"destroy", "--yes"})
+
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !waiter.called {
+		t.Fatal("WaitInstanceTerminated was not called by the destroy command")
+	}
+}
+
+// TestDestroyCommandWaiterErrorPropagates verifies that a waiter error causes
+// the destroy command to return an error (volume cleanup is skipped).
+func TestDestroyCommandWaiterErrorPropagates(t *testing.T) {
+	deps := newHappyDestroyDeps("alice")
+	deps.waitTerminated = &mockDestroyWaitTerminated{
+		err: fmt.Errorf("instance did not reach terminated state"),
+	}
+
+	buf := new(bytes.Buffer)
+	cmd := newDestroyCommandWithDeps(deps)
+	root := newDestroyTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"destroy", "--yes"})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error when waiter fails, got nil")
+	}
+	if !strings.Contains(err.Error(), "instance did not reach terminated state") {
+		t.Errorf("error %q does not contain expected message", err.Error())
 	}
 }
