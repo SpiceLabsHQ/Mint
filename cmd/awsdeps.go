@@ -86,10 +86,14 @@ func commandNeedsAWS(cmd *cobra.Command) bool {
 		return false
 	}
 	switch cmd.Name() {
-	case "version", "config", "set", "get", "ssh-config", "help", "update",
+	case "version", "config", "set", "get", "help", "update",
 		// doctor initializes its own AWS clients so it can report credential
 		// failures as a check result rather than a fatal startup error.
-		"doctor":
+		"doctor",
+		// ssh-config initializes its own AWS clients only when auto-discovery
+		// is needed (no --hostname/--instance-id/--az flags). Explicit-flag
+		// and --remove invocations do not need AWS at all.
+		"ssh-config":
 		return false
 	default:
 		return true
