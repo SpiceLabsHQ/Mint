@@ -58,9 +58,6 @@ systemctl enable docker
 systemctl start docker
 usermod -aG docker ubuntu
 
-# Docker Compose plugin is installed above via docker-compose-plugin apt package.
-# Apt handles integrity verification; no additional checksum needed.
-
 # --- Node.js LTS ---
 
 log "Installing Node.js LTS"
@@ -130,8 +127,6 @@ if ! command -v aws &> /dev/null; then
     rm -rf /tmp/aws /tmp/awscliv2.zip
 fi
 
-# --- EC2 Instance Connect ---
-
 log "Installing EC2 Instance Connect agent"
 apt-get install -y -qq ec2-instance-connect
 
@@ -184,13 +179,16 @@ fi
 
 # Format and mount project EBS at /mint/projects
 if [ -n "${MINT_PROJECT_DEV:-}" ]; then
+    # On Nitro instances (m6i etc.), /dev/xvdf → /dev/nvme*n1
+    if [ ! -b "${MINT_PROJECT_DEV}" ]; then
+        _root=$(lsblk -rno PKNAME "$(findmnt -no SOURCE /)")
+        MINT_PROJECT_DEV=$(lsblk -rno NAME,TYPE | awk -v r="$_root" '$2=="disk"&&$1!=r{print "/dev/"$1;exit}')
+    fi
     log "Setting up project volume ${MINT_PROJECT_DEV} at /mint/projects"
-    # Only format if no filesystem exists
     if ! blkid "${MINT_PROJECT_DEV}" &> /dev/null; then
         mkfs.ext4 -q "${MINT_PROJECT_DEV}"
     fi
     mount "${MINT_PROJECT_DEV}" /mint/projects
-    # Write fstab entry for project EBS
     PROJECT_UUID=$(blkid -s UUID -o value "${MINT_PROJECT_DEV}")
     if ! grep -q '/mint/projects' /etc/fstab; then
         echo "UUID=${PROJECT_UUID} /mint/projects ext4 defaults,nofail 0 2" >> /etc/fstab
