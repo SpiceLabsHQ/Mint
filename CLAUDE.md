@@ -9,7 +9,7 @@ Mint is a CLI tool that provisions and manages EC2-based development environment
 **Primary workflow**: MacBook → VS Code Remote-SSH → EC2 host → (user opens devcontainer via VS Code)
 **Secondary workflow**: iPad (Termius) → mosh → EC2 host → tmux → (user connects to container manually)
 
-**Current state**: Phase 0 scaffold complete. Go CLI skeleton with config, identity, logging, and build tooling. `docs/SPEC.md` is the authoritative specification. `docs/adr/` contains Architecture Decision Records that are binding design constraints.
+**Current state**: Phase 0–1 implemented. Full provisioning lifecycle (up, recreate, destroy), SSH/mosh connectivity, projects, sessions, idle detection, self-update, and developer tooling. `docs/SPEC.md` is the authoritative specification. `docs/adr/` contains Architecture Decision Records that are binding design constraints.
 
 ## The Five Keys
 
@@ -56,8 +56,8 @@ These are non-negotiable constraints from the ADRs. Do not deviate without updat
 
 ```bash
 go build ./...                    # build all packages
-go test ./... -v -count=1         # run all tests (101 tests)
-go test ./... -coverprofile=c.out # coverage (87.4%)
+go test ./... -v -count=1         # run all tests (599 tests, 17 packages)
+go test ./... -coverprofile=c.out # coverage (85.1%)
 go vet ./...                      # lint
 go generate ./...                 # regenerate bootstrap hash (run before build)
 go mod tidy                       # always run after adding new dependencies
@@ -67,14 +67,23 @@ go mod tidy                       # always run after adding new dependencies
 
 | Package | Purpose |
 |---------|---------|
-| `cmd/` | Cobra CLI commands: root, version, config, config set |
+| `cmd/` | Cobra CLI commands (up, destroy, ssh, sessions, extend, doctor, ssh-config, …) |
 | `internal/cli/` | CLIContext struct — global flag propagation via `context.Context` |
 | `internal/config/` | Viper/TOML config at `~/.config/mint/config.toml` with composable validators |
 | `internal/identity/` | STS owner derivation + ARN normalization (ADR-0013) |
-| `internal/aws/` | EC2 client — instance type validation via DescribeInstanceTypes |
+| `internal/aws/` | Narrow EC2/EFS/IC interfaces for mock injection; waiter interfaces |
 | `internal/bootstrap/` | Bootstrap script SHA256 hash embedding via `go:generate` (ADR-0009) |
 | `internal/logging/` | Structured JSON logs + audit log (JSON Lines format) |
-| `scripts/` | `bootstrap.sh` — EC2 user-data script for AL2023 |
+| `internal/tags/` | Tag constants (`TagBootstrap`, `BootstrapComplete`, …) and `TagBuilder` fluent API |
+| `internal/vm/` | VM discovery via tags — `FindVM` / `ListVMs`; never call DescribeInstances directly |
+| `internal/progress/` | TTY-aware spinner; honors `MINT_NO_SPINNER=1`; injectable `Interactive bool` |
+| `internal/provision/` | Provisioning lifecycle (up, destroy, bootstrap polling with `isTerminal` injectable) |
+| `internal/session/` | Idle detection per ADR-0018: tmux, SSH, claude processes, extended-until |
+| `internal/sshconfig/` | Managed SSH config blocks with checksum hand-edit detection (ADR-0008/ADR-0019) |
+| `internal/selfupdate/` | GitHub Releases self-update with SHA256 verification (ADR-0020) |
+| `internal/version/` | Embedded version string |
+| `scripts/` | `bootstrap.sh` — EC2 user-data script for Ubuntu 24.04 (16,384-byte hard limit) |
+| `tests/e2e/` | End-to-end test scaffolding (see `/live-test` slash command) |
 
 ## Development Patterns
 
@@ -83,6 +92,13 @@ go mod tidy                       # always run after adding new dependencies
 - AWS clients use narrow interfaces (e.g., `STSClient`, `DescribeInstanceTypesAPI`) for mock injection in tests
 - Config validation uses a callback pattern (`InstanceTypeValidatorFunc`) to keep the config package decoupled from AWS
 - Bootstrap script hash is embedded at compile time — always run `go generate ./...` before building if `scripts/bootstrap.sh` changes
+- **Tag constants**: All tag keys and bootstrap status values live in `internal/tags/tags.go`. Never inline tag strings — always use `tags.TagBootstrap`, `tags.BootstrapComplete`, etc.
+- **VM discovery**: Always use `vm.FindVM(ctx, client, owner, vmName)` or `vm.ListVMs(...)`. `FindVM` returns `(nil, nil)` when no VM exists — that is not an error. Never call DescribeInstances without `tags.FilterByOwner()`.
+- **EC2 state sequencing**: Use waiter interfaces before dependent operations: `WaitInstanceRunningAPI` before EBS attach; `WaitInstanceTerminatedAPI` before volume deletion. Waiters are injected via `WithWaitRunning()` / `WithWaitTerminated()` builder methods.
+- **Bootstrap script size**: `scripts/bootstrap.sh` has a hard 16,384-byte EC2 user-data limit. Current size is ~16,331 bytes (~53 bytes headroom). After any change: (1) verify `wc -c scripts/bootstrap.sh < 16384`, (2) run `go generate ./internal/bootstrap/...`, (3) confirm `hash_generated.go` changed.
+- **Bootstrap pre-check before SSH**: Check `found.BootstrapStatus` before SSH operations. Use `tags.BootstrapPending` / `tags.BootstrapFailed` constants. Use `isSSHConnectionError(err)` and `isTOFUError(err)` helpers in `cmd/sshutil.go`.
+- **Optional-AWS commands**: Commands that sometimes need AWS (doctor, ssh-config) return `false` from `commandNeedsAWS()` and self-initialize clients in `RunE`. Follow the doctor pattern with `errorIdentityResolver` for graceful credential failures.
+- **TTY-aware behavior**: For code that checks terminal state, inject a `func() bool` field (e.g., `isTerminal`) rather than calling `term.IsTerminal()` directly. This allows test-time override without subprocess spawning.
 
 ## Key Reference Documents
 
