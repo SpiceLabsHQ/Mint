@@ -51,6 +51,7 @@ These are non-negotiable constraints from the ADRs. Do not deviate without updat
 - `--verbose` (progress steps) and `--debug` (AWS SDK details) global flags
 - `--yes` to skip confirmation on destructive operations (`mint destroy`)
 - `--vm <name>` defaults to `default` and can be omitted for single-VM users
+- `--profile <name>` overrides the AWS profile; persisted to config as `aws_profile`
 
 ## Build & Test Commands
 
@@ -106,4 +107,6 @@ go mod tidy                       # always run after adding new dependencies
 |----------|---------|
 | `docs/SPEC.md` | Complete specification — the authoritative source |
 | `docs/ROADMAP.md` | Phased implementation plan (Phase 0–4) |
-| `docs/adr/0001-*.md` through `docs/adr/0020-*.md` | Architecture Decision Records — binding constraints |
+| `docs/adr/0001-*.md` through `docs/adr/0021-*.md` | Architecture Decision Records — binding constraints |
+| `docs/command-reference.md` | Complete command documentation with ADR cross-references |
+| `.devcontainer/` | Developer isolated environment (Go 1.24, AWS CLI, isolated `MINT_CONFIG_DIR`) |
