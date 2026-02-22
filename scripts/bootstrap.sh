@@ -1,21 +1,15 @@
 #!/bin/bash
-# Mint bootstrap script — runs as EC2 user-data on first boot.
-# Target: Ubuntu 24.04 LTS
-#
-# Environment variables (passed via user-data template):
-#   MINT_EFS_ID       — EFS filesystem ID for user storage
-#   MINT_PROJECT_DEV  — Block device for project EBS volume (e.g., /dev/xvdf)
-#   MINT_VM_NAME      — VM name tag value
-#   MINT_IDLE_TIMEOUT — Idle timeout in minutes (default: 60)
-#
-# This script is hash-pinned in the Go binary. Any modification requires
-# regenerating the embedded hash via `go generate ./internal/bootstrap/...`.
+# Mint bootstrap script — EC2 user-data, Ubuntu 24.04 LTS.
+# Hash-pinned in the Go binary; run `go generate ./internal/bootstrap/...` after changes.
 
 set -euo pipefail
 
 BOOTSTRAP_VERSION="1.0.0"
 MINT_STATE_DIR="/var/lib/mint"
 MINT_IDLE_TIMEOUT="${MINT_IDLE_TIMEOUT:-60}"
+
+# Track whether bootstrap completed successfully (used by EXIT trap).
+_bootstrap_ok=false
 
 export DEBIAN_FRONTEND=noninteractive
 
@@ -24,6 +18,34 @@ export DEBIAN_FRONTEND=noninteractive
 log() {
     echo "[mint-bootstrap] $(date -u '+%Y-%m-%dT%H:%M:%SZ') $*"
 }
+
+# Fetch instance identity once — reused by EXIT trap and EFS mount.
+_IMDS_TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" \
+    -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" 2>/dev/null) || true
+_TRAP_INSTANCE_ID=$(curl -s -H "X-aws-ec2-metadata-token: ${_IMDS_TOKEN}" \
+    http://169.254.169.254/latest/meta-data/instance-id 2>/dev/null) || true
+_TRAP_REGION=$(curl -s -H "X-aws-ec2-metadata-token: ${_IMDS_TOKEN}" \
+    http://169.254.169.254/latest/meta-data/placement/region 2>/dev/null) || true
+
+# EXIT trap: tag instance mint:bootstrap=complete or failed.
+_bootstrap_exit() {
+    local _tag_value
+    if [ "$_bootstrap_ok" = true ]; then
+        _tag_value="complete"
+    else
+        _tag_value="failed"
+        log "Bootstrap did NOT complete successfully — tagging mint:bootstrap=failed"
+    fi
+    if [ -n "${_TRAP_INSTANCE_ID:-}" ] && [ -n "${_TRAP_REGION:-}" ]; then
+        aws ec2 create-tags \
+            --resources "${_TRAP_INSTANCE_ID}" \
+            --tags "Key=mint:bootstrap,Value=${_tag_value}" \
+            --region "${_TRAP_REGION}" 2>/dev/null \
+            && log "Tagged instance ${_TRAP_INSTANCE_ID} with mint:bootstrap=${_tag_value}" \
+            || log "WARNING: Failed to set mint:bootstrap=${_tag_value} tag"
+    fi
+}
+trap '_bootstrap_exit' EXIT
 
 log "Starting bootstrap v${BOOTSTRAP_VERSION}"
 
@@ -153,11 +175,7 @@ if [ -n "${MINT_EFS_ID:-}" ]; then
 
     # Mount EFS via native NFSv4 (VPC security groups provide access control).
     apt-get install -y -qq nfs-common
-    IMDS_TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" \
-        -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
-    AWS_REGION=$(curl -s -H "X-aws-ec2-metadata-token: ${IMDS_TOKEN}" \
-        http://169.254.169.254/latest/meta-data/placement/region)
-    EFS_ENDPOINT="${MINT_EFS_ID}.efs.${AWS_REGION}.amazonaws.com"
+    EFS_ENDPOINT="${MINT_EFS_ID}.efs.${_TRAP_REGION}.amazonaws.com"
     mount -t nfs4 -o nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport "${EFS_ENDPOINT}:/" /mint/user
     # Write fstab entry for EFS
     if ! grep -q '/mint/user' /etc/fstab; then
@@ -179,7 +197,19 @@ fi
 
 # Format and mount project EBS at /mint/projects
 if [ -n "${MINT_PROJECT_DEV:-}" ]; then
-    udevadm settle
+    # Poll up to 90s for block device (handles NVMe naming on Nitro instances).
+    _t=90
+    while [ "${_t}" -gt 0 ] && [ ! -b "${MINT_PROJECT_DEV}" ]; do
+        _root_disk=$(lsblk -rno PKNAME "$(findmnt -no SOURCE /)" 2>/dev/null || true)
+        _candidate=$(lsblk -rno NAME,TYPE 2>/dev/null \
+            | awk -v r="${_root_disk}" '$2=="disk" && $1!=r {print "/dev/"$1; exit}')
+        if [ -n "${_candidate:-}" ]; then
+            MINT_PROJECT_DEV="${_candidate}"
+            break
+        fi
+        sleep 5
+        _t=$(( _t - 5 ))
+    done
     log "Setting up project volume ${MINT_PROJECT_DEV} at /mint/projects"
     if ! blkid "${MINT_PROJECT_DEV}" &> /dev/null; then
         mkfs.ext4 -q "${MINT_PROJECT_DEV}"
@@ -213,81 +243,43 @@ RECONCILE_SERVICE
 
 cat > /usr/local/bin/mint-reconcile << 'RECONCILE_SCRIPT'
 #!/bin/bash
-# Mint boot reconciliation script
-# Runs on every boot to ensure EFS/EBS mounts and home symlinks are intact.
-
+# Mint boot reconciliation — remounts storage and restores symlinks.
 set -euo pipefail
-
-log() {
-    logger -t mint-reconcile "$*"
-}
+log() { logger -t mint-reconcile "$*"; }
 
 log "Starting boot reconciliation"
 
-# --- Ensure EFS is mounted at /mint/user ---
 if grep -q '/mint/user' /etc/fstab && ! mountpoint -q /mint/user 2>/dev/null; then
     log "EFS not mounted at /mint/user — mounting from fstab"
     mount /mint/user || log "WARNING: Failed to mount /mint/user"
 fi
 
-# --- Ensure project EBS is mounted at /mint/projects ---
 if grep -q '/mint/projects' /etc/fstab && ! mountpoint -q /mint/projects 2>/dev/null; then
     log "Project volume not mounted at /mint/projects — mounting from fstab"
     mount /mint/projects || log "WARNING: Failed to mount /mint/projects"
 fi
 
-# --- Restore EFS-backed home directory symlinks ---
 if mountpoint -q /mint/user 2>/dev/null; then
     mkdir -p /mint/user/.ssh /mint/user/.config /mint/user/projects
     chown -R ubuntu:ubuntu /mint/user/.ssh /mint/user/.config /mint/user/projects
     chmod 700 /mint/user/.ssh
-
     ln -sfn /mint/user/.ssh /home/ubuntu/.ssh
     ln -sfn /mint/user/.config /home/ubuntu/.config
     ln -sfn /mint/user/projects /home/ubuntu/projects
     chown -h ubuntu:ubuntu /home/ubuntu/.ssh /home/ubuntu/.config /home/ubuntu/projects
-
     log "EFS symlinks restored"
 fi
 
-# --- Version drift detection ---
 DRIFT_ISSUES=()
+! command -v docker &> /dev/null && DRIFT_ISSUES+=("docker_missing") \
+    || ! systemctl is-active --quiet docker && DRIFT_ISSUES+=("docker_not_running") || true
+! command -v node &> /dev/null && DRIFT_ISSUES+=("nodejs_missing") || true
+! grep -q "^Port 41122" /etc/ssh/sshd_config.d/mint.conf 2>/dev/null && DRIFT_ISSUES+=("ssh_port_drift") || true
+! command -v mosh-server &> /dev/null && DRIFT_ISSUES+=("mosh_missing") || true
+! command -v tmux &> /dev/null && DRIFT_ISSUES+=("tmux_missing") || true
 
-# Check Docker
-if ! command -v docker &> /dev/null; then
-    DRIFT_ISSUES+=("docker_missing")
-elif ! systemctl is-active --quiet docker; then
-    DRIFT_ISSUES+=("docker_not_running")
-fi
+if [ ${#DRIFT_ISSUES[@]} -eq 0 ]; then HEALTH_STATUS="healthy"; else HEALTH_STATUS="degraded"; fi
 
-# Check Node.js
-if ! command -v node &> /dev/null; then
-    DRIFT_ISSUES+=("nodejs_missing")
-fi
-
-# Check SSH port configuration
-if ! grep -q "^Port 41122" /etc/ssh/sshd_config.d/mint.conf 2>/dev/null; then
-    DRIFT_ISSUES+=("ssh_port_drift")
-fi
-
-# Check mosh
-if ! command -v mosh-server &> /dev/null; then
-    DRIFT_ISSUES+=("mosh_missing")
-fi
-
-# Check tmux
-if ! command -v tmux &> /dev/null; then
-    DRIFT_ISSUES+=("tmux_missing")
-fi
-
-# --- Determine health status ---
-if [ ${#DRIFT_ISSUES[@]} -eq 0 ]; then
-    HEALTH_STATUS="healthy"
-else
-    HEALTH_STATUS="degraded"
-fi
-
-# --- Tag instance with health status ---
 TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" \
     -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" 2>/dev/null) || true
 if [ -n "$TOKEN" ]; then
@@ -295,7 +287,6 @@ if [ -n "$TOKEN" ]; then
         http://169.254.169.254/latest/meta-data/instance-id 2>/dev/null) || true
     REGION=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
         http://169.254.169.254/latest/meta-data/placement/region 2>/dev/null) || true
-
     if [ -n "$INSTANCE_ID" ] && [ -n "$REGION" ]; then
         aws ec2 create-tags \
             --resources "$INSTANCE_ID" \
@@ -304,10 +295,8 @@ if [ -n "$TOKEN" ]; then
     fi
 fi
 
-# --- Log reconciliation results ---
 DRIFT_JSON=$(printf '%s\n' "${DRIFT_ISSUES[@]:-}" | jq -R . 2>/dev/null | jq -s . 2>/dev/null || echo "[]")
 log "reconciliation complete: health=${HEALTH_STATUS} drift_issues=${DRIFT_JSON}"
-
 log "Boot reconciliation complete"
 RECONCILE_SCRIPT
 
@@ -488,26 +477,14 @@ check_service ssh
 
 if [ "$HEALTH_OK" = true ]; then
     log "Health check passed"
-
-    # Tag instance as bootstrap complete
-    TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" \
-        -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
-    INSTANCE_ID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
-        http://169.254.169.254/latest/meta-data/instance-id)
-    REGION=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
-        http://169.254.169.254/latest/meta-data/placement/region)
-
-    aws ec2 create-tags \
-        --resources "$INSTANCE_ID" \
-        --tags "Key=mint:bootstrap,Value=complete" \
-        --region "$REGION"
-
-    log "Tagged instance ${INSTANCE_ID} with mint:bootstrap=complete"
 else
     log "Health check FAILED:"
     echo -e "$HEALTH_ERRORS" | while read -r line; do
         log "$line"
     done
+    exit 1
 fi
 
+# Signal the EXIT trap that bootstrap completed successfully.
+_bootstrap_ok=true
 log "Bootstrap v${BOOTSTRAP_VERSION} finished"
