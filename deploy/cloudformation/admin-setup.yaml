@@ -153,6 +153,41 @@ Resources:
           Value: admin
 
   # ---------------------------------------------------------------------------
+  # PassRole Policy — grants Mint users permission to pass mint-instance-role
+  # to EC2 at launch (required by RunInstances with an instance profile).
+  #
+  # PowerUserAccess does not include iam:PassRole. Attach this customer-managed
+  # policy to the SSO permission set used by Mint users (e.g. PowerUserAccess)
+  # via the IAM Identity Center console. See docs/admin-setup.md for steps.
+  #
+  # Scope: iam:PassRole on mint-instance-role only, and only when the
+  # service receiving the role is ec2.amazonaws.com.
+  # ---------------------------------------------------------------------------
+  MintPassRolePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: mint-pass-instance-role
+      Description: >-
+        Allows Mint users to pass mint-instance-role to EC2 at instance launch.
+        Attach to the SSO permission set used by Mint users (e.g. PowerUserAccess).
+        Required because RunInstances with an instance profile needs iam:PassRole.
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: PassInstanceRoleToEc2
+            Effect: Allow
+            Action: iam:PassRole
+            Resource: !GetAtt MintInstanceRole.Arn
+            Condition:
+              StringEquals:
+                iam:PassedToService: ec2.amazonaws.com
+      Tags:
+        - Key: mint
+          Value: "true"
+        - Key: "mint:component"
+          Value: admin
+
+  # ---------------------------------------------------------------------------
   # EFS Filesystem — persistent storage for user configuration (ADR-0004).
   #
   # Mounted at /mint/user on every VM. Stores dotfiles, SSH authorized_keys,
@@ -291,3 +326,12 @@ Outputs:
     Value: !GetAtt MintInstanceProfile.Arn
     Export:
       Name: !Sub "${AWS::StackName}-InstanceProfileArn"
+
+  PassRolePolicyArn:
+    Description: >-
+      ARN of the managed policy that grants iam:PassRole on mint-instance-role.
+      Attach this policy (name: mint-pass-instance-role) to the SSO permission
+      set used by Mint users. See docs/admin-setup.md for steps.
+    Value: !Ref MintPassRolePolicy
+    Export:
+      Name: !Sub "${AWS::StackName}-PassRolePolicyArn"

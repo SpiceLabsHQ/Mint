@@ -113,11 +113,91 @@ aws ec2 describe-security-groups \
 |----------|------|---------|
 | IAM Role | `mint-instance-role` | Attached to every Mint VM. Allows self-stop when idle (ADR-0018), self-tagging for bootstrap verification (ADR-0009), EFS mount access, and CloudWatch Logs. Scoped to resources tagged `mint=true`. |
 | Instance Profile | `mint-instance-profile` | Wraps the IAM role. Passed to EC2 instances at launch by `mint up`. |
+| Managed Policy | `mint-pass-instance-role` | Grants `iam:PassRole` on `mint-instance-role` to EC2. Attach to the SSO permission set used by Mint users (see below). |
 | EFS Filesystem | `mint-efs` | Encrypted, elastic throughput. Persistent storage for user configuration (dotfiles, SSH keys, Claude Code auth state). Mounted at `/mint/user` on every VM. Files transition to Infrequent Access after 30 days. |
 | Security Group | `mint-efs` | Self-referencing NFS rule (TCP 2049). Only instances in this group can reach the EFS mount targets. Attached to every Mint VM at launch. |
 | EFS Mount Targets | (one per subnet) | Place EFS endpoints in each AZ so VMs can mount the filesystem regardless of which AZ they launch in. |
 
 All resources are tagged with `mint=true` and `mint:component=admin` for identification and cost tracking.
+
+## Attach PassRole Policy to SSO Permission Set
+
+`mint up` calls `RunInstances` with `mint-instance-profile`, which requires `iam:PassRole`
+on `mint-instance-role`. `PowerUserAccess` does not include this permission, so the stack
+creates a narrow customer-managed policy (`mint-pass-instance-role`) that grants exactly:
+
+```json
+{
+  "Effect": "Allow",
+  "Action": "iam:PassRole",
+  "Resource": "arn:aws:iam::ACCOUNT_ID:role/mint-instance-role",
+  "Condition": { "StringEquals": { "iam:PassedToService": "ec2.amazonaws.com" } }
+}
+```
+
+After deploying the stack, attach this policy to the permission set your Mint users log in
+with (typically `PowerUserAccess`). **This is a one-time step per account.**
+
+### Steps (AWS Console)
+
+1. Open **IAM Identity Center** → **Permission sets** → select `PowerUserAccess`
+2. Under **Customer managed policies**, choose **Attach**
+3. Enter policy name: `mint-pass-instance-role` → **Attach policy**
+4. Re-provision the permission set to push the change to all assigned accounts:
+   **Permission sets** → select `PowerUserAccess` → **Reprovision**
+
+### Steps (AWS CLI)
+
+```bash
+# Get your SSO instance ARN
+SSO_INSTANCE_ARN=$(aws sso-admin list-instances \
+  --query 'Instances[0].InstanceArn' --output text)
+
+# Get the PowerUserAccess permission set ARN
+PERMISSION_SET_ARN=$(aws sso-admin list-permission-sets \
+  --instance-arn "$SSO_INSTANCE_ARN" \
+  --query 'PermissionSets[]' --output text \
+  | xargs -I{} aws sso-admin describe-permission-set \
+      --instance-arn "$SSO_INSTANCE_ARN" \
+      --permission-set-arn {} \
+      --query 'PermissionSet.[PermissionSetArn,Name]' --output text \
+  | grep PowerUserAccess \
+  | awk '{print $1}')
+
+# Attach the customer-managed policy by name
+aws sso-admin attach-customer-managed-policy-reference-to-permission-set \
+  --instance-arn "$SSO_INSTANCE_ARN" \
+  --permission-set-arn "$PERMISSION_SET_ARN" \
+  --customer-managed-policy-reference "Name=mint-pass-instance-role"
+
+# Reprovision to push the change to all assigned accounts
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+aws sso-admin provision-permission-set \
+  --instance-arn "$SSO_INSTANCE_ARN" \
+  --permission-set-arn "$PERMISSION_SET_ARN" \
+  --target-type AWS_ACCOUNT \
+  --target-id "$ACCOUNT_ID"
+```
+
+> **Not using SSO?** If your users authenticate with long-lived IAM users or roles, attach
+> `mint-pass-instance-role` directly to the relevant IAM group or role via
+> `aws iam attach-group-policy` / `aws iam attach-role-policy` using the policy ARN from
+> the stack output `PassRolePolicyArn`.
+
+### Verify
+
+After reprovisioning, verify the permission is active for a Mint user:
+
+```bash
+# As a Mint user (SSO session), confirm PassRole is allowed
+aws iam simulate-principal-policy \
+  --policy-source-arn "$(aws sts get-caller-identity --query Arn --output text)" \
+  --action-names iam:PassRole \
+  --resource-arns "arn:aws:iam::$(aws sts get-caller-identity --query Account --output text):role/mint-instance-role" \
+  --query 'EvaluationResults[0].EvalDecision' \
+  --output text
+# Expected output: allowed
+```
 
 ## IAM Policy Reference
 
