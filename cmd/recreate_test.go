@@ -419,7 +419,7 @@ func newHappyRecreateDeps(owner string) *recreateDeps {
 		describeAddrs:   lm.describeAddrs,
 		associateAddr:   lm.associateAddr,
 		bootstrapScript: []byte("#!/bin/bash\necho hello"),
-		resolveAMI: func(ctx context.Context, client mintaws.GetParameterAPI) (string, error) {
+		resolveAMI: func(ctx context.Context, client mintaws.DescribeImagesAPI) (string, error) {
 			return "ami-test123", nil
 		},
 	}
@@ -446,7 +446,7 @@ func newHappyRecreateDepsWithMocks(owner string, lm lifecycleMocks) *recreateDep
 		describeAddrs:   lm.describeAddrs,
 		associateAddr:   lm.associateAddr,
 		bootstrapScript: []byte("#!/bin/bash\necho hello"),
-		resolveAMI: func(ctx context.Context, client mintaws.GetParameterAPI) (string, error) {
+		resolveAMI: func(ctx context.Context, client mintaws.DescribeImagesAPI) (string, error) {
 			return "ami-test123", nil
 		},
 	}
@@ -613,7 +613,7 @@ func TestRecreateCommand(t *testing.T) {
 					describeAddrs:   lm.describeAddrs,
 					associateAddr:   lm.associateAddr,
 					bootstrapScript: []byte("#!/bin/bash\necho hello"),
-					resolveAMI: func(ctx context.Context, client mintaws.GetParameterAPI) (string, error) {
+					resolveAMI: func(ctx context.Context, client mintaws.DescribeImagesAPI) (string, error) {
 						return "ami-test123", nil
 					},
 				}
@@ -645,7 +645,7 @@ func TestRecreateCommand(t *testing.T) {
 					describeAddrs:   lm.describeAddrs,
 					associateAddr:   lm.associateAddr,
 					bootstrapScript: []byte("#!/bin/bash\necho hello"),
-					resolveAMI: func(ctx context.Context, client mintaws.GetParameterAPI) (string, error) {
+					resolveAMI: func(ctx context.Context, client mintaws.DescribeImagesAPI) (string, error) {
 						return "ami-test123", nil
 					},
 				}
@@ -1230,8 +1230,8 @@ func TestRecreateLifecyclePendingAttachSetFailure(t *testing.T) {
 func TestRecreateLifecycleAMIResolutionFails(t *testing.T) {
 	lm := defaultLifecycleMocks()
 	deps := newHappyRecreateDepsWithMocks("alice", lm)
-	deps.resolveAMI = func(ctx context.Context, client mintaws.GetParameterAPI) (string, error) {
-		return "", fmt.Errorf("SSM parameter not found")
+	deps.resolveAMI = func(ctx context.Context, client mintaws.DescribeImagesAPI) (string, error) {
+		return "", fmt.Errorf("describe images: no AMIs found")
 	}
 
 	buf := new(bytes.Buffer)
@@ -1245,7 +1245,7 @@ func TestRecreateLifecycleAMIResolutionFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error from AMI resolution, got nil")
 	}
-	if !strings.Contains(err.Error(), "SSM parameter not found") {
+	if !strings.Contains(err.Error(), "describe images: no AMIs found") {
 		t.Errorf("error %q does not contain expected message", err.Error())
 	}
 }
@@ -1625,7 +1625,7 @@ func TestRecreateLifecycleHostKeyRemovedWithNonDefaultVM(t *testing.T) {
 		describeAddrs:   lm.describeAddrs,
 		associateAddr:   lm.associateAddr,
 		bootstrapScript: []byte("#!/bin/bash\necho hello"),
-		resolveAMI: func(ctx context.Context, client mintaws.GetParameterAPI) (string, error) {
+		resolveAMI: func(ctx context.Context, client mintaws.DescribeImagesAPI) (string, error) {
 			return "ami-test123", nil
 		},
 	}
@@ -1732,4 +1732,4 @@ func TestRecreateDetectsManualExtend(t *testing.T) {
 
 // Ensure provision.BootstrapPollFunc and provision.AMIResolver types are used correctly.
 var _ provision.BootstrapPollFunc = func(ctx context.Context, owner, vmName, instanceID string) error { return nil }
-var _ provision.AMIResolver = func(ctx context.Context, client mintaws.GetParameterAPI) (string, error) { return "", nil }
+var _ provision.AMIResolver = func(ctx context.Context, client mintaws.DescribeImagesAPI) (string, error) { return "", nil }

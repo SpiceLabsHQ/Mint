@@ -25,7 +25,7 @@ import (
 // defaultInstanceProfileName is the IAM instance profile created by the admin
 // CloudFormation stack. EC2 instances launched by mint up require this profile
 // for Instance Connect, EFS mount, self-stop, and bootstrap tag updates.
-const defaultInstanceProfileName = "mint-vm"
+const defaultInstanceProfileName = "mint-instance-profile"
 
 // InitResult holds the outcome of a successful init run.
 type InitResult struct {

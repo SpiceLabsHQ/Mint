@@ -56,7 +56,7 @@ type BootstrapPollFunc func(ctx context.Context, owner, vmName, instanceID strin
 
 // AMIResolver is a function that resolves the current AMI ID.
 // Defaults to mintaws.ResolveAMI; overridden in tests.
-type AMIResolver func(ctx context.Context, client mintaws.GetParameterAPI) (string, error)
+type AMIResolver func(ctx context.Context, client mintaws.DescribeImagesAPI) (string, error)
 
 // DeleteTagsAPI defines the subset of the EC2 API used for removing tags.
 type DeleteTagsAPI interface {
@@ -77,8 +77,10 @@ type Provisioner struct {
 	associateAddr     mintaws.AssociateAddressAPI
 	describeAddrs     mintaws.DescribeAddressesAPI
 	createTags        mintaws.CreateTagsAPI
-	ssmClient         mintaws.GetParameterAPI
-	describeVolumes   mintaws.DescribeVolumesAPI
+	describeImages    mintaws.DescribeImagesAPI
+	waitRunning          mintaws.WaitInstanceRunningAPI
+	waitVolumeAvailable  mintaws.WaitVolumeAvailableAPI
+	describeVolumes      mintaws.DescribeVolumesAPI
 	deleteTags        DeleteTagsAPI
 
 	verifyBootstrap BootstrapVerifier
@@ -101,7 +103,7 @@ func NewProvisioner(
 	associateAddr mintaws.AssociateAddressAPI,
 	describeAddrs mintaws.DescribeAddressesAPI,
 	createTags mintaws.CreateTagsAPI,
-	ssmClient mintaws.GetParameterAPI,
+	describeImages mintaws.DescribeImagesAPI,
 ) *Provisioner {
 	return &Provisioner{
 		describeInstances: describeInstances,
@@ -115,10 +117,24 @@ func NewProvisioner(
 		associateAddr:     associateAddr,
 		describeAddrs:     describeAddrs,
 		createTags:        createTags,
-		ssmClient:         ssmClient,
+		describeImages:    describeImages,
 		verifyBootstrap:   bootstrap.Verify,
 		resolveAMI:        mintaws.ResolveAMI,
 	}
+}
+
+// WithWaitRunning sets the waiter used to block until the instance is running
+// before attaching the EBS volume. When nil, no wait is performed (tests).
+func (p *Provisioner) WithWaitRunning(w mintaws.WaitInstanceRunningAPI) *Provisioner {
+	p.waitRunning = w
+	return p
+}
+
+// WithWaitVolumeAvailable sets the waiter used to block until the EBS volume
+// is available before attaching it. When nil, no wait is performed (tests).
+func (p *Provisioner) WithWaitVolumeAvailable(w mintaws.WaitVolumeAvailableAPI) *Provisioner {
+	p.waitVolumeAvailable = w
+	return p
 }
 
 // WithDescribeVolumes sets the DescribeVolumes client for pending-attach recovery.
@@ -185,7 +201,7 @@ func (p *Provisioner) Run(ctx context.Context, owner, ownerARN, vmName string, c
 	}
 
 	// Step 3: Resolve Ubuntu 24.04 AMI.
-	amiID, err := p.resolveAMI(ctx, p.ssmClient)
+	amiID, err := p.resolveAMI(ctx, p.describeImages)
 	if err != nil {
 		return nil, fmt.Errorf("resolving AMI: %w", err)
 	}
@@ -219,7 +235,16 @@ func (p *Provisioner) Run(ctx context.Context, owner, ownerARN, vmName string, c
 		return nil, fmt.Errorf("launching instance: %w", err)
 	}
 
-	// Step 9: Create and attach project EBS volume.
+	// Step 9: Wait for instance to reach running state before attaching EBS.
+	if p.waitRunning != nil {
+		if err := p.waitRunning.Wait(ctx, &ec2.DescribeInstancesInput{
+			InstanceIds: []string{instanceID},
+		}, 5*time.Minute); err != nil {
+			return nil, fmt.Errorf("waiting for instance %s to be running: %w", instanceID, err)
+		}
+	}
+
+	// Step 10: Create and attach project EBS volume.
 	// Check for a pending-attach volume first (crash recovery from mint recreate).
 	volumeSize := cfg.VolumeSize
 	if volumeSize == 0 {
@@ -280,7 +305,7 @@ func (p *Provisioner) Run(ctx context.Context, owner, ownerARN, vmName string, c
 		}
 	}
 
-	// Step 10: Allocate and associate Elastic IP.
+	// Step 11: Allocate and associate Elastic IP.
 	allocID, publicIP, err := p.allocateAndAssociateEIP(ctx, instanceID, owner, ownerARN, vmName)
 	if err != nil {
 		return nil, fmt.Errorf("allocating Elastic IP: %w", err)
@@ -293,7 +318,7 @@ func (p *Provisioner) Run(ctx context.Context, owner, ownerARN, vmName string, c
 		AllocationID: allocID,
 	}
 
-	// Step 11: Poll for bootstrap completion (if poller configured).
+	// Step 12: Poll for bootstrap completion (if poller configured).
 	if p.pollBootstrap != nil {
 		if pollErr := p.pollBootstrap(ctx, owner, vmName, instanceID); pollErr != nil {
 			result.BootstrapError = pollErr
@@ -601,6 +626,14 @@ func (p *Provisioner) createAndAttachVolume(
 	}
 
 	volumeID := aws.ToString(createOut.VolumeId)
+
+	if p.waitVolumeAvailable != nil {
+		if err := p.waitVolumeAvailable.Wait(ctx, &ec2.DescribeVolumesInput{
+			VolumeIds: []string{volumeID},
+		}, 2*time.Minute); err != nil {
+			return "", fmt.Errorf("waiting for volume %s to be available: %w", volumeID, err)
+		}
+	}
 
 	avStart := time.Now()
 	_, err = p.attachVolume.AttachVolume(ctx, &ec2.AttachVolumeInput{

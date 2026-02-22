@@ -116,9 +116,6 @@ if ! command -v aws &> /dev/null; then
     apt-get install -y -qq unzip
     AWS_CLI_VERSION="2.22.0"
     AWS_CLI_ARCH="$(uname -m)"
-    # SHA256 checksums for awscli-exe-linux-<arch>-<version>.zip
-    # Computed from the official AWS distribution at awscli.amazonaws.com.
-    # Update both checksums whenever AWS_CLI_VERSION is bumped.
     case "${AWS_CLI_ARCH}" in
         x86_64)  AWS_CLI_SHA256="f315aa564190a12ae05a05bd8ab7b0645dd4a1ad71ce9e47dae4ff3dfeee8ceb" ;;
         aarch64) AWS_CLI_SHA256="c932ac00901ea3c430f3829140b8dc00fa6e9b8b99d6891929a4795947de7f3e" ;;
@@ -159,18 +156,17 @@ mkdir -p /mint/user /mint/projects "${MINT_STATE_DIR}"
 if [ -n "${MINT_EFS_ID:-}" ]; then
     log "Mounting EFS ${MINT_EFS_ID} at /mint/user"
 
-    # Install amazon-efs-utils from GitHub (not available in Ubuntu apt)
-    apt-get install -y -qq binutils rustc cargo pkg-config libssl-dev
-    git clone --branch v2.0.4 --depth 1 https://github.com/aws/efs-utils /tmp/efs-utils
-    cd /tmp/efs-utils
-    ./build-deb.sh
-    apt-get install -y -qq ./build/amazon-efs-utils*deb
-    rm -rf /tmp/efs-utils
-
-    mount -t efs "${MINT_EFS_ID}:/" /mint/user
+    # Mount EFS via native NFSv4 (VPC security groups provide access control).
+    apt-get install -y -qq nfs-common
+    IMDS_TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" \
+        -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+    AWS_REGION=$(curl -s -H "X-aws-ec2-metadata-token: ${IMDS_TOKEN}" \
+        http://169.254.169.254/latest/meta-data/placement/region)
+    EFS_ENDPOINT="${MINT_EFS_ID}.efs.${AWS_REGION}.amazonaws.com"
+    mount -t nfs4 -o nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport "${EFS_ENDPOINT}:/" /mint/user
     # Write fstab entry for EFS
     if ! grep -q '/mint/user' /etc/fstab; then
-        echo "${MINT_EFS_ID}:/ /mint/user efs _netdev,tls 0 0" >> /etc/fstab
+        echo "${EFS_ENDPOINT}:/ /mint/user nfs4 nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport,_netdev 0 0" >> /etc/fstab
     fi
     chown ubuntu:ubuntu /mint/user
 

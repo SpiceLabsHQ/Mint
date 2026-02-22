@@ -5,28 +5,25 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/aws/aws-sdk-go-v2/service/ssm"
-	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 )
 
 // ---------------------------------------------------------------------------
-// Inline mock structs
+// Inline mock
 // ---------------------------------------------------------------------------
 
-type mockGetParameter struct {
-	output *ssm.GetParameterOutput
+type mockDescribeImages struct {
+	output *ec2.DescribeImagesOutput
 	err    error
 }
 
-func (m *mockGetParameter) GetParameter(ctx context.Context, params *ssm.GetParameterInput, optFns ...func(*ssm.Options)) (*ssm.GetParameterOutput, error) {
+func (m *mockDescribeImages) DescribeImages(ctx context.Context, params *ec2.DescribeImagesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeImagesOutput, error) {
 	return m.output, m.err
 }
 
-// ---------------------------------------------------------------------------
-// Compile-time interface satisfaction checks for mocks
-// ---------------------------------------------------------------------------
-
-var _ GetParameterAPI = (*mockGetParameter)(nil)
+var _ DescribeImagesAPI = (*mockDescribeImages)(nil)
 
 // ---------------------------------------------------------------------------
 // ResolveAMI tests
@@ -35,52 +32,38 @@ var _ GetParameterAPI = (*mockGetParameter)(nil)
 func TestResolveAMI(t *testing.T) {
 	tests := []struct {
 		name       string
-		client     GetParameterAPI
+		client     DescribeImagesAPI
 		wantAMI    string
 		wantErr    bool
 		errContain string
 	}{
 		{
-			name: "successful resolution returns AMI ID",
-			client: &mockGetParameter{
-				output: &ssm.GetParameterOutput{
-					Parameter: &ssmtypes.Parameter{
-						Value: ssmStrPtr("ami-0abcdef1234567890"),
+			name: "returns most recent AMI",
+			client: &mockDescribeImages{
+				output: &ec2.DescribeImagesOutput{
+					Images: []ec2types.Image{
+						{ImageId: aws.String("ami-older"), CreationDate: aws.String("2026-01-01T00:00:00.000Z")},
+						{ImageId: aws.String("ami-newest"), CreationDate: aws.String("2026-02-18T10:51:48.000Z")},
 					},
 				},
 			},
-			wantAMI: "ami-0abcdef1234567890",
-			wantErr: false,
+			wantAMI: "ami-newest",
 		},
 		{
 			name: "API error propagated",
-			client: &mockGetParameter{
-				err: errors.New("parameter not found"),
+			client: &mockDescribeImages{
+				err: errors.New("describe images: access denied"),
 			},
 			wantErr:    true,
-			errContain: "parameter not found",
+			errContain: "access denied",
 		},
 		{
-			name: "nil parameter value",
-			client: &mockGetParameter{
-				output: &ssm.GetParameterOutput{
-					Parameter: &ssmtypes.Parameter{
-						Value: nil,
-					},
-				},
+			name: "no AMIs found",
+			client: &mockDescribeImages{
+				output: &ec2.DescribeImagesOutput{Images: []ec2types.Image{}},
 			},
 			wantErr:    true,
-			errContain: "nil value",
-		},
-		{
-			name: "nil parameter in response",
-			client: &mockGetParameter{
-				output: &ssm.GetParameterOutput{
-					Parameter: nil,
-				},
-			},
-			wantErr:    true,
-			errContain: "nil parameter",
+			errContain: "no Ubuntu 24.04 LTS AMIs found",
 		},
 	}
 
@@ -105,12 +88,4 @@ func TestResolveAMI(t *testing.T) {
 			}
 		})
 	}
-}
-
-// ---------------------------------------------------------------------------
-// Test helpers
-// ---------------------------------------------------------------------------
-
-func ssmStrPtr(s string) *string {
-	return &s
 }

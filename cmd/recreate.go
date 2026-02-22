@@ -8,6 +8,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
@@ -43,7 +44,8 @@ type recreateDeps struct {
 	deleteTags       provision.DeleteTagsAPI
 	describeSubnets  mintaws.DescribeSubnetsAPI
 	describeSGs      mintaws.DescribeSecurityGroupsAPI
-	ssmClient        mintaws.GetParameterAPI
+	describeImages   mintaws.DescribeImagesAPI
+	waitRunning      mintaws.WaitInstanceRunningAPI
 	describeFS       mintaws.DescribeFileSystemsAPI
 	describeAddrs    mintaws.DescribeAddressesAPI
 	associateAddr    mintaws.AssociateAddressAPI
@@ -95,7 +97,8 @@ func newRecreateCommandWithDeps(deps *recreateDeps) *cobra.Command {
 				deleteTags:       clients.ec2Client,
 				describeSubnets:  clients.ec2Client,
 				describeSGs:      clients.ec2Client,
-				ssmClient:       clients.ssmClient,
+				describeImages:  clients.ec2Client,
+				waitRunning:     ec2.NewInstanceRunningWaiter(clients.ec2Client),
 				describeFS:      clients.efsClient,
 				describeAddrs:   clients.ec2Client,
 				associateAddr:   clients.ec2Client,
@@ -239,6 +242,15 @@ func executeRecreateLifecycle(
 	newInstanceID, err := stepLaunchInstance(ctx, deps, found, vmName, volumeAZ, sp)
 	if err != nil {
 		return fmt.Errorf("launching new instance: %w", err)
+	}
+
+	if deps.waitRunning != nil {
+		sp.Update(fmt.Sprintf("  Waiting for instance %s to be running...", newInstanceID))
+		if err := deps.waitRunning.Wait(ctx, &ec2.DescribeInstancesInput{
+			InstanceIds: []string{newInstanceID},
+		}, 5*time.Minute); err != nil {
+			return fmt.Errorf("waiting for instance %s to be running: %w", newInstanceID, err)
+		}
 	}
 
 	if err := stepAttachVolume(ctx, deps, volumeID, newInstanceID, sp, w); err != nil {
@@ -540,7 +552,7 @@ func launchRecreateInstance(
 	if resolveAMI == nil {
 		resolveAMI = mintaws.ResolveAMI
 	}
-	amiID, err := resolveAMI(ctx, deps.ssmClient)
+	amiID, err := resolveAMI(ctx, deps.describeImages)
 	if err != nil {
 		return "", fmt.Errorf("resolving AMI: %w", err)
 	}

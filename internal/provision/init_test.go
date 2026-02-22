@@ -159,7 +159,7 @@ func newHappyMocks() *initMocks {
 		instanceProfile: &mockGetInstanceProfile{
 			output: &iam.GetInstanceProfileOutput{
 				InstanceProfile: &iamtypes.InstanceProfile{
-					InstanceProfileName: aws.String("mint-vm"),
+					InstanceProfileName: aws.String("mint-instance-profile"),
 				},
 			},
 		},
@@ -604,7 +604,7 @@ func TestValidateInstanceProfile(t *testing.T) {
 			mock: &mockGetInstanceProfile{
 				output: &iam.GetInstanceProfileOutput{
 					InstanceProfile: &iamtypes.InstanceProfile{
-						InstanceProfileName: aws.String("mint-vm"),
+						InstanceProfileName: aws.String("mint-instance-profile"),
 					},
 				},
 			},
@@ -613,10 +613,10 @@ func TestValidateInstanceProfile(t *testing.T) {
 			name: "instance profile missing (NoSuchEntity)",
 			mock: &mockGetInstanceProfile{
 				err: &iamtypes.NoSuchEntityException{
-					Message: aws.String("Instance Profile mint-vm cannot be found"),
+					Message: aws.String("Instance Profile mint-instance-profile cannot be found"),
 				},
 			},
-			wantErr: "instance profile \"mint-vm\" not found",
+			wantErr: "instance profile \"mint-instance-profile\" not found",
 		},
 		{
 			name: "IAM API error propagated",

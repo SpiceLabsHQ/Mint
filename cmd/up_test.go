@@ -14,8 +14,6 @@ import (
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/efs"
 	efstypes "github.com/aws/aws-sdk-go-v2/service/efs/types"
-	"github.com/aws/aws-sdk-go-v2/service/ssm"
-
 	"github.com/nicholasgasior/mint/internal/cli"
 	mintaws "github.com/nicholasgasior/mint/internal/aws"
 	"github.com/nicholasgasior/mint/internal/provision"
@@ -135,12 +133,12 @@ func (s *stubUpCreateTags) CreateTags(ctx context.Context, params *ec2.CreateTag
 	return s.output, s.err
 }
 
-type stubUpGetParameter struct {
-	output *ssm.GetParameterOutput
+type stubUpDescribeImages struct {
+	output *ec2.DescribeImagesOutput
 	err    error
 }
 
-func (s *stubUpGetParameter) GetParameter(ctx context.Context, params *ssm.GetParameterInput, optFns ...func(*ssm.Options)) (*ssm.GetParameterOutput, error) {
+func (s *stubUpDescribeImages) DescribeImages(ctx context.Context, params *ec2.DescribeImagesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeImagesOutput, error) {
 	return s.output, s.err
 }
 
@@ -192,10 +190,10 @@ func newTestProvisioner() *provision.Provisioner {
 			Addresses: []ec2types.Address{},
 		}},
 		&stubUpCreateTags{output: &ec2.CreateTagsOutput{}},
-		&stubUpGetParameter{},
+		&stubUpDescribeImages{output: &ec2.DescribeImagesOutput{}},
 	)
 	p.WithBootstrapVerifier(func(content []byte) error { return nil })
-	p.WithAMIResolver(func(ctx context.Context, client mintaws.GetParameterAPI) (string, error) {
+	p.WithAMIResolver(func(ctx context.Context, client mintaws.DescribeImagesAPI) (string, error) {
 		return "ami-test", nil
 	})
 	return p
@@ -337,10 +335,10 @@ func TestUpCommandRestartedOutput(t *testing.T) {
 		&stubUpAssociateAddress{output: &ec2.AssociateAddressOutput{}},
 		&stubUpDescribeAddresses{output: &ec2.DescribeAddressesOutput{}},
 		&stubUpCreateTags{output: &ec2.CreateTagsOutput{}},
-		&stubUpGetParameter{},
+		&stubUpDescribeImages{output: &ec2.DescribeImagesOutput{}},
 	)
 	p.WithBootstrapVerifier(func(content []byte) error { return nil })
-	p.WithAMIResolver(func(ctx context.Context, client mintaws.GetParameterAPI) (string, error) {
+	p.WithAMIResolver(func(ctx context.Context, client mintaws.DescribeImagesAPI) (string, error) {
 		return "ami-test", nil
 	})
 
@@ -389,12 +387,12 @@ func TestUpCommandError(t *testing.T) {
 		&stubUpAssociateAddress{output: &ec2.AssociateAddressOutput{}},
 		&stubUpDescribeAddresses{output: &ec2.DescribeAddressesOutput{}},
 		&stubUpCreateTags{output: &ec2.CreateTagsOutput{}},
-		&stubUpGetParameter{},
+		&stubUpDescribeImages{output: &ec2.DescribeImagesOutput{}},
 	)
 	p.WithBootstrapVerifier(func(content []byte) error {
 		return fmt.Errorf("hash mismatch")
 	})
-	p.WithAMIResolver(func(ctx context.Context, client mintaws.GetParameterAPI) (string, error) {
+	p.WithAMIResolver(func(ctx context.Context, client mintaws.DescribeImagesAPI) (string, error) {
 		return "ami-test", nil
 	})
 
@@ -922,10 +920,10 @@ func newTestProvisionerWithCreateVolume(cv *captureCreateVolume) *provision.Prov
 			Addresses: []ec2types.Address{},
 		}},
 		&stubUpCreateTags{output: &ec2.CreateTagsOutput{}},
-		&stubUpGetParameter{},
+		&stubUpDescribeImages{output: &ec2.DescribeImagesOutput{}},
 	)
 	p.WithBootstrapVerifier(func(content []byte) error { return nil })
-	p.WithAMIResolver(func(ctx context.Context, client mintaws.GetParameterAPI) (string, error) {
+	p.WithAMIResolver(func(ctx context.Context, client mintaws.DescribeImagesAPI) (string, error) {
 		return "ami-test", nil
 	})
 	return p

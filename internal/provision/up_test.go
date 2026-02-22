@@ -13,8 +13,6 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
-	"github.com/aws/aws-sdk-go-v2/service/ssm"
-
 	mintaws "github.com/nicholasgasior/mint/internal/aws"
 	"github.com/nicholasgasior/mint/internal/tags"
 )
@@ -156,12 +154,12 @@ func (m *mockUpCreateTags) CreateTags(ctx context.Context, params *ec2.CreateTag
 	return m.output, m.err
 }
 
-type mockGetParameter struct {
-	output *ssm.GetParameterOutput
+type mockDescribeImages struct {
+	output *ec2.DescribeImagesOutput
 	err    error
 }
 
-func (m *mockGetParameter) GetParameter(ctx context.Context, params *ssm.GetParameterInput, optFns ...func(*ssm.Options)) (*ssm.GetParameterOutput, error) {
+func (m *mockDescribeImages) DescribeImages(ctx context.Context, params *ec2.DescribeImagesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeImagesOutput, error) {
 	return m.output, m.err
 }
 
@@ -207,7 +205,7 @@ type upMocks struct {
 	associateAddr     *mockUpAssociateAddress
 	describeAddrs     *mockUpDescribeAddresses
 	createTags        *mockUpCreateTags
-	ssmClient         *mockGetParameter
+	describeImages    *mockDescribeImages
 	describeVolumes   *mockUpDescribeVolumes
 	deleteTags        *mockUpDeleteTags
 
@@ -278,7 +276,7 @@ func newUpHappyMocks() *upMocks {
 		createTags: &mockUpCreateTags{
 			output: &ec2.CreateTagsOutput{},
 		},
-		ssmClient: &mockGetParameter{},
+		describeImages: &mockDescribeImages{output: &ec2.DescribeImagesOutput{}},
 		// No pending-attach volumes by default.
 		describeVolumes: &mockUpDescribeVolumes{
 			output: &ec2.DescribeVolumesOutput{Volumes: []ec2types.Volume{}},
@@ -289,7 +287,7 @@ func newUpHappyMocks() *upMocks {
 		bootstrapVerifier: func(content []byte) error {
 			return nil // always pass
 		},
-		amiResolver: func(ctx context.Context, client mintaws.GetParameterAPI) (string, error) {
+		amiResolver: func(ctx context.Context, client mintaws.DescribeImagesAPI) (string, error) {
 			return "ami-ubuntu2404", nil
 		},
 	}
@@ -308,7 +306,7 @@ func (m *upMocks) build() *Provisioner {
 		m.associateAddr,
 		m.describeAddrs,
 		m.createTags,
-		m.ssmClient,
+		m.describeImages,
 	)
 	p.WithBootstrapVerifier(m.bootstrapVerifier)
 	p.WithAMIResolver(m.amiResolver)
@@ -570,8 +568,8 @@ func TestProvisionerEIPQuotaExceeded(t *testing.T) {
 
 func TestProvisionerAMIResolutionFailure(t *testing.T) {
 	m := newUpHappyMocks()
-	m.amiResolver = func(ctx context.Context, client mintaws.GetParameterAPI) (string, error) {
-		return "", fmt.Errorf("ssm get-parameter: access denied")
+	m.amiResolver = func(ctx context.Context, client mintaws.DescribeImagesAPI) (string, error) {
+		return "", fmt.Errorf("describe images: access denied")
 	}
 	p := m.build()
 
@@ -1132,8 +1130,8 @@ func TestProvisionerRun(t *testing.T) {
 		{
 			name: "AMI resolution failure aborts",
 			setup: func(m *upMocks) {
-				m.amiResolver = func(ctx context.Context, client mintaws.GetParameterAPI) (string, error) {
-					return "", fmt.Errorf("SSM unavailable")
+				m.amiResolver = func(ctx context.Context, client mintaws.DescribeImagesAPI) (string, error) {
+					return "", fmt.Errorf("describe images: unavailable")
 				}
 			},
 			wantErr:        true,

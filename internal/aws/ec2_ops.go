@@ -6,9 +6,41 @@ package aws
 
 import (
 	"context"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 )
+
+// ---------------------------------------------------------------------------
+// Instance state waiters
+// ---------------------------------------------------------------------------
+
+// WaitInstanceRunningAPI defines the interface for waiting until an EC2
+// instance reaches the running state. Wraps ec2.InstanceRunningWaiter.Wait.
+type WaitInstanceRunningAPI interface {
+	Wait(ctx context.Context, params *ec2.DescribeInstancesInput, maxWaitDur time.Duration, optFns ...func(*ec2.InstanceRunningWaiterOptions)) error
+}
+
+// Compile-time check: ec2.InstanceRunningWaiter satisfies the interface.
+var _ WaitInstanceRunningAPI = (*ec2.InstanceRunningWaiter)(nil)
+
+// WaitVolumeAvailableAPI defines the interface for waiting until an EBS
+// volume reaches the available state. Wraps ec2.VolumeAvailableWaiter.Wait.
+type WaitVolumeAvailableAPI interface {
+	Wait(ctx context.Context, params *ec2.DescribeVolumesInput, maxWaitDur time.Duration, optFns ...func(*ec2.VolumeAvailableWaiterOptions)) error
+}
+
+// Compile-time check: ec2.VolumeAvailableWaiter satisfies the interface.
+var _ WaitVolumeAvailableAPI = (*ec2.VolumeAvailableWaiter)(nil)
+
+// ---------------------------------------------------------------------------
+// AMI resolution
+// ---------------------------------------------------------------------------
+
+// DescribeImagesAPI defines the subset of the EC2 API used for AMI resolution.
+type DescribeImagesAPI interface {
+	DescribeImages(ctx context.Context, params *ec2.DescribeImagesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeImagesOutput, error)
+}
 
 // ---------------------------------------------------------------------------
 // Instance lifecycle

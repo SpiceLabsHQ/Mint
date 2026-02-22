@@ -108,7 +108,7 @@ func TestScriptContent(t *testing.T) {
 		{"idle detection", "mint-idle"},
 		{"Node.js GPG keyring", "nodesource.gpg"},
 		{"Node.js signed-by apt repo", "signed-by=${NODESOURCE_KEYRING}"},
-		{"efs-utils version pinned", "--branch v2.0.4 --depth 1"},
+		{"EFS NFSv4 mount", "nfsvers=4.1"},
 		{"EFS symlinks .ssh", "ln -sfn /mint/user/.ssh /home/ubuntu/.ssh"},
 		{"EFS symlinks .config", "ln -sfn /mint/user/.config /home/ubuntu/.config"},
 		{"EFS symlinks projects", "ln -sfn /mint/user/projects /home/ubuntu/projects"},

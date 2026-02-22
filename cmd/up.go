@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awsec2 "github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/efs"
 	efstypes "github.com/aws/aws-sdk-go-v2/service/efs/types"
 
@@ -115,8 +116,10 @@ func newUpCommandWithDeps(deps *upDeps) *cobra.Command {
 					clients.ec2Client, // AssociateAddressAPI
 					clients.ec2Client, // DescribeAddressesAPI
 					clients.ec2Client, // CreateTagsAPI
-					clients.ssmClient, // GetParameterAPI
-				).WithBootstrapPoller(poller),
+					clients.ec2Client, // DescribeImagesAPI
+				).WithWaitRunning(awsec2.NewInstanceRunningWaiter(clients.ec2Client)).
+				WithWaitVolumeAvailable(awsec2.NewVolumeAvailableWaiter(clients.ec2Client)).
+				WithBootstrapPoller(poller),
 				owner:               clients.owner,
 				ownerARN:            clients.ownerARN,
 				bootstrapScript:     GetBootstrapScript(),

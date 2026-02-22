@@ -1,48 +1,51 @@
 // Package aws provides thin wrappers around AWS SDK clients used by Mint.
-// This file defines the narrow interface for SSM parameter resolution,
-// used primarily for AMI lookup via public SSM parameters.
+// This file implements AMI resolution via EC2 DescribeImages using Canonical's
+// published owner ID, with no dependency on SSM.
 package aws
 
 import (
 	"context"
 	"fmt"
+	"sort"
 
-	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 )
 
-// ubuntuAMIParameter is the SSM public parameter path for the current
-// Ubuntu 24.04 LTS amd64 HVM EBS-GP2 AMI.
-const ubuntuAMIParameter = "/aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp2/ami-id"
+// canonicalOwnerID is Canonical Ltd's AWS account ID, used to filter for
+// official Ubuntu AMIs without relying on SSM public parameters.
+const canonicalOwnerID = "099720109477"
 
-// GetParameterAPI defines the subset of the SSM API used for resolving
-// SSM parameters. This interface enables mock injection for testing.
-type GetParameterAPI interface {
-	GetParameter(ctx context.Context, params *ssm.GetParameterInput, optFns ...func(*ssm.Options)) (*ssm.GetParameterOutput, error)
-}
+// ubuntuAMINameFilter matches Ubuntu 24.04 LTS (Noble Numbat) GP3 AMIs
+// published by Canonical.
+const ubuntuAMINameFilter = "ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*"
 
 // Compile-time interface satisfaction check.
-var _ GetParameterAPI = (*ssm.Client)(nil)
+var _ DescribeImagesAPI = (*ec2.Client)(nil)
 
-// ResolveAMI queries the SSM public parameter for the current Ubuntu 24.04
-// LTS AMI ID. Returns the AMI ID string or an error if the lookup fails.
-func ResolveAMI(ctx context.Context, client GetParameterAPI) (string, error) {
-	name := ubuntuAMIParameter
-	input := &ssm.GetParameterInput{
-		Name: &name,
-	}
-
-	out, err := client.GetParameter(ctx, input)
+// ResolveAMI finds the most recent Ubuntu 24.04 LTS AMI by querying EC2
+// DescribeImages with Canonical's owner ID. No SSM access required.
+func ResolveAMI(ctx context.Context, client DescribeImagesAPI) (string, error) {
+	out, err := client.DescribeImages(ctx, &ec2.DescribeImagesInput{
+		Owners: []string{canonicalOwnerID},
+		Filters: []ec2types.Filter{
+			{Name: aws.String("name"), Values: []string{ubuntuAMINameFilter}},
+			{Name: aws.String("state"), Values: []string{"available"}},
+		},
+	})
 	if err != nil {
-		return "", fmt.Errorf("ssm get-parameter: %w", err)
+		return "", fmt.Errorf("describe images: %w", err)
 	}
 
-	if out.Parameter == nil {
-		return "", fmt.Errorf("ssm get-parameter: nil parameter in response for %s", ubuntuAMIParameter)
+	if len(out.Images) == 0 {
+		return "", fmt.Errorf("no Ubuntu 24.04 LTS AMIs found in this region (owner %s)", canonicalOwnerID)
 	}
 
-	if out.Parameter.Value == nil {
-		return "", fmt.Errorf("ssm get-parameter: nil value for %s", ubuntuAMIParameter)
-	}
+	// Sort descending by CreationDate to pick the most recent AMI.
+	sort.Slice(out.Images, func(i, j int) bool {
+		return aws.ToString(out.Images[i].CreationDate) > aws.ToString(out.Images[j].CreationDate)
+	})
 
-	return *out.Parameter.Value, nil
+	return aws.ToString(out.Images[0].ImageId), nil
 }

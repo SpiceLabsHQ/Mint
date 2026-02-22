@@ -26,7 +26,6 @@ import (
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/efs"
 	efstypes "github.com/aws/aws-sdk-go-v2/service/efs/types"
-	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/spf13/cobra"
 
 	"github.com/nicholasgasior/mint/internal/cli"
@@ -177,11 +176,11 @@ func (s *stubCreateTags) CreateTags(ctx context.Context, params *ec2.CreateTagsI
 	return &ec2.CreateTagsOutput{}, nil
 }
 
-// stubGetParameter always returns empty (unused in e2e tests).
-type stubGetParameter struct{}
+// stubDescribeImages always returns empty (unused in e2e tests — AMI resolver is overridden).
+type stubDescribeImages struct{}
 
-func (s *stubGetParameter) GetParameter(ctx context.Context, params *ssm.GetParameterInput, optFns ...func(*ssm.Options)) (*ssm.GetParameterOutput, error) {
-	return &ssm.GetParameterOutput{}, nil
+func (s *stubDescribeImages) DescribeImages(ctx context.Context, params *ec2.DescribeImagesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeImagesOutput, error) {
+	return &ec2.DescribeImagesOutput{}, nil
 }
 
 // stubDescribeFileSystems returns a single admin EFS filesystem.
@@ -261,10 +260,10 @@ func newFreshProvisioner(instanceID, volumeID, allocationID, publicIP string) *p
 		&stubAssociateAddress{},
 		&stubDescribeAddresses{},
 		&stubCreateTags{},
-		&stubGetParameter{},
+		&stubDescribeImages{},
 	)
 	p.WithBootstrapVerifier(func(content []byte) error { return nil })
-	p.WithAMIResolver(func(ctx context.Context, client mintaws.GetParameterAPI) (string, error) {
+	p.WithAMIResolver(func(ctx context.Context, client mintaws.DescribeImagesAPI) (string, error) {
 		return "ami-e2e-test", nil
 	})
 	return p
@@ -289,10 +288,10 @@ func newRestartProvisioner(instanceID, vmName, owner, publicIP string) *provisio
 		&stubAssociateAddress{},
 		&stubDescribeAddresses{},
 		&stubCreateTags{},
-		&stubGetParameter{},
+		&stubDescribeImages{},
 	)
 	p.WithBootstrapVerifier(func(content []byte) error { return nil })
-	p.WithAMIResolver(func(ctx context.Context, client mintaws.GetParameterAPI) (string, error) {
+	p.WithAMIResolver(func(ctx context.Context, client mintaws.DescribeImagesAPI) (string, error) {
 		return "ami-e2e-test", nil
 	})
 	return p
@@ -314,10 +313,10 @@ func newFreshProvisionerWithVolume(instanceID string, volume *stubCreateVolume, 
 		&stubAssociateAddress{},
 		&stubDescribeAddresses{},
 		&stubCreateTags{},
-		&stubGetParameter{},
+		&stubDescribeImages{},
 	)
 	p.WithBootstrapVerifier(func(content []byte) error { return nil })
-	p.WithAMIResolver(func(ctx context.Context, client mintaws.GetParameterAPI) (string, error) {
+	p.WithAMIResolver(func(ctx context.Context, client mintaws.DescribeImagesAPI) (string, error) {
 		return "ami-e2e-test", nil
 	})
 	return p
