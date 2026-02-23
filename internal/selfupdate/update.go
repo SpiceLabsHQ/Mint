@@ -29,6 +29,16 @@ const (
 	maxBinarySize = 256 * 1024 * 1024
 )
 
+// RateLimitError is returned by CheckLatest when the GitHub API responds with
+// HTTP 403, indicating the unauthenticated rate limit has been exceeded. It is
+// a distinct sentinel type so callers can exit 0 with a friendly message
+// instead of treating it as a hard failure.
+type RateLimitError struct{}
+
+func (e *RateLimitError) Error() string {
+	return "GitHub API rate limit exceeded. Try again later."
+}
+
 // Updater performs self-update operations against GitHub Releases.
 type Updater struct {
 	// Client is the HTTP client used for all requests.
@@ -92,6 +102,9 @@ func (u *Updater) CheckLatest(ctx context.Context) (*Release, error) {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusForbidden {
+		return nil, &RateLimitError{}
+	}
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, fmt.Errorf("no releases found — mint may be running a pre-release version")
 	}

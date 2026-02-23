@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -112,6 +113,32 @@ func TestCheckLatest_APIError(t *testing.T) {
 	_, err := u.CheckLatest(context.Background())
 	if err == nil {
 		t.Fatal("expected error for API failure")
+	}
+}
+
+// TestCheckLatest_403RateLimit verifies that when GitHub returns 403 (rate
+// limit exceeded), CheckLatest returns a RateLimitError so the caller can
+// exit 0 with a friendly message rather than alarming the user.
+func TestCheckLatest_403RateLimit(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv.Close()
+
+	u := &Updater{
+		Client:         srv.Client(),
+		CurrentVersion: "v1.0.0",
+		APIEndpoint:    srv.URL + "/releases/latest",
+	}
+
+	_, err := u.CheckLatest(context.Background())
+	if err == nil {
+		t.Fatal("expected error for 403 response")
+	}
+
+	var rateLimitErr *RateLimitError
+	if !errors.As(err, &rateLimitErr) {
+		t.Errorf("expected *RateLimitError, got %T: %v", err, err)
 	}
 }
 
