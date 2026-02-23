@@ -2,7 +2,53 @@
 
 One-time setup per AWS account and region. Creates shared infrastructure that all Mint users depend on.
 
-## Prerequisites
+## Quick Start
+
+```
+mint admin setup
+```
+
+This runs the following steps automatically:
+
+1. **Deploy stack** — Creates the `mint-admin-setup` CloudFormation stack with EFS, IAM instance profile, and security group infrastructure.
+2. **Attach policy** — Attaches the `mint-pass-instance-role` customer-managed policy to your IAM Identity Center `PowerUserAccess` permission set (skipped gracefully if SSO is not configured).
+
+### Individual commands
+
+Run steps separately if needed:
+
+```
+mint admin deploy
+mint admin attach-policy
+```
+
+### Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--stack-name` | `mint-admin-setup` | CloudFormation stack name |
+| `--permission-set` | `PowerUserAccess` | IAM Identity Center permission set |
+| `--policy` | `mint-pass-instance-role` | Customer-managed policy name |
+| `--json` | false | Output results as JSON |
+
+### Output
+
+On success, `mint admin setup` prints:
+
+```
+Stack deployed successfully.
+  EFS File System ID:   fs-xxxxxxxxx
+  EFS Security Group:   sg-xxxxxxxxx
+  Instance Profile ARN: arn:aws:iam::...
+  Pass-Role Policy ARN: arn:aws:iam::...
+Policy attached successfully.
+  Permission Set ARN: arn:aws:sso:::...
+  Provisioning Status: SUCCEEDED
+```
+
+---
+
+## Prerequisites (Manual Setup)
 
 - AWS account with administrator access (IAM permissions to create roles, instance profiles, EFS filesystems, and security groups)
 - AWS CLI v2 installed and configured (`aws configure` or environment variables)

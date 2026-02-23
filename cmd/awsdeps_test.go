@@ -115,6 +115,7 @@ func TestAWSClientsHasEFSClient(t *testing.T) {
 	}
 }
 
+
 func TestInitAWSClientsDebugMode(t *testing.T) {
 	// Verify that initAWSClients does not panic or error when the debug
 	// flag is set on the CLIContext. We cannot easily inspect the resulting

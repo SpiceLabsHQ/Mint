@@ -1,0 +1,328 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Mint admin one-time setup - creates shared infrastructure for all Mint users
+  in this account/region. Deploys IAM role and instance profile for Mint VMs,
+  an encrypted EFS filesystem for persistent user storage, and a self-referencing
+  security group for NFS access.
+  See https://github.com/SpiceLabsHQ/Mint/blob/main/docs/admin-setup.md for usage.
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: >-
+      VPC for EFS mount targets and the NFS security group. Use your default
+      VPC ID. Find it with: aws ec2 describe-vpcs --filters Name=isDefault,Values=true
+      --query Vpcs[0].VpcId --output text
+
+  Subnet1:
+    Type: AWS::EC2::Subnet::Id
+    Description: >-
+      First subnet for EFS mount target (required). List your default VPC
+      subnets with: aws ec2 describe-subnets --filters Name=vpc-id,Values=YOUR_VPC_ID
+      --query Subnets[*].[SubnetId,AvailabilityZone] --output table
+
+  Subnet2:
+    Type: String
+    Default: ""
+    Description: Second subnet for EFS mount target (optional)
+
+  Subnet3:
+    Type: String
+    Default: ""
+    Description: Third subnet for EFS mount target (optional)
+
+  Subnet4:
+    Type: String
+    Default: ""
+    Description: Fourth subnet for EFS mount target (optional)
+
+  Subnet5:
+    Type: String
+    Default: ""
+    Description: Fifth subnet for EFS mount target (optional)
+
+  Subnet6:
+    Type: String
+    Default: ""
+    Description: Sixth subnet for EFS mount target (optional)
+
+Conditions:
+  HasSubnet2: !Not [!Equals [!Ref Subnet2, ""]]
+  HasSubnet3: !Not [!Equals [!Ref Subnet3, ""]]
+  HasSubnet4: !Not [!Equals [!Ref Subnet4, ""]]
+  HasSubnet5: !Not [!Equals [!Ref Subnet5, ""]]
+  HasSubnet6: !Not [!Equals [!Ref Subnet6, ""]]
+
+Resources:
+  # ---------------------------------------------------------------------------
+  # IAM Role — attached to every Mint VM via the instance profile.
+  #
+  # Permissions are scoped to what the VM needs at runtime:
+  #   - Stop itself when idle (ADR-0018), conditioned on mint=true tag
+  #   - Tag itself for bootstrap verification (ADR-0009)
+  #   - Describe instances/volumes/tags for self-awareness
+  #   - Mount EFS (ADR-0004)
+  #   - Write CloudWatch Logs for operational visibility
+  # ---------------------------------------------------------------------------
+  MintInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: mint-instance-role
+      Description: >-
+        IAM role for Mint EC2 instances. Allows VMs to stop themselves when
+        idle, tag themselves for bootstrap verification, mount EFS, and write
+        CloudWatch Logs.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: mint-instance-policy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # Self-stop: instance can only stop instances tagged mint=true.
+              # The idle detection script (ADR-0018) uses this to auto-stop.
+              - Sid: SelfStop
+                Effect: Allow
+                Action:
+                  - ec2:StopInstances
+                Resource: !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/*"
+                Condition:
+                  StringEquals:
+                    "aws:ResourceTag/mint": "true"
+
+              # Describe: read-only access for self-awareness and tag queries.
+              - Sid: DescribeResources
+                Effect: Allow
+                Action:
+                  - ec2:DescribeInstances
+                  - ec2:DescribeVolumes
+                  - ec2:DescribeTags
+                Resource: "*"
+
+              # Self-tag: create tags on own instance for bootstrap status
+              # (ADR-0009) and health reporting (ADR-0018).
+              - Sid: CreateTags
+                Effect: Allow
+                Action:
+                  - ec2:CreateTags
+                Resource: !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/*"
+                Condition:
+                  StringEquals:
+                    "aws:ResourceTag/mint": "true"
+
+              # EFS: mount and write to the shared filesystem (ADR-0004).
+              - Sid: EfsAccess
+                Effect: Allow
+                Action:
+                  - elasticfilesystem:ClientMount
+                  - elasticfilesystem:ClientWrite
+                  - elasticfilesystem:ClientRootAccess
+                Resource: !GetAtt MintEfsFileSystem.Arn
+
+              # CloudWatch Logs: structured logging from VM.
+              - Sid: CloudWatchLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/mint/*"
+      Tags:
+        - Key: mint
+          Value: "true"
+        - Key: "mint:component"
+          Value: admin
+
+  # ---------------------------------------------------------------------------
+  # Instance Profile — passed to EC2 instances at launch via mint up.
+  # ---------------------------------------------------------------------------
+  MintInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: mint-instance-profile
+      Roles:
+        - !Ref MintInstanceRole
+
+  # ---------------------------------------------------------------------------
+  # PassRole Policy — grants Mint users permission to pass mint-instance-role
+  # to EC2 at launch (required by RunInstances with an instance profile).
+  #
+  # PowerUserAccess does not include iam:PassRole. Attach this customer-managed
+  # policy to the SSO permission set used by Mint users (e.g. PowerUserAccess)
+  # via the IAM Identity Center console. See docs/admin-setup.md for steps.
+  #
+  # Scope: iam:PassRole on mint-instance-role only, and only when the
+  # service receiving the role is ec2.amazonaws.com.
+  # ---------------------------------------------------------------------------
+  MintPassRolePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: mint-pass-instance-role
+      Description: >-
+        Allows Mint users to pass mint-instance-role to EC2 at instance launch.
+        Attach to the SSO permission set used by Mint users (e.g. PowerUserAccess).
+        Required because RunInstances with an instance profile needs iam:PassRole.
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: PassInstanceRoleToEc2
+            Effect: Allow
+            Action: iam:PassRole
+            Resource: !GetAtt MintInstanceRole.Arn
+            Condition:
+              StringEquals:
+                iam:PassedToService: ec2.amazonaws.com
+
+  # ---------------------------------------------------------------------------
+  # EFS Filesystem — persistent storage for user configuration (ADR-0004).
+  #
+  # Mounted at /mint/user on every VM. Stores dotfiles, SSH authorized_keys,
+  # Claude Code auth state, and user customizations. Per-user isolation is
+  # achieved via EFS access points created by `mint init`.
+  # ---------------------------------------------------------------------------
+  MintEfsFileSystem:
+    Type: AWS::EFS::FileSystem
+    DeletionPolicy: Retain
+    Properties:
+      Encrypted: true
+      PerformanceMode: generalPurpose
+      ThroughputMode: elastic
+      LifecyclePolicies:
+        - TransitionToIA: AFTER_30_DAYS
+      FileSystemTags:
+        - Key: Name
+          Value: mint-efs
+        - Key: mint
+          Value: "true"
+        - Key: "mint:component"
+          Value: admin
+
+  # ---------------------------------------------------------------------------
+  # Security Group — self-referencing NFS rule for EFS access (ADR-0004).
+  #
+  # Every Mint VM is launched with this SG attached. The self-referencing
+  # inbound rule means any instance in this SG can reach the EFS mount targets
+  # (which are also in this SG). No other inbound access is permitted.
+  # ---------------------------------------------------------------------------
+  MintEfsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: mint-efs
+      GroupDescription: >-
+        Allows NFS (TCP 2049) access between Mint VMs and EFS mount targets.
+        Self-referencing: only instances in this security group can reach
+        the EFS filesystem. Attached to every Mint VM at launch.
+      VpcId: !Ref VpcId
+      SecurityGroupIngress: []
+      Tags:
+        - Key: Name
+          Value: mint-efs
+        - Key: mint
+          Value: "true"
+        - Key: "mint:component"
+          Value: admin
+
+  # Self-referencing ingress rule — created separately to avoid circular
+  # reference (the SG must exist before it can reference itself).
+  MintEfsSecurityGroupIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref MintEfsSecurityGroup
+      IpProtocol: tcp
+      FromPort: 2049
+      ToPort: 2049
+      SourceSecurityGroupId: !Ref MintEfsSecurityGroup
+      Description: NFS access from Mint VMs to EFS mount targets
+
+  # ---------------------------------------------------------------------------
+  # EFS Mount Targets — one per subnet for AZ-local access.
+  #
+  # EFS requires a mount target in each AZ where VMs will run. We support up
+  # to 6 subnets (covering all current AWS regions). Subnet1 is required;
+  # Subnet2-6 are optional and create mount targets only when provided.
+  # ---------------------------------------------------------------------------
+  MintEfsMountTarget1:
+    Type: AWS::EFS::MountTarget
+    Properties:
+      FileSystemId: !Ref MintEfsFileSystem
+      SubnetId: !Ref Subnet1
+      SecurityGroups:
+        - !Ref MintEfsSecurityGroup
+
+  MintEfsMountTarget2:
+    Type: AWS::EFS::MountTarget
+    Condition: HasSubnet2
+    Properties:
+      FileSystemId: !Ref MintEfsFileSystem
+      SubnetId: !Ref Subnet2
+      SecurityGroups:
+        - !Ref MintEfsSecurityGroup
+
+  MintEfsMountTarget3:
+    Type: AWS::EFS::MountTarget
+    Condition: HasSubnet3
+    Properties:
+      FileSystemId: !Ref MintEfsFileSystem
+      SubnetId: !Ref Subnet3
+      SecurityGroups:
+        - !Ref MintEfsSecurityGroup
+
+  MintEfsMountTarget4:
+    Type: AWS::EFS::MountTarget
+    Condition: HasSubnet4
+    Properties:
+      FileSystemId: !Ref MintEfsFileSystem
+      SubnetId: !Ref Subnet4
+      SecurityGroups:
+        - !Ref MintEfsSecurityGroup
+
+  MintEfsMountTarget5:
+    Type: AWS::EFS::MountTarget
+    Condition: HasSubnet5
+    Properties:
+      FileSystemId: !Ref MintEfsFileSystem
+      SubnetId: !Ref Subnet5
+      SecurityGroups:
+        - !Ref MintEfsSecurityGroup
+
+  MintEfsMountTarget6:
+    Type: AWS::EFS::MountTarget
+    Condition: HasSubnet6
+    Properties:
+      FileSystemId: !Ref MintEfsFileSystem
+      SubnetId: !Ref Subnet6
+      SecurityGroups:
+        - !Ref MintEfsSecurityGroup
+
+Outputs:
+  EfsFileSystemId:
+    Description: EFS filesystem ID for Mint user storage (used by mint init and mint up)
+    Value: !Ref MintEfsFileSystem
+    Export:
+      Name: !Sub "${AWS::StackName}-EfsFileSystemId"
+
+  EfsSecurityGroupId:
+    Description: Security group ID for NFS access (attached to every Mint VM at launch)
+    Value: !Ref MintEfsSecurityGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-EfsSecurityGroupId"
+
+  InstanceProfileArn:
+    Description: Instance profile ARN for Mint VMs (passed at launch by mint up)
+    Value: !GetAtt MintInstanceProfile.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-InstanceProfileArn"
+
+  PassRolePolicyArn:
+    Description: >-
+      ARN of the managed policy that grants iam:PassRole on mint-instance-role.
+      Attach this policy (name: mint-pass-instance-role) to the SSO permission
+      set used by Mint users. See docs/admin-setup.md for steps.
+    Value: !Ref MintPassRolePolicy
+    Export:
+      Name: !Sub "${AWS::StackName}-PassRolePolicyArn"
