@@ -883,6 +883,85 @@ func TestKeyAddGrepNoMatchProceedsToAppend(t *testing.T) {
 	}
 }
 
+func TestKeyAddBootstrapFailed(t *testing.T) {
+	// Bug #139: mint key add should return a helpful error when bootstrap=failed,
+	// not proceed to keyscan and produce a useless "ssh-keyscan failed: exit status 1".
+	remote := &keyMockRemote{}
+	deps := &keyAddDeps{
+		describe: &mockDescribeForSSH{
+			output: makeRunningInstanceWithBootstrap("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a", "failed"),
+		},
+		sendKey:        &mockSendSSHPublicKey{},
+		owner:          "alice",
+		remoteRunner:   remote.run,
+		hostKeyStore:   sshconfig.NewHostKeyStore(t.TempDir()),
+		hostKeyScanner: mockHostKeyScanner("SHA256:testfp", "ssh-ed25519 test", nil),
+		fingerprintFn:  func(key string) (string, error) { return "SHA256:test", nil },
+	}
+
+	cmd := newKeyAddCommandWithDeps(deps)
+	root := newTestRootForKey()
+	root.AddCommand(newKeyCommandWithChild(cmd))
+
+	buf := new(bytes.Buffer)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"key", "add", testEd25519Key})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error when bootstrap=failed, got nil")
+	}
+	if !strings.Contains(err.Error(), "bootstrap failed") {
+		t.Errorf("error should mention 'bootstrap failed', got: %s", err.Error())
+	}
+	if !strings.Contains(err.Error(), "mint recreate") {
+		t.Errorf("error should mention 'mint recreate', got: %s", err.Error())
+	}
+	// Remote runner must NOT be called — SSH is not available.
+	if len(remote.calls) != 0 {
+		t.Errorf("remote runner should not be called when bootstrap failed, got %d calls", len(remote.calls))
+	}
+}
+
+func TestKeyAddBootstrapPending(t *testing.T) {
+	// Bug #139: mint key add should return a helpful error when bootstrap=pending,
+	// not attempt keyscan on a VM that isn't ready yet.
+	remote := &keyMockRemote{}
+	deps := &keyAddDeps{
+		describe: &mockDescribeForSSH{
+			output: makeRunningInstanceWithBootstrap("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a", "pending"),
+		},
+		sendKey:        &mockSendSSHPublicKey{},
+		owner:          "alice",
+		remoteRunner:   remote.run,
+		hostKeyStore:   sshconfig.NewHostKeyStore(t.TempDir()),
+		hostKeyScanner: mockHostKeyScanner("SHA256:testfp", "ssh-ed25519 test", nil),
+		fingerprintFn:  func(key string) (string, error) { return "SHA256:test", nil },
+	}
+
+	cmd := newKeyAddCommandWithDeps(deps)
+	root := newTestRootForKey()
+	root.AddCommand(newKeyCommandWithChild(cmd))
+
+	buf := new(bytes.Buffer)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"key", "add", testEd25519Key})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error when bootstrap=pending, got nil")
+	}
+	if !strings.Contains(err.Error(), "bootstrap is not complete") {
+		t.Errorf("error should mention 'bootstrap is not complete', got: %s", err.Error())
+	}
+	// Remote runner must NOT be called — SSH is not available yet.
+	if len(remote.calls) != 0 {
+		t.Errorf("remote runner should not be called when bootstrap is pending, got %d calls", len(remote.calls))
+	}
+}
+
 // newKeyCommandWithChild creates a key parent command with the given child added.
 func newKeyCommandWithChild(child *cobra.Command) *cobra.Command {
 	parent := &cobra.Command{

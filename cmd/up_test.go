@@ -520,14 +520,18 @@ func TestUpCommandBootstrapErrorOutput(t *testing.T) {
 		return fmt.Errorf("bootstrap timed out after 7m0s")
 	})
 
+	// Fresh provision bootstrap failure must return a non-nil error (exit 1).
 	err := upWithProvisioner(ctx, cmd, cliCtx, deps, "default")
-	if err != nil {
-		t.Fatalf("upWithProvisioner error: %v", err)
+	if err == nil {
+		t.Fatal("upWithProvisioner should return non-nil error when fresh-provision bootstrap fails")
+	}
+	if !strings.Contains(err.Error(), "bootstrap timed out") {
+		t.Errorf("error = %q, should contain 'bootstrap timed out'", err.Error())
 	}
 
 	output := buf.String()
-	if !strings.Contains(output, "Bootstrap warning:") {
-		t.Errorf("output should contain 'Bootstrap warning:', got:\n%s", output)
+	if !strings.Contains(output, "Bootstrap error:") {
+		t.Errorf("output should contain 'Bootstrap error:', got:\n%s", output)
 	}
 	if !strings.Contains(output, "bootstrap timed out") {
 		t.Errorf("output should contain the error message, got:\n%s", output)
@@ -535,6 +539,38 @@ func TestUpCommandBootstrapErrorOutput(t *testing.T) {
 	// Should still contain resource info.
 	if !strings.Contains(output, "i-test123") {
 		t.Errorf("output should still contain instance ID, got:\n%s", output)
+	}
+}
+
+func TestUpCommandFreshProvisionBootstrapFailureExitsNonZero(t *testing.T) {
+	// Bug #140: fresh provision + bootstrap failure must return non-nil error
+	// so the process exits 1, not 0.
+	buf := new(bytes.Buffer)
+	cmd := &cobra.Command{}
+	cmd.SetOut(buf)
+
+	cliCtx := &cli.CLIContext{VM: "default"}
+	ctx := cli.WithContext(context.Background(), cliCtx)
+	cmd.SetContext(ctx)
+
+	deps := newTestUpDeps()
+	deps.provisioner.WithBootstrapPollFunc(func(ctx context.Context, owner, vmName, instanceID string) error {
+		return fmt.Errorf("VM failed to reach bootstrap:complete — run 'mint recreate'")
+	})
+
+	err := upWithProvisioner(ctx, cmd, cliCtx, deps, "default")
+	if err == nil {
+		t.Fatal("expected non-nil error (exit 1) when fresh-provision bootstrap fails, got nil")
+	}
+
+	output := buf.String()
+	// Resource info must still be shown before the error.
+	if !strings.Contains(output, "i-test123") {
+		t.Errorf("output should contain instance ID even on bootstrap failure, got:\n%s", output)
+	}
+	// Output must indicate bootstrap error, not success.
+	if strings.Contains(output, "Bootstrap complete") {
+		t.Errorf("output must not say 'Bootstrap complete' when bootstrap failed, got:\n%s", output)
 	}
 }
 
