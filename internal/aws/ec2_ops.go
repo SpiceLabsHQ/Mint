@@ -42,6 +42,15 @@ type WaitInstanceTerminatedAPI interface {
 // Compile-time check: ec2.InstanceTerminatedWaiter satisfies the interface.
 var _ WaitInstanceTerminatedAPI = (*ec2.InstanceTerminatedWaiter)(nil)
 
+// WaitInstanceStoppedAPI defines the interface for waiting until an EC2
+// instance reaches the stopped state. Wraps ec2.InstanceStoppedWaiter.Wait.
+type WaitInstanceStoppedAPI interface {
+	Wait(ctx context.Context, params *ec2.DescribeInstancesInput, maxWaitDur time.Duration, optFns ...func(*ec2.InstanceStoppedWaiterOptions)) error
+}
+
+// Compile-time check: ec2.InstanceStoppedWaiter satisfies the interface.
+var _ WaitInstanceStoppedAPI = (*ec2.InstanceStoppedWaiter)(nil)
+
 // ---------------------------------------------------------------------------
 // AMI resolution
 // ---------------------------------------------------------------------------

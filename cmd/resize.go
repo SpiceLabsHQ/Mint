@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
@@ -19,10 +20,18 @@ type resizeDeps struct {
 	describe      mintaws.DescribeInstancesAPI
 	describeTypes mintaws.DescribeInstanceTypesAPI
 	stop          mintaws.StopInstancesAPI
+	waitStopped   mintaws.WaitInstanceStoppedAPI
 	modify        mintaws.ModifyInstanceAttributeAPI
 	start         mintaws.StartInstancesAPI
 	owner         string
 	region        string
+}
+
+// WithWaitStopped sets the waiter used to poll until the instance reaches the
+// stopped state. Call this before runResize to override the default (no-op) waiter.
+func (d *resizeDeps) WithWaitStopped(w mintaws.WaitInstanceStoppedAPI) *resizeDeps {
+	d.waitStopped = w
+	return d
 }
 
 // newResizeCommand creates the production resize command.
@@ -52,6 +61,7 @@ func newResizeCommandWithDeps(deps *resizeDeps) *cobra.Command {
 				describe:      clients.ec2Client,
 				describeTypes: clients.ec2Client,
 				stop:          clients.ec2Client,
+				waitStopped:   ec2.NewInstanceStoppedWaiter(clients.ec2Client),
 				modify:        clients.ec2Client,
 				start:         clients.ec2Client,
 				owner:         clients.owner,
@@ -123,6 +133,19 @@ func runResize(cmd *cobra.Command, deps *resizeDeps, newType string) error {
 		if err != nil {
 			sp.Fail(err.Error())
 			return fmt.Errorf("stopping instance %s: %w", found.ID, err)
+		}
+
+		// Wait for the instance to reach stopped state before modifying its
+		// type. EC2 returns IncorrectInstanceState if ModifyInstanceAttribute
+		// is called while the instance is still stopping.
+		if deps.waitStopped != nil {
+			sp.Update(fmt.Sprintf("Waiting for instance %s to stop...", found.ID))
+			if err := deps.waitStopped.Wait(ctx, &ec2.DescribeInstancesInput{
+				InstanceIds: []string{found.ID},
+			}, 10*time.Minute); err != nil {
+				sp.Fail(err.Error())
+				return fmt.Errorf("waiting for instance %s to stop: %w", found.ID, err)
+			}
 		}
 	}
 
