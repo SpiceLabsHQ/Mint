@@ -821,8 +821,9 @@ func TestProjectAddCommand(t *testing.T) {
 }
 
 // TestBuildCloneCommandSuppressesCredentials verifies that buildCloneCommand
-// always includes the git -c credential.helper= flag to prevent interactive
-// credential prompts over non-TTY SSH pipes (fatal: could not read Username).
+// sets GIT_TERMINAL_PROMPT=0 via env(1) and includes the git -c credential.helper=
+// flag to prevent interactive credential prompts over non-TTY SSH pipes
+// (exit 128: could not read Username: No such device or address).
 func TestBuildCloneCommandSuppressesCredentials(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -884,9 +885,12 @@ func TestBuildCloneCommandSuppressesCredentials(t *testing.T) {
 				}
 			}
 
-			// Verify git is still the first element and clone is present.
-			if len(cmd) == 0 || cmd[0] != "git" {
-				t.Errorf("first element should be git, got %v", cmd)
+			// Verify the command starts with: env GIT_TERMINAL_PROMPT=0 git
+			// env(1) sets GIT_TERMINAL_PROMPT=0 before exec-ing git so that
+			// git never opens /dev/tty for interactive credential prompts over
+			// non-interactive SSH sessions (BatchMode=yes).
+			if len(cmd) < 3 || cmd[0] != "env" || cmd[1] != "GIT_TERMINAL_PROMPT=0" || cmd[2] != "git" {
+				t.Errorf("expected command to start with [env GIT_TERMINAL_PROMPT=0 git], got %v", cmd)
 			}
 			foundClone := false
 			for _, arg := range cmd {
