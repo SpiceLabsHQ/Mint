@@ -627,14 +627,14 @@ func TestValidateInstanceProfile(t *testing.T) {
 			wantErr: "get instance profile",
 		},
 		{
-			name: "AccessDenied (403) returns friendly error",
+			name: "AccessDenied (403) warns and continues (no error)",
 			mock: &mockGetInstanceProfile{
 				err: &smithy.GenericAPIError{
 					Code:    "AccessDenied",
 					Message: "User: arn:aws:iam::123456789012:user/dev is not authorized to perform: iam:GetInstanceProfile",
 				},
 			},
-			wantErr: "iam:GetInstanceProfile",
+			// AccessDenied is non-fatal: warning is printed, nil returned.
 		},
 	}
 
@@ -662,10 +662,11 @@ func TestValidateInstanceProfile(t *testing.T) {
 	}
 }
 
-// TestValidateInstanceProfileAccessDeniedNotRawSDK verifies that a 403
-// AccessDenied from iam:GetInstanceProfile produces a friendly error message
-// that does NOT expose raw SDK chain strings.
-func TestValidateInstanceProfileAccessDeniedNotRawSDK(t *testing.T) {
+// TestValidateInstanceProfileAccessDeniedReturnsNil verifies that a 403
+// AccessDenied from iam:GetInstanceProfile is non-fatal: validateInstanceProfile
+// must return nil so that init continues. The warning is emitted via log.Printf
+// (verified indirectly — log output goes to stderr in tests, not captured here).
+func TestValidateInstanceProfileAccessDeniedReturnsNil(t *testing.T) {
 	accessDeniedErr := &smithy.GenericAPIError{
 		Code:    "AccessDenied",
 		Message: "User is not authorized to perform: iam:GetInstanceProfile",
@@ -676,27 +677,53 @@ func TestValidateInstanceProfileAccessDeniedNotRawSDK(t *testing.T) {
 
 	err := init.validateInstanceProfile(context.Background())
 
-	if err == nil {
-		t.Fatal("expected error, got nil")
+	if err != nil {
+		t.Errorf("AccessDenied should be non-fatal (warn and continue), got error: %v", err)
 	}
-	msg := err.Error()
+}
 
-	// Must contain the permission name and a pointer to remediation.
-	if !strings.Contains(msg, "iam:GetInstanceProfile") {
-		t.Errorf("error should mention missing permission: %q", msg)
-	}
-	if !strings.Contains(msg, "AccessDenied") {
-		t.Errorf("error should contain 'AccessDenied': %q", msg)
-	}
-	if !strings.Contains(msg, "mint admin setup") {
-		t.Errorf("error should direct user to 'mint admin setup': %q", msg)
-	}
+// ---------------------------------------------------------------------------
+// Tests: Instance profile — AccessDenied warns and continues
+// ---------------------------------------------------------------------------
 
-	// Must NOT leak raw SDK chain.
-	for _, rawToken := range []string{"smithy", "operation error", "api error"} {
-		if strings.Contains(msg, rawToken) {
-			t.Errorf("error leaks raw SDK token %q: %q", rawToken, msg)
-		}
+// TestValidateInstanceProfileAccessDeniedWarnsAndContinues verifies that an
+// AccessDenied response from iam:GetInstanceProfile does NOT fail init — it
+// emits a warning and returns nil so the user can continue.
+func TestValidateInstanceProfileAccessDeniedWarnsAndContinues(t *testing.T) {
+	accessDeniedErr := &smithy.GenericAPIError{
+		Code:    "AccessDenied",
+		Message: "User is not authorized to perform: iam:GetInstanceProfile",
+	}
+	m := newHappyMocks()
+	m.instanceProfile = &mockGetInstanceProfile{err: accessDeniedErr}
+	init := m.build()
+
+	err := init.validateInstanceProfile(context.Background())
+
+	if err != nil {
+		t.Errorf("expected nil error for AccessDenied (should warn and continue), got: %v", err)
+	}
+}
+
+// TestRunFullFlowAccessDeniedContinues verifies that AccessDenied on
+// iam:GetInstanceProfile does not abort the full init flow.
+func TestRunFullFlowAccessDeniedContinues(t *testing.T) {
+	m := newHappyMocks()
+	m.instanceProfile = &mockGetInstanceProfile{
+		err: &smithy.GenericAPIError{
+			Code:    "AccessDenied",
+			Message: "User is not authorized to perform: iam:GetInstanceProfile",
+		},
+	}
+	init := m.build()
+
+	result, err := init.Run(context.Background(), "testowner", "arn:aws:iam::123456789012:user/testowner", "default")
+
+	if err != nil {
+		t.Errorf("expected nil error when AccessDenied on GetInstanceProfile, got: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected non-nil result when AccessDenied on GetInstanceProfile")
 	}
 }
 
