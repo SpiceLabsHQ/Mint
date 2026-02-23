@@ -228,16 +228,21 @@ func TestKeyAddReadsFromFile(t *testing.T) {
 		t.Fatalf("expected 2 remote calls, got %d", len(remote.calls))
 	}
 
-	// First call should be sh -c grep wrapper to check for duplicates.
+	// First call should be a single-element grep command.
 	grepCall := remote.calls[0]
-	if len(grepCall.command) < 1 || grepCall.command[0] != "sh" {
-		t.Errorf("first remote call should be sh (grep wrapper), got: %v", grepCall.command)
+	if len(grepCall.command) != 1 {
+		t.Errorf("grep call should be a single-element command slice, got %d elements: %v", len(grepCall.command), grepCall.command)
+	}
+	if !strings.Contains(grepCall.command[0], "grep -F") {
+		t.Errorf("first remote call should contain 'grep -F', got: %v", grepCall.command)
 	}
 
-	// Second call should be the append command.
+	// Second call should be the append command as a single element.
 	appendCall := remote.calls[1]
-	joined := strings.Join(appendCall.command, " ")
-	if !strings.Contains(joined, "authorized_keys") {
+	if len(appendCall.command) != 1 {
+		t.Errorf("append call should be a single-element command slice, got %d elements: %v", len(appendCall.command), appendCall.command)
+	}
+	if !strings.Contains(appendCall.command[0], "authorized_keys") {
 		t.Errorf("second remote call should append to authorized_keys, got: %v", appendCall.command)
 	}
 
@@ -539,29 +544,27 @@ func TestKeyAddRemoteCommandConstruction(t *testing.T) {
 		t.Fatalf("expected 2 remote calls, got %d", len(remote.calls))
 	}
 
-	// Verify grep call uses sh -c wrapper with correct arguments.
+	// Verify grep call is a single-element command containing the complete compound invocation.
+	// SSH joins multi-element command slices with spaces on the remote side, which breaks
+	// compound commands — so the entire remote command must be a single string.
 	grepCall := remote.calls[0]
-	if grepCall.command[0] != "sh" {
-		t.Errorf("first call should be sh, got: %v", grepCall.command)
+	if len(grepCall.command) != 1 {
+		t.Fatalf("grep call must be a single-element slice (complete compound command), got %d elements: %v",
+			len(grepCall.command), grepCall.command)
 	}
-	if grepCall.command[1] != "-c" {
-		t.Errorf("second arg should be -c, got: %v", grepCall.command)
-	}
-	grepScript := grepCall.command[2]
+	grepScript := grepCall.command[0]
 	if !strings.Contains(grepScript, "grep -F") {
-		t.Errorf("grep script should contain 'grep -F', got: %s", grepScript)
+		t.Errorf("grep command should contain 'grep -F', got: %s", grepScript)
 	}
 	if !strings.Contains(grepScript, "authorized_keys") {
-		t.Errorf("grep script should reference authorized_keys, got: %s", grepScript)
+		t.Errorf("grep command should reference authorized_keys, got: %s", grepScript)
 	}
 	if !strings.Contains(grepScript, "|| true") {
-		t.Errorf("grep script should contain '|| true' to tolerate missing files, got: %s", grepScript)
+		t.Errorf("grep command should contain '|| true' to tolerate missing files, got: %s", grepScript)
 	}
-	if grepCall.command[3] != "--" {
-		t.Errorf("expected '--' separator in grep call, got: %s", grepCall.command[3])
-	}
-	if !strings.HasPrefix(grepCall.command[4], "ssh-ed25519") {
-		t.Errorf("key should be passed as positional arg to grep, got: %s", grepCall.command[4])
+	// The key must appear in the grep command (embedded via quoting).
+	if !strings.Contains(grepScript, "ssh-ed25519") {
+		t.Errorf("grep command should contain the key content (single-quote embedded), got: %s", grepScript)
 	}
 	if grepCall.instanceID != "i-abc123" {
 		t.Errorf("wrong instance ID: %s", grepCall.instanceID)
@@ -579,31 +582,89 @@ func TestKeyAddRemoteCommandConstruction(t *testing.T) {
 		t.Errorf("wrong user: %s", grepCall.user)
 	}
 
-	// Verify the append call writes to authorized_keys using positional params.
+	// Verify the append call is a single-element command containing the complete
+	// mkdir+printf compound command. The key must be embedded (single-quote wrapped)
+	// in the command string — not split off as a separate positional argument.
 	appendCall := remote.calls[1]
-	// The shell command itself must NOT contain the key content (defense against injection).
-	shellScript := appendCall.command[2] // the sh -c argument
-	if strings.Contains(shellScript, "ssh-ed25519") {
-		t.Errorf("shell script should not contain key content (use positional params): %s", shellScript)
+	if len(appendCall.command) != 1 {
+		t.Fatalf("append call must be a single-element slice (complete compound command), got %d elements: %v",
+			len(appendCall.command), appendCall.command)
 	}
-	if !strings.Contains(shellScript, "mkdir -p") {
-		t.Errorf("shell script should mkdir -p the .ssh directory: %s", shellScript)
+	appendScript := appendCall.command[0]
+	if !strings.Contains(appendScript, "mkdir -p") {
+		t.Errorf("append command should contain 'mkdir -p' for the .ssh directory: %s", appendScript)
 	}
-	if !strings.Contains(shellScript, "authorized_keys") {
-		t.Errorf("shell script should reference authorized_keys: %s", shellScript)
+	if !strings.Contains(appendScript, "authorized_keys") {
+		t.Errorf("append command should reference authorized_keys: %s", appendScript)
 	}
-	if !strings.Contains(shellScript, "$1") {
-		t.Errorf("shell script should use positional parameter $1: %s", shellScript)
+	// The key must be embedded in the single command string.
+	if !strings.Contains(appendScript, "ssh-ed25519") {
+		t.Errorf("append command should contain the key content (single-quote embedded), got: %s", appendScript)
 	}
-	// The key should be passed as a separate argument after "--".
-	if len(appendCall.command) < 5 {
-		t.Fatalf("append command should have at least 5 elements (sh -c script -- key), got %d: %v", len(appendCall.command), appendCall.command)
+	// The compound command (mkdir && printf) must be intact in the single string.
+	if !strings.Contains(appendScript, "&&") {
+		t.Errorf("append command should be a compound command joined with &&, got: %s", appendScript)
 	}
-	if appendCall.command[3] != "--" {
-		t.Errorf("expected '--' separator, got: %s", appendCall.command[3])
+}
+
+// TestKeyAddSingleElementCommandSlice verifies the fix for the SSH arg-joining bug.
+//
+// When defaultRemoteRunner receives a multi-element command slice it appends all
+// elements as separate SSH arguments. SSH then joins those arguments with spaces
+// on the remote side, causing the remote shell to interpret only the first word
+// as the -c script — silently discarding the rest of the compound command.
+//
+// The fix passes the entire remote invocation as a single string element so the
+// remote shell receives the complete compound command (mkdir+printf or grep+||true)
+// verbatim.
+func TestKeyAddSingleElementCommandSlice(t *testing.T) {
+	remote := &keyMockRemote{output: []byte{}} // grep returns empty (no match)
+	deps := &keyAddDeps{
+		describe:       &mockDescribeForSSH{output: makeRunningInstanceWithAZ("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a")},
+		sendKey:        &mockSendSSHPublicKey{output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true}},
+		owner:          "alice",
+		remoteRunner:   remote.run,
+		hostKeyStore:   sshconfig.NewHostKeyStore(t.TempDir()),
+		hostKeyScanner: mockHostKeyScanner("SHA256:testfp", "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest", nil),
+		fingerprintFn:  func(key string) (string, error) { return "SHA256:single", nil },
 	}
-	if !strings.HasPrefix(appendCall.command[4], "ssh-ed25519") {
-		t.Errorf("key should be passed as positional arg, got: %s", appendCall.command[4])
+
+	cmd := newKeyAddCommandWithDeps(deps)
+	root := newTestRootForKey()
+	root.AddCommand(newKeyCommandWithChild(cmd))
+
+	buf := new(bytes.Buffer)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"key", "add", testEd25519Key})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(remote.calls) != 2 {
+		t.Fatalf("expected 2 remote calls, got %d", len(remote.calls))
+	}
+
+	// Both remote calls must be single-element slices. A multi-element slice
+	// would cause SSH to break the compound command across separate args.
+	for i, call := range remote.calls {
+		if len(call.command) != 1 {
+			t.Errorf("call[%d]: expected single-element command slice (prevents SSH arg-splitting), got %d elements: %v",
+				i, len(call.command), call.command)
+		}
+	}
+
+	// The grep command must contain the full compound expression in one string.
+	grepCmd := remote.calls[0].command[0]
+	if !strings.Contains(grepCmd, "grep -F") || !strings.Contains(grepCmd, "|| true") {
+		t.Errorf("grep command must be a complete compound invocation (grep -F ... || true) in a single string, got: %s", grepCmd)
+	}
+
+	// The append command must contain the full mkdir+printf compound command.
+	appendCmd := remote.calls[1].command[0]
+	if !strings.Contains(appendCmd, "mkdir -p") || !strings.Contains(appendCmd, "&&") {
+		t.Errorf("append command must be a complete compound invocation (mkdir -p ... && printf ...) in a single string, got: %s", appendCmd)
 	}
 }
 
@@ -819,21 +880,24 @@ func TestKeyAddFreshVMMissingAuthorizedKeys(t *testing.T) {
 		t.Fatalf("expected 2 remote calls, got %d", len(remote.calls))
 	}
 
-	// Verify grep uses sh -c wrapper with || true.
+	// Verify grep is a single-element command containing || true (tolerates missing file).
 	grepCall := remote.calls[0]
-	if grepCall.command[0] != "sh" || grepCall.command[1] != "-c" {
-		t.Errorf("grep should use sh -c wrapper, got: %v", grepCall.command)
+	if len(grepCall.command) != 1 {
+		t.Fatalf("grep call must be a single-element command slice, got %d: %v", len(grepCall.command), grepCall.command)
 	}
-	grepScript := grepCall.command[2]
+	grepScript := grepCall.command[0]
 	if !strings.Contains(grepScript, "|| true") {
-		t.Errorf("grep script should contain '|| true' to tolerate missing files, got: %s", grepScript)
+		t.Errorf("grep command should contain '|| true' to tolerate missing files, got: %s", grepScript)
 	}
 
-	// Verify append creates .ssh directory on fresh VMs.
+	// Verify append is a single-element command that creates .ssh directory on fresh VMs.
 	appendCall := remote.calls[1]
-	appendScript := appendCall.command[2]
+	if len(appendCall.command) != 1 {
+		t.Fatalf("append call must be a single-element command slice, got %d: %v", len(appendCall.command), appendCall.command)
+	}
+	appendScript := appendCall.command[0]
 	if !strings.Contains(appendScript, "mkdir -p") {
-		t.Errorf("append script should mkdir -p for fresh VMs, got: %s", appendScript)
+		t.Errorf("append command should contain mkdir -p for fresh VMs, got: %s", appendScript)
 	}
 
 	// Output should indicate key was added.
