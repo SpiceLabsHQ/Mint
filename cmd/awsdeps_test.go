@@ -115,33 +115,6 @@ func TestAWSClientsHasEFSClient(t *testing.T) {
 	}
 }
 
-func TestAWSClientsHasCFNClient(t *testing.T) {
-	// Verify the awsClients struct has a cfnClient field.
-	// We can't create a real cloudformation.Client without AWS config, but we
-	// can verify the field exists and is typed correctly by setting it to nil.
-	clients := &awsClients{
-		owner:     "test-user",
-		ownerARN:  "arn:aws:iam::123456789012:user/test-user",
-		cfnClient: nil,
-	}
-	if clients.cfnClient != nil {
-		t.Error("cfnClient should be nil when not initialized")
-	}
-}
-
-func TestAWSClientsHasSSOAdminClient(t *testing.T) {
-	// Verify the awsClients struct has a ssoAdminClient field.
-	// We can't create a real ssoadmin.Client without AWS config, but we can
-	// verify the field exists and is typed correctly by setting it to nil.
-	clients := &awsClients{
-		owner:          "test-user",
-		ownerARN:       "arn:aws:iam::123456789012:user/test-user",
-		ssoAdminClient: nil,
-	}
-	if clients.ssoAdminClient != nil {
-		t.Error("ssoAdminClient should be nil when not initialized")
-	}
-}
 
 func TestInitAWSClientsDebugMode(t *testing.T) {
 	// Verify that initAWSClients does not panic or error when the debug

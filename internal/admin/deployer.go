@@ -24,7 +24,7 @@ var ErrVPCNotFound = errors.New("no default VPC found in this region; " +
 	"create one with: aws ec2 create-default-vpc")
 
 // defaultStackName is used when DeployOptions.StackName is empty.
-const defaultStackName = "mint-admin"
+const defaultStackName = "mint-admin-setup"
 
 // pollInterval controls how frequently the deployer polls for stack events
 // during create/update operations. Tests override this via the Deployer field.

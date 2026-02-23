@@ -93,6 +93,9 @@ func NewRootCommand() *cobra.Command {
 	rootCmd.AddCommand(newDoctorCommand())
 	rootCmd.AddCommand(newUpdateCommand())
 
+	// Admin commands for infrastructure setup
+	rootCmd.AddCommand(newAdminCommand())
+
 	return rootCmd
 }
 

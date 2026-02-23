@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -352,7 +353,7 @@ func TestPolicyAttacher_Attach(t *testing.T) {
 					t.Errorf("Attach() expected error containing %q, got nil", tc.wantErrContains)
 					return
 				}
-				if !contains(err.Error(), tc.wantErrContains) {
+				if !strings.Contains(err.Error(), tc.wantErrContains) {
 					t.Errorf("Attach() error = %q, want it to contain %q", err.Error(), tc.wantErrContains)
 				}
 				// After a non-sentinel error, verify side-effect mocks.
@@ -401,20 +402,3 @@ func TestErrNoSSOInstance_IsIdentifiable(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
-		indexString(s, substr) >= 0)
-}
-
-func indexString(s, substr string) int {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return i
-		}
-	}
-	return -1
-}
