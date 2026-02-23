@@ -20,6 +20,7 @@ func newAdminCommandWithDeployDeps(deployDeps *adminDeployDeps) *cobra.Command {
 
 	cmd.AddCommand(newAdminDeployCommandWithDeps(deployDeps))
 	cmd.AddCommand(newAdminAttachPolicyCommand())
+	cmd.AddCommand(newAdminSetupCommand())
 
 	return cmd
 }
@@ -35,6 +36,23 @@ func newAdminCommandWithAttachPolicyDeps(attachPolicyDeps *adminAttachPolicyDeps
 
 	cmd.AddCommand(newAdminDeployCommand())
 	cmd.AddCommand(newAdminAttachPolicyCommandWithDeps(attachPolicyDeps))
+	cmd.AddCommand(newAdminSetupCommand())
+
+	return cmd
+}
+
+// newAdminCommandWithSetupDeps creates the admin command tree with explicit
+// setup dependencies for testing.
+func newAdminCommandWithSetupDeps(setupDeps *adminSetupDeps) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "admin",
+		Short: "Admin tools for setting up Mint infrastructure",
+		Long:  "Admin tools for setting up Mint infrastructure. These commands are intended for privileged operators.",
+	}
+
+	cmd.AddCommand(newAdminDeployCommand())
+	cmd.AddCommand(newAdminAttachPolicyCommand())
+	cmd.AddCommand(newAdminSetupCommandWithDeps(setupDeps))
 
 	return cmd
 }
