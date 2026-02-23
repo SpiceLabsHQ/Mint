@@ -194,7 +194,42 @@ func (p *Provisioner) Run(ctx context.Context, owner, ownerARN, vmName string, c
 	}
 
 	if existing != nil {
-		return p.handleExistingVM(ctx, existing)
+		result, err := p.handleExistingVM(ctx, existing)
+		if err != nil {
+			return nil, err
+		}
+		// For already-running VMs, check for a pending-attach volume left by a
+		// failed mint recreate and attach it. The Restarted path does not need
+		// this because recreate stops the instance before detaching the volume,
+		// so a stopped VM found here means recreate never reached the detach step.
+		if result.AlreadyRunning {
+			pendingVolID, _, pendingErr := p.findPendingAttachVolume(ctx, owner, vmName)
+			if pendingErr != nil {
+				return nil, fmt.Errorf("checking pending-attach volumes for running VM: %w", pendingErr)
+			}
+			if pendingVolID != "" {
+				_, attachErr := p.attachVolume.AttachVolume(ctx, &ec2.AttachVolumeInput{
+					VolumeId:   aws.String(pendingVolID),
+					InstanceId: aws.String(existing.ID),
+					Device:     aws.String("/dev/xvdf"),
+				})
+				if attachErr != nil {
+					return nil, fmt.Errorf("attaching pending-attach volume %s to running VM %s: %w", pendingVolID, existing.ID, attachErr)
+				}
+				if p.deleteTags != nil {
+					_, delErr := p.deleteTags.DeleteTags(ctx, &ec2.DeleteTagsInput{
+						Resources: []string{pendingVolID},
+						Tags: []ec2types.Tag{
+							{Key: aws.String(tags.TagPendingAttach)},
+						},
+					})
+					if delErr != nil {
+						return nil, fmt.Errorf("removing pending-attach tag from %s: %w", pendingVolID, delErr)
+					}
+				}
+			}
+		}
+		return result, nil
 	}
 
 	// Step 2: Verify bootstrap script integrity (ADR-0009).

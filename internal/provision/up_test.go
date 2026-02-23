@@ -2083,3 +2083,110 @@ func TestHandleExistingVMBootstrapStatusEmpty(t *testing.T) {
 		t.Errorf("BootstrapError should be nil for unknown/empty bootstrap status, got: %v", result.BootstrapError)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Tests: Pending-attach recovery for already-running VMs (#132)
+// ---------------------------------------------------------------------------
+
+func TestPendingAttachRecoveryForAlreadyRunningVM(t *testing.T) {
+	// Scenario: mint recreate tagged a volume mint:pending-attach=true but crashed
+	// after the new instance started running. On the next "mint up", the VM is
+	// found already running. The pending-attach volume must still be recovered:
+	// attached to the running instance and the tag removed.
+	m := newUpHappyMocks()
+
+	// VM is already running.
+	m.describeInstances.output = runningVMInstance("i-running1", "54.0.0.2", "complete")
+
+	// A volume with mint:pending-attach=true exists in the same AZ as the VM.
+	m.describeVolumes = &mockUpDescribeVolumes{
+		output: &ec2.DescribeVolumesOutput{
+			Volumes: []ec2types.Volume{{
+				VolumeId:         aws.String("vol-pending1"),
+				AvailabilityZone: aws.String("us-east-1a"),
+			}},
+		},
+	}
+	m.deleteTags = &mockUpDeleteTags{
+		output: &ec2.DeleteTagsOutput{},
+	}
+	p := m.build()
+
+	result, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", defaultConfig())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// VM was already running — AlreadyRunning flag must be set.
+	if !result.AlreadyRunning {
+		t.Error("result.AlreadyRunning should be true")
+	}
+
+	// RunInstances must NOT be called — the VM already exists.
+	if m.runInstances.called {
+		t.Error("RunInstances should NOT be called for already-running VM")
+	}
+
+	// AttachVolume MUST be called with the pending-attach volume.
+	if !m.attachVolume.called {
+		t.Fatal("AttachVolume was not called — pending-attach volume not recovered for already-running VM")
+	}
+	if aws.ToString(m.attachVolume.input.VolumeId) != "vol-pending1" {
+		t.Errorf("AttachVolume VolumeId = %q, want %q", aws.ToString(m.attachVolume.input.VolumeId), "vol-pending1")
+	}
+	if aws.ToString(m.attachVolume.input.InstanceId) != "i-running1" {
+		t.Errorf("AttachVolume InstanceId = %q, want %q", aws.ToString(m.attachVolume.input.InstanceId), "i-running1")
+	}
+	if aws.ToString(m.attachVolume.input.Device) != "/dev/xvdf" {
+		t.Errorf("AttachVolume Device = %q, want /dev/xvdf", aws.ToString(m.attachVolume.input.Device))
+	}
+
+	// DeleteTags MUST be called to remove the mint:pending-attach tag.
+	if !m.deleteTags.called {
+		t.Fatal("DeleteTags was not called — pending-attach tag not removed after recovery")
+	}
+	if len(m.deleteTags.input.Resources) != 1 || m.deleteTags.input.Resources[0] != "vol-pending1" {
+		t.Errorf("DeleteTags resources = %v, want [vol-pending1]", m.deleteTags.input.Resources)
+	}
+	foundPendingTag := false
+	for _, tag := range m.deleteTags.input.Tags {
+		if aws.ToString(tag.Key) == tags.TagPendingAttach {
+			foundPendingTag = true
+		}
+	}
+	if !foundPendingTag {
+		t.Error("DeleteTags did not include mint:pending-attach tag key")
+	}
+
+	// InstanceID must reflect the already-running instance.
+	if result.InstanceID != "i-running1" {
+		t.Errorf("InstanceID = %q, want %q", result.InstanceID, "i-running1")
+	}
+}
+
+func TestPendingAttachNoneForAlreadyRunningVM(t *testing.T) {
+	// When no pending-attach volume exists, AlreadyRunning path should be
+	// unchanged: return the running VM info without touching AttachVolume or DeleteTags.
+	m := newUpHappyMocks()
+	m.describeInstances.output = runningVMInstance("i-running1", "54.0.0.2", "complete")
+	// describeVolumes returns empty — no pending-attach volumes (default).
+	p := m.build()
+
+	result, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", defaultConfig())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !result.AlreadyRunning {
+		t.Error("result.AlreadyRunning should be true")
+	}
+	if m.attachVolume.called {
+		t.Error("AttachVolume should NOT be called when no pending-attach volume exists")
+	}
+	if m.deleteTags.called {
+		t.Error("DeleteTags should NOT be called when no pending-attach volume exists")
+	}
+	if result.InstanceID != "i-running1" {
+		t.Errorf("InstanceID = %q, want %q", result.InstanceID, "i-running1")
+	}
+}
