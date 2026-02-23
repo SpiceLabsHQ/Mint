@@ -162,7 +162,9 @@ PasswordAuthentication no
 ChallengeResponseAuthentication no
 SSH_CONF
 
-systemctl disable --now ssh.socket && systemctl restart ssh
+systemctl disable --now ssh.socket
+systemctl enable ssh
+systemctl restart ssh
 
 # --- Storage mounts (ADR-0004) ---
 

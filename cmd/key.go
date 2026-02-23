@@ -155,11 +155,19 @@ func runKeyAdd(cmd *cobra.Command, deps *keyAddDeps, arg string) error {
 		remote = tofu.Run
 	}
 
-	// Check if key already exists on the VM. The grep is wrapped in sh -c
-	// so that a missing authorized_keys file (exit code 2) or no match
-	// (exit code 1) both produce empty output instead of an error.
+	// Check if key already exists on the VM. The entire compound command is
+	// passed as a single string element so that SSH transmits it verbatim to
+	// the remote shell. When the command slice has multiple elements SSH joins
+	// them with spaces, causing the remote shell to treat only the first word
+	// as the -c script and silently discard the rest of the compound command.
+	//
+	// The key is embedded with single-quote wrapping. validatePublicKey above
+	// ensures the key contains no single quotes (only alphanumeric, +, /, =,
+	// @, ., _, :, comma, hyphen, and space are permitted), so the quoting is
+	// safe against injection.
 	authKeysDir := fmt.Sprintf("/home/%s/.ssh", defaultSSHUser)
 	authKeysPath := fmt.Sprintf("%s/authorized_keys", authKeysDir)
+	quotedKey := "'" + pubKey + "'"
 	grepOutput, grepErr := remote(
 		ctx,
 		deps.sendKey,
@@ -168,7 +176,7 @@ func runKeyAdd(cmd *cobra.Command, deps *keyAddDeps, arg string) error {
 		found.PublicIP,
 		defaultSSHPort,
 		defaultSSHUser,
-		[]string{"sh", "-c", fmt.Sprintf(`grep -F "$1" %s 2>/dev/null || true`, authKeysPath), "--", pubKey},
+		[]string{fmt.Sprintf(`grep -F %s %s 2>/dev/null || true`, quotedKey, authKeysPath)},
 	)
 	if grepErr != nil {
 		return fmt.Errorf("checking existing keys: %w", grepErr)
@@ -186,9 +194,9 @@ func runKeyAdd(cmd *cobra.Command, deps *keyAddDeps, arg string) error {
 		return nil
 	}
 
-	// Append the key to authorized_keys. The key is passed as a positional
-	// parameter ($1) to avoid interpolating user input into the shell string.
-	// mkdir -p ensures the .ssh directory exists on fresh VMs.
+	// Append the key to authorized_keys. The entire compound command is a
+	// single string so the remote shell receives it intact. mkdir -p ensures
+	// the .ssh directory exists on fresh VMs.
 	_, appendErr := remote(
 		ctx,
 		deps.sendKey,
@@ -197,7 +205,7 @@ func runKeyAdd(cmd *cobra.Command, deps *keyAddDeps, arg string) error {
 		found.PublicIP,
 		defaultSSHPort,
 		defaultSSHUser,
-		[]string{"sh", "-c", fmt.Sprintf(`mkdir -p %s && printf '%%s\n' "$1" >> %s`, authKeysDir, authKeysPath), "--", pubKey},
+		[]string{fmt.Sprintf(`mkdir -p %s && printf '%%s\n' %s >> %s`, authKeysDir, quotedKey, authKeysPath)},
 	)
 	if appendErr != nil {
 		return fmt.Errorf("adding key to authorized_keys: %w", appendErr)

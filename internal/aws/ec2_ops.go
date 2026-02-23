@@ -148,6 +148,11 @@ type DescribeAddressesAPI interface {
 	DescribeAddresses(ctx context.Context, params *ec2.DescribeAddressesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeAddressesOutput, error)
 }
 
+// DisassociateAddressAPI defines the subset of the EC2 API used for disassociating Elastic IPs.
+type DisassociateAddressAPI interface {
+	DisassociateAddress(ctx context.Context, params *ec2.DisassociateAddressInput, optFns ...func(*ec2.Options)) (*ec2.DisassociateAddressOutput, error)
+}
+
 // ---------------------------------------------------------------------------
 // Security group management
 // ---------------------------------------------------------------------------
@@ -207,6 +212,7 @@ var (
 	_ AssociateAddressAPI              = (*ec2.Client)(nil)
 	_ ReleaseAddressAPI                = (*ec2.Client)(nil)
 	_ DescribeAddressesAPI             = (*ec2.Client)(nil)
+	_ DisassociateAddressAPI           = (*ec2.Client)(nil)
 	_ CreateSecurityGroupAPI           = (*ec2.Client)(nil)
 	_ AuthorizeSecurityGroupIngressAPI = (*ec2.Client)(nil)
 	_ DescribeSecurityGroupsAPI        = (*ec2.Client)(nil)

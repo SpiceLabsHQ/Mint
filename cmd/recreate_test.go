@@ -151,6 +151,22 @@ func (m *mockAssociateAddress) AssociateAddress(ctx context.Context, params *ec2
 	return m.output, m.err
 }
 
+type mockDisassociateAddress struct {
+	output   *ec2.DisassociateAddressOutput
+	err      error
+	captured *ec2.DisassociateAddressInput
+	called   bool
+}
+
+func (m *mockDisassociateAddress) DisassociateAddress(ctx context.Context, params *ec2.DisassociateAddressInput, optFns ...func(*ec2.Options)) (*ec2.DisassociateAddressOutput, error) {
+	m.called = true
+	m.captured = params
+	if m.output == nil {
+		return &ec2.DisassociateAddressOutput{}, m.err
+	}
+	return m.output, m.err
+}
+
 // Lifecycle mocks for the 8-step recreate sequence.
 
 type mockDescribeVolumes struct {
@@ -415,6 +431,7 @@ func defaultLifecycleMocks() lifecycleMocks {
 		associateAddr: &mockAssociateAddress{
 			output: &ec2.AssociateAddressOutput{},
 		},
+		disassociateAddr: &mockDisassociateAddress{},
 	}
 }
 
@@ -431,6 +448,7 @@ type lifecycleMocks struct {
 	sgs              *mockDescribeSecurityGroups
 	describeAddrs    mintaws.DescribeAddressesAPI
 	associateAddr    *mockAssociateAddress
+	disassociateAddr *mockDisassociateAddress
 }
 
 func newHappyRecreateDeps(owner string) *recreateDeps {
@@ -452,8 +470,9 @@ func newHappyRecreateDeps(owner string) *recreateDeps {
 		deleteTags:      lm.deleteTags,
 		describeSubnets: lm.subnets,
 		describeSGs:     lm.sgs,
-		describeAddrs:   lm.describeAddrs,
-		associateAddr:   lm.associateAddr,
+		describeAddrs:    lm.describeAddrs,
+		associateAddr:    lm.associateAddr,
+		disassociateAddr: lm.disassociateAddr,
 		bootstrapScript: []byte("#!/bin/bash\necho hello"),
 		resolveAMI: func(ctx context.Context, client mintaws.DescribeImagesAPI) (string, error) {
 			return "ami-test123", nil
@@ -479,8 +498,9 @@ func newHappyRecreateDepsWithMocks(owner string, lm lifecycleMocks) *recreateDep
 		deleteTags:      lm.deleteTags,
 		describeSubnets: lm.subnets,
 		describeSGs:     lm.sgs,
-		describeAddrs:   lm.describeAddrs,
-		associateAddr:   lm.associateAddr,
+		describeAddrs:    lm.describeAddrs,
+		associateAddr:    lm.associateAddr,
+		disassociateAddr: lm.disassociateAddr,
 		bootstrapScript: []byte("#!/bin/bash\necho hello"),
 		resolveAMI: func(ctx context.Context, client mintaws.DescribeImagesAPI) (string, error) {
 			return "ami-test123", nil
@@ -645,8 +665,9 @@ func TestRecreateCommand(t *testing.T) {
 					deleteTags:      lm.deleteTags,
 					describeSubnets: lm.subnets,
 					describeSGs:     lm.sgs,
-					describeAddrs:   lm.describeAddrs,
-					associateAddr:   lm.associateAddr,
+					describeAddrs:    lm.describeAddrs,
+					associateAddr:    lm.associateAddr,
+					disassociateAddr: lm.disassociateAddr,
 					bootstrapScript: []byte("#!/bin/bash\necho hello"),
 					resolveAMI: func(ctx context.Context, client mintaws.DescribeImagesAPI) (string, error) {
 						return "ami-test123", nil
@@ -677,8 +698,9 @@ func TestRecreateCommand(t *testing.T) {
 					deleteTags:      lm.deleteTags,
 					describeSubnets: lm.subnets,
 					describeSGs:     lm.sgs,
-					describeAddrs:   lm.describeAddrs,
-					associateAddr:   lm.associateAddr,
+					describeAddrs:    lm.describeAddrs,
+					associateAddr:    lm.associateAddr,
+					disassociateAddr: lm.disassociateAddr,
 					bootstrapScript: []byte("#!/bin/bash\necho hello"),
 					resolveAMI: func(ctx context.Context, client mintaws.DescribeImagesAPI) (string, error) {
 						return "ami-test123", nil
@@ -1658,8 +1680,9 @@ func TestRecreateLifecycleHostKeyRemovedWithNonDefaultVM(t *testing.T) {
 		createTags:      lm.createTags,
 		describeSubnets: lm.subnets,
 		describeSGs:     lm.sgs,
-		describeAddrs:   lm.describeAddrs,
-		associateAddr:   lm.associateAddr,
+		describeAddrs:    lm.describeAddrs,
+		associateAddr:    lm.associateAddr,
+		disassociateAddr: lm.disassociateAddr,
 		bootstrapScript: []byte("#!/bin/bash\necho hello"),
 		resolveAMI: func(ctx context.Context, client mintaws.DescribeImagesAPI) (string, error) {
 			return "ami-test123", nil
@@ -1981,15 +2004,15 @@ func TestRecreateConfirmationMessageAppearsExactlyOnce(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Tests — EIP reassociation polling (issue #142)
+// Tests — EIP reassociation with explicit DisassociateAddress (issue #154)
 // ---------------------------------------------------------------------------
 
 // eipWithAssociation returns an address with a non-empty AssociationId, simulating
 // an EIP that is still associated with the old (terminated) instance's ENI.
 func eipWithAssociation(allocID, publicIP, assocID string) ec2types.Address {
 	return ec2types.Address{
-		AllocationId: aws.String(allocID),
-		PublicIp:     aws.String(publicIP),
+		AllocationId:  aws.String(allocID),
+		PublicIp:      aws.String(publicIP),
 		AssociationId: aws.String(assocID),
 	}
 }
@@ -2004,33 +2027,26 @@ func eipWithoutAssociation(allocID, publicIP string) ec2types.Address {
 	}
 }
 
-// TestEIPReassociatePollsUntilDisassociated verifies the happy path where the
-// EIP still has an AssociationId on the first N polls, then clears. The fix
-// must poll until AssociationId is empty before calling AssociateAddress.
-func TestEIPReassociatePollsUntilDisassociated(t *testing.T) {
+// TestEIPDisassociateCalledWhenStaleAssociationExists verifies that when the
+// EIP has a non-empty AssociationId (stale ENI from the terminated instance),
+// DisassociateAddress is called with that AssociationId before AssociateAddress.
+func TestEIPDisassociateCalledWhenStaleAssociationExists(t *testing.T) {
 	lm := defaultLifecycleMocks()
 
-	// First two polling calls return an address with an AssociationId (old ENI
-	// still referenced). Third polling call returns empty AssociationId (cleared).
-	lm.describeAddrs = &mockDescribeAddressesSequence{
-		tagOutput: &ec2.DescribeAddressesOutput{
+	// DescribeAddresses returns an EIP with a stale AssociationId.
+	lm.describeAddrs = &mockDescribeAddresses{
+		output: &ec2.DescribeAddressesOutput{
 			Addresses: []ec2types.Address{
-				eipWithAssociation("eipalloc-poll123", "54.2.3.4", "eipassoc-old111"),
+				eipWithAssociation("eipalloc-stale123", "54.2.3.4", "eipassoc-old111"),
 			},
-		},
-		pollOutputs: []*ec2.DescribeAddressesOutput{
-			{Addresses: []ec2types.Address{eipWithAssociation("eipalloc-poll123", "54.2.3.4", "eipassoc-old111")}},
-			{Addresses: []ec2types.Address{eipWithAssociation("eipalloc-poll123", "54.2.3.4", "eipassoc-old111")}},
-			{Addresses: []ec2types.Address{eipWithoutAssociation("eipalloc-poll123", "54.2.3.4")}},
 		},
 	}
 	lm.associateAddr = &mockAssociateAddress{
 		output: &ec2.AssociateAddressOutput{},
 	}
+	lm.disassociateAddr = &mockDisassociateAddress{}
 
 	deps := newHappyRecreateDepsWithMocks("alice", lm)
-	// Inject a no-op sleep so the test doesn't actually wait.
-	deps.sleepFunc = func(d time.Duration) {}
 
 	buf := new(bytes.Buffer)
 	cmd := newRecreateCommandWithDeps(deps)
@@ -2044,49 +2060,159 @@ func TestEIPReassociatePollsUntilDisassociated(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// AssociateAddress must have been called (polling succeeded).
+	// DisassociateAddress must have been called with the stale AssociationId.
+	if !lm.disassociateAddr.called {
+		t.Fatal("DisassociateAddress was not called when EIP had a stale AssociationId")
+	}
+	if lm.disassociateAddr.captured == nil {
+		t.Fatal("DisassociateAddress captured input is nil")
+	}
+	if aws.ToString(lm.disassociateAddr.captured.AssociationId) != "eipassoc-old111" {
+		t.Errorf("DisassociateAddress AssociationId = %q, want %q",
+			aws.ToString(lm.disassociateAddr.captured.AssociationId), "eipassoc-old111")
+	}
+
+	// AssociateAddress must have been called after disassociation.
 	if lm.associateAddr.captured == nil {
-		t.Fatal("AssociateAddress was not called after polling cleared the AssociationId")
+		t.Fatal("AssociateAddress was not called after DisassociateAddress")
+	}
+	if aws.ToString(lm.associateAddr.captured.AllocationId) != "eipalloc-stale123" {
+		t.Errorf("AssociateAddress AllocationId = %q, want %q",
+			aws.ToString(lm.associateAddr.captured.AllocationId), "eipalloc-stale123")
+	}
+	if aws.ToString(lm.associateAddr.captured.InstanceId) != "i-new789" {
+		t.Errorf("AssociateAddress InstanceId = %q, want %q",
+			aws.ToString(lm.associateAddr.captured.InstanceId), "i-new789")
+	}
+
+	if !strings.Contains(buf.String(), "Recreate complete") {
+		t.Errorf("output missing 'Recreate complete', got:\n%s", buf.String())
+	}
+}
+
+// TestEIPDisassociateSkippedWhenNoAssociationExists verifies that when the EIP
+// has no AssociationId (already disassociated), DisassociateAddress is NOT
+// called and AssociateAddress is called directly.
+func TestEIPDisassociateSkippedWhenNoAssociationExists(t *testing.T) {
+	lm := defaultLifecycleMocks()
+
+	// DescribeAddresses returns an EIP with no AssociationId.
+	lm.describeAddrs = &mockDescribeAddresses{
+		output: &ec2.DescribeAddressesOutput{
+			Addresses: []ec2types.Address{
+				eipWithoutAssociation("eipalloc-clean777", "54.8.9.0"),
+			},
+		},
+	}
+	lm.associateAddr = &mockAssociateAddress{
+		output: &ec2.AssociateAddressOutput{},
+	}
+	lm.disassociateAddr = &mockDisassociateAddress{}
+
+	deps := newHappyRecreateDepsWithMocks("alice", lm)
+
+	buf := new(bytes.Buffer)
+	cmd := newRecreateCommandWithDeps(deps)
+	root := newRecreateTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"recreate", "--yes"})
+
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// DisassociateAddress must NOT have been called — EIP is already free.
+	if lm.disassociateAddr.called {
+		t.Error("DisassociateAddress should not be called when EIP has no AssociationId")
+	}
+
+	// AssociateAddress must still have been called.
+	if lm.associateAddr.captured == nil {
+		t.Fatal("AssociateAddress was not called")
+	}
+	if aws.ToString(lm.associateAddr.captured.AllocationId) != "eipalloc-clean777" {
+		t.Errorf("AssociateAddress AllocationId = %q, want %q",
+			aws.ToString(lm.associateAddr.captured.AllocationId), "eipalloc-clean777")
+	}
+
+	if !strings.Contains(buf.String(), "Recreate complete") {
+		t.Errorf("output missing 'Recreate complete', got:\n%s", buf.String())
+	}
+}
+
+// TestEIPReassociatePollsUntilDisassociated verifies the happy path where the
+// EIP discovery returns an EIP with a stale AssociationId: DisassociateAddress
+// is called and then AssociateAddress succeeds.
+func TestEIPReassociatePollsUntilDisassociated(t *testing.T) {
+	lm := defaultLifecycleMocks()
+
+	lm.describeAddrs = &mockDescribeAddresses{
+		output: &ec2.DescribeAddressesOutput{
+			Addresses: []ec2types.Address{
+				eipWithAssociation("eipalloc-poll123", "54.2.3.4", "eipassoc-old111"),
+			},
+		},
+	}
+	lm.associateAddr = &mockAssociateAddress{
+		output: &ec2.AssociateAddressOutput{},
+	}
+	lm.disassociateAddr = &mockDisassociateAddress{}
+
+	deps := newHappyRecreateDepsWithMocks("alice", lm)
+
+	buf := new(bytes.Buffer)
+	cmd := newRecreateCommandWithDeps(deps)
+	root := newRecreateTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"recreate", "--yes"})
+
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// DisassociateAddress must have been called.
+	if !lm.disassociateAddr.called {
+		t.Fatal("DisassociateAddress was not called for EIP with stale association")
+	}
+
+	// AssociateAddress must have been called with the correct allocation ID.
+	if lm.associateAddr.captured == nil {
+		t.Fatal("AssociateAddress was not called after disassociation")
 	}
 	if aws.ToString(lm.associateAddr.captured.AllocationId) != "eipalloc-poll123" {
 		t.Errorf("AssociateAddress AllocationId = %q, want %q",
 			aws.ToString(lm.associateAddr.captured.AllocationId), "eipalloc-poll123")
 	}
 
-	// Verify that the recreate completed successfully.
 	if !strings.Contains(buf.String(), "Recreate complete") {
 		t.Errorf("output missing 'Recreate complete', got:\n%s", buf.String())
 	}
 }
 
-// TestEIPReassociateTimeoutWhenNeverDisassociated verifies that when the EIP
-// never clears its AssociationId within the max polling attempts, an error is
-// returned instead of calling AssociateAddress (which would fail with
-// InvalidNetworkInterfaceID.NotFound).
-func TestEIPReassociateTimeoutWhenNeverDisassociated(t *testing.T) {
+// TestEIPDisassociateErrorPropagates verifies that when DisassociateAddress
+// returns an error, the recreate fails with a descriptive error message.
+func TestEIPDisassociateErrorPropagates(t *testing.T) {
 	lm := defaultLifecycleMocks()
 
-	// Every poll returns an address with a stale AssociationId.
-	staleAddr := eipWithAssociation("eipalloc-stuck999", "54.5.6.7", "eipassoc-stale222")
-	pollOutputs := make([]*ec2.DescribeAddressesOutput, eipDisassociateMaxAttempts+1)
-	for i := range pollOutputs {
-		pollOutputs[i] = &ec2.DescribeAddressesOutput{
-			Addresses: []ec2types.Address{staleAddr},
-		}
-	}
-	lm.describeAddrs = &mockDescribeAddressesSequence{
-		tagOutput: &ec2.DescribeAddressesOutput{
-			Addresses: []ec2types.Address{staleAddr},
+	lm.describeAddrs = &mockDescribeAddresses{
+		output: &ec2.DescribeAddressesOutput{
+			Addresses: []ec2types.Address{
+				eipWithAssociation("eipalloc-err999", "54.5.6.7", "eipassoc-stale222"),
+			},
 		},
-		pollOutputs: pollOutputs,
 	}
 	lm.associateAddr = &mockAssociateAddress{
 		output: &ec2.AssociateAddressOutput{},
 	}
+	lm.disassociateAddr = &mockDisassociateAddress{
+		err: fmt.Errorf("disassociate: request throttled"),
+	}
 
 	deps := newHappyRecreateDepsWithMocks("alice", lm)
-	// Inject a no-op sleep so the test doesn't actually wait.
-	deps.sleepFunc = func(d time.Duration) {}
 
 	buf := new(bytes.Buffer)
 	cmd := newRecreateCommandWithDeps(deps)
@@ -2097,50 +2223,40 @@ func TestEIPReassociateTimeoutWhenNeverDisassociated(t *testing.T) {
 
 	err := root.Execute()
 	if err == nil {
-		t.Fatal("expected error when EIP never disassociates within timeout, got nil")
+		t.Fatal("expected error when DisassociateAddress fails, got nil")
+	}
+	if !strings.Contains(err.Error(), "disassociating EIP") {
+		t.Errorf("error %q does not contain 'disassociating EIP'", err.Error())
+	}
+	if !strings.Contains(err.Error(), "request throttled") {
+		t.Errorf("error %q does not include the original error", err.Error())
 	}
 
-	// Error must explain the issue so the user knows to retry.
-	if !strings.Contains(err.Error(), "still associated") {
-		t.Errorf("error %q does not mention 'still associated'", err.Error())
-	}
-	if !strings.Contains(err.Error(), "eipalloc-stuck999") {
-		t.Errorf("error %q does not include the allocation ID", err.Error())
-	}
-
-	// AssociateAddress must NOT have been called — calling it with a stale ENI
-	// would produce InvalidNetworkInterfaceID.NotFound.
+	// AssociateAddress must NOT have been called.
 	if lm.associateAddr.captured != nil {
-		t.Error("AssociateAddress should NOT be called when polling timed out")
+		t.Error("AssociateAddress should NOT be called when DisassociateAddress fails")
 	}
 }
 
 // TestEIPReassociateImmediateSuccessWhenAlreadyDisassociated verifies that
-// when the EIP has no AssociationId on the first poll, AssociateAddress is
-// called immediately without sleeping.
+// when the EIP has no AssociationId, AssociateAddress is called directly
+// without invoking DisassociateAddress.
 func TestEIPReassociateImmediateSuccessWhenAlreadyDisassociated(t *testing.T) {
 	lm := defaultLifecycleMocks()
 
-	// First poll already returns no AssociationId.
-	lm.describeAddrs = &mockDescribeAddressesSequence{
-		tagOutput: &ec2.DescribeAddressesOutput{
+	lm.describeAddrs = &mockDescribeAddresses{
+		output: &ec2.DescribeAddressesOutput{
 			Addresses: []ec2types.Address{
 				eipWithoutAssociation("eipalloc-clean777", "54.8.9.0"),
 			},
-		},
-		pollOutputs: []*ec2.DescribeAddressesOutput{
-			{Addresses: []ec2types.Address{eipWithoutAssociation("eipalloc-clean777", "54.8.9.0")}},
 		},
 	}
 	lm.associateAddr = &mockAssociateAddress{
 		output: &ec2.AssociateAddressOutput{},
 	}
+	lm.disassociateAddr = &mockDisassociateAddress{}
 
-	sleepCalled := false
 	deps := newHappyRecreateDepsWithMocks("alice", lm)
-	deps.sleepFunc = func(d time.Duration) {
-		sleepCalled = true
-	}
 
 	buf := new(bytes.Buffer)
 	cmd := newRecreateCommandWithDeps(deps)
@@ -2163,9 +2279,9 @@ func TestEIPReassociateImmediateSuccessWhenAlreadyDisassociated(t *testing.T) {
 			aws.ToString(lm.associateAddr.captured.AllocationId), "eipalloc-clean777")
 	}
 
-	// Sleep must NOT have been called — the EIP was already clear on first poll.
-	if sleepCalled {
-		t.Error("sleepFunc should not be called when EIP is already disassociated on first poll")
+	// DisassociateAddress must NOT have been called.
+	if lm.disassociateAddr.called {
+		t.Error("DisassociateAddress should not be called when EIP is already disassociated")
 	}
 
 	if !strings.Contains(buf.String(), "Recreate complete") {
