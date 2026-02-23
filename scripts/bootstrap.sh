@@ -98,6 +98,11 @@ apt-get install -y -qq nodejs
 log "Installing devcontainer CLI"
 npm install -g @devcontainers/cli
 
+# --- Claude Code CLI ---
+
+log "Installing Claude Code CLI"
+npm install -g @anthropic/claude-code
+
 # --- tmux ---
 
 log "Installing tmux"
@@ -474,6 +479,7 @@ check_command git
 check_command gh
 check_command node
 check_command npm
+check_command claude
 check_command aws
 check_service docker
 check_service ssh
