@@ -129,7 +129,7 @@ func TestScriptContent(t *testing.T) {
 		{"reconcile health logging", "reconciliation complete: health="},
 		// Fix #94: NVMe polling loop replaces udevadm settle
 		{"NVMe polling loop present", "lsblk -rno NAME,TYPE"},
-		{"NVMe polling uses findmnt for root disk", "findmnt -no SOURCE /"},
+		{"NVMe polling uses lsblk MOUNTPOINT for root disk", "NAME,MOUNTPOINT"},
 		{"NVMe polling timeout 90s", "_t=90"},
 		{"NVMe polling sleep interval", "sleep 5"},
 		// Fix #95: EXIT trap for mint:bootstrap tagging
