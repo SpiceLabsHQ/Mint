@@ -20,6 +20,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check bootstrap.sh size limit
+        run: |
+          [ $(wc -c < scripts/bootstrap.sh) -lt 16384 ] || (echo "ERROR: bootstrap.sh exceeds 16384-byte EC2 user-data limit" && exit 1)
+
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
