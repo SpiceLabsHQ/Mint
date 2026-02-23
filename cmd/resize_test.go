@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
@@ -75,6 +76,18 @@ func (m *mockResizeStartInstances) StartInstances(ctx context.Context, params *e
 	return m.output, m.err
 }
 
+type mockResizeWaitStopped struct {
+	err    error
+	called bool
+	input  *ec2.DescribeInstancesInput
+}
+
+func (m *mockResizeWaitStopped) Wait(ctx context.Context, params *ec2.DescribeInstancesInput, maxWaitDur time.Duration, optFns ...func(*ec2.InstanceStoppedWaiterOptions)) error {
+	m.called = true
+	m.input = params
+	return m.err
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -130,6 +143,7 @@ func newHappyResizeDeps(owner string) *resizeDeps {
 		describe:      &mockResizeDescribeInstances{output: makeResizeInstance("i-abc123", "default", owner, "t3.medium", ec2types.InstanceStateNameRunning)},
 		describeTypes: &mockResizeDescribeInstanceTypes{output: validInstanceTypeOutput()},
 		stop:          &mockResizeStopInstances{output: &ec2.StopInstancesOutput{}},
+		waitStopped:   &mockResizeWaitStopped{},
 		modify:        &mockResizeModifyInstanceAttribute{output: &ec2.ModifyInstanceAttributeOutput{}},
 		start:         &mockResizeStartInstances{output: &ec2.StartInstancesOutput{}},
 		owner:         owner,
@@ -378,6 +392,84 @@ func TestResizeCommand(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestResizeWaiterCalledAfterStop asserts that WaitInstanceStopped is invoked
+// between StopInstances and ModifyInstanceAttribute when the instance is running.
+// This prevents the IncorrectInstanceState error from EC2 when the modify call
+// races against the stop transition.
+func TestResizeWaiterCalledAfterStop(t *testing.T) {
+	deps := newHappyResizeDeps("alice")
+	waiter := deps.waitStopped.(*mockResizeWaitStopped)
+
+	buf := new(bytes.Buffer)
+	cmd := newResizeCommandWithDeps(deps)
+	root := newResizeTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"resize", "m6i.xlarge"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !waiter.called {
+		t.Fatal("WaitInstanceStopped was not called after StopInstances")
+	}
+	if waiter.input == nil || len(waiter.input.InstanceIds) == 0 || waiter.input.InstanceIds[0] != "i-abc123" {
+		t.Errorf("WaitInstanceStopped called with wrong instance IDs: %v", waiter.input)
+	}
+}
+
+// TestResizeWaiterNotCalledForAlreadyStopped asserts that WaitInstanceStopped is
+// NOT invoked when the instance is already stopped (no stop call is made).
+func TestResizeWaiterNotCalledForAlreadyStopped(t *testing.T) {
+	deps := newHappyResizeDeps("alice")
+	deps.describe = &mockResizeDescribeInstances{
+		output: makeResizeInstance("i-abc123", "default", "alice", "t3.medium", ec2types.InstanceStateNameStopped),
+	}
+	waiter := deps.waitStopped.(*mockResizeWaitStopped)
+
+	buf := new(bytes.Buffer)
+	cmd := newResizeCommandWithDeps(deps)
+	root := newResizeTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"resize", "m6i.xlarge"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if waiter.called {
+		t.Fatal("WaitInstanceStopped should not be called when instance is already stopped")
+	}
+}
+
+// TestResizeWaiterErrorPropagates asserts that a waiter error aborts the resize
+// before ModifyInstanceAttribute is called.
+func TestResizeWaiterErrorPropagates(t *testing.T) {
+	deps := newHappyResizeDeps("alice")
+	deps.waitStopped = &mockResizeWaitStopped{err: fmt.Errorf("wait timed out")}
+	modify := deps.modify.(*mockResizeModifyInstanceAttribute)
+
+	buf := new(bytes.Buffer)
+	cmd := newResizeCommandWithDeps(deps)
+	root := newResizeTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"resize", "m6i.xlarge"})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error from waiter, got nil")
+	}
+	if !strings.Contains(err.Error(), "wait timed out") {
+		t.Errorf("error %q does not contain %q", err.Error(), "wait timed out")
+	}
+	if modify.called {
+		t.Fatal("ModifyInstanceAttribute should not be called when waiter fails")
 	}
 }
 

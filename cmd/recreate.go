@@ -29,32 +29,40 @@ import (
 
 // recreateDeps holds the injectable dependencies for the recreate command.
 type recreateDeps struct {
-	describe         mintaws.DescribeInstancesAPI
-	sendKey          mintaws.SendSSHPublicKeyAPI
-	remoteRun        RemoteCommandRunner
-	owner            string
-	ownerARN         string
-	stop             mintaws.StopInstancesAPI
-	terminate        mintaws.TerminateInstancesAPI
-	detachVolume     mintaws.DetachVolumeAPI
-	describeVolumes  mintaws.DescribeVolumesAPI
-	run              mintaws.RunInstancesAPI
-	attachVolume     mintaws.AttachVolumeAPI
-	createTags       mintaws.CreateTagsAPI
-	deleteTags       provision.DeleteTagsAPI
-	describeSubnets  mintaws.DescribeSubnetsAPI
-	describeSGs      mintaws.DescribeSecurityGroupsAPI
-	describeImages   mintaws.DescribeImagesAPI
-	waitRunning      mintaws.WaitInstanceRunningAPI
-	describeFS       mintaws.DescribeFileSystemsAPI
-	describeAddrs    mintaws.DescribeAddressesAPI
-	associateAddr    mintaws.AssociateAddressAPI
-	bootstrapScript  []byte
-	mintConfig       *config.Config
-	pollBootstrap    provision.BootstrapPollFunc
-	resolveAMI       provision.AMIResolver
-	verifyBootstrap  provision.BootstrapVerifier
-	removeHostKey    func(vmName string) error
+	describe            mintaws.DescribeInstancesAPI
+	sendKey             mintaws.SendSSHPublicKeyAPI
+	remoteRun           RemoteCommandRunner
+	owner               string
+	ownerARN            string
+	stop                mintaws.StopInstancesAPI
+	terminate           mintaws.TerminateInstancesAPI
+	detachVolume        mintaws.DetachVolumeAPI
+	waitVolumeAvailable mintaws.WaitVolumeAvailableAPI
+	describeVolumes     mintaws.DescribeVolumesAPI
+	run                 mintaws.RunInstancesAPI
+	attachVolume        mintaws.AttachVolumeAPI
+	createTags          mintaws.CreateTagsAPI
+	deleteTags          provision.DeleteTagsAPI
+	describeSubnets     mintaws.DescribeSubnetsAPI
+	describeSGs         mintaws.DescribeSecurityGroupsAPI
+	describeImages      mintaws.DescribeImagesAPI
+	waitRunning         mintaws.WaitInstanceRunningAPI
+	describeFS          mintaws.DescribeFileSystemsAPI
+	describeAddrs       mintaws.DescribeAddressesAPI
+	associateAddr       mintaws.AssociateAddressAPI
+	bootstrapScript     []byte
+	mintConfig          *config.Config
+	pollBootstrap       provision.BootstrapPollFunc
+	resolveAMI          provision.AMIResolver
+	verifyBootstrap     provision.BootstrapVerifier
+	removeHostKey       func(vmName string) error
+}
+
+// WithWaitVolumeAvailable sets the waiter used to poll until the EBS volume
+// reaches the available state. Call this to override the default (no-op) waiter.
+func (d *recreateDeps) WithWaitVolumeAvailable(w mintaws.WaitVolumeAvailableAPI) *recreateDeps {
+	d.waitVolumeAvailable = w
+	return d
 }
 
 // newRecreateCommand creates the production recreate command.
@@ -82,28 +90,29 @@ func newRecreateCommandWithDeps(deps *recreateDeps) *cobra.Command {
 			}
 			hostKeyStore := sshconfig.NewHostKeyStore(config.DefaultConfigDir())
 			return runRecreate(cmd, &recreateDeps{
-				describe:         clients.ec2Client,
-				sendKey:          clients.icClient,
-				remoteRun:        defaultRemoteRunner,
-				owner:            clients.owner,
-				ownerARN:         clients.ownerARN,
-				stop:             clients.ec2Client,
-				terminate:        clients.ec2Client,
-				detachVolume:     clients.ec2Client,
-				describeVolumes:  clients.ec2Client,
-				run:              clients.ec2Client,
-				attachVolume:     clients.ec2Client,
-				createTags:       clients.ec2Client,
-				deleteTags:       clients.ec2Client,
-				describeSubnets:  clients.ec2Client,
-				describeSGs:      clients.ec2Client,
-				describeImages:  clients.ec2Client,
-				waitRunning:     ec2.NewInstanceRunningWaiter(clients.ec2Client),
-				describeFS:      clients.efsClient,
-				describeAddrs:   clients.ec2Client,
-				associateAddr:   clients.ec2Client,
-				bootstrapScript: GetBootstrapScript(),
-				verifyBootstrap: bootstrap.Verify,
+				describe:            clients.ec2Client,
+				sendKey:             clients.icClient,
+				remoteRun:           defaultRemoteRunner,
+				owner:               clients.owner,
+				ownerARN:            clients.ownerARN,
+				stop:                clients.ec2Client,
+				terminate:           clients.ec2Client,
+				detachVolume:        clients.ec2Client,
+				waitVolumeAvailable: ec2.NewVolumeAvailableWaiter(clients.ec2Client),
+				describeVolumes:     clients.ec2Client,
+				run:                 clients.ec2Client,
+				attachVolume:        clients.ec2Client,
+				createTags:          clients.ec2Client,
+				deleteTags:          clients.ec2Client,
+				describeSubnets:     clients.ec2Client,
+				describeSGs:         clients.ec2Client,
+				describeImages:      clients.ec2Client,
+				waitRunning:         ec2.NewInstanceRunningWaiter(clients.ec2Client),
+				describeFS:          clients.efsClient,
+				describeAddrs:       clients.ec2Client,
+				associateAddr:       clients.ec2Client,
+				bootstrapScript:     GetBootstrapScript(),
+				verifyBootstrap:     bootstrap.Verify,
 				mintConfig:      clients.mintConfig,
 				removeHostKey:   hostKeyStore.RemoveKey,
 			})
@@ -195,8 +204,6 @@ func runRecreate(cmd *cobra.Command, deps *recreateDeps) error {
 	}
 
 	// Guards passed — execute the 9-step recreate lifecycle.
-	fmt.Fprintf(w, "Proceeding with recreate of VM %q (%s)...\n", vmName, found.ID)
-
 	return executeRecreateLifecycle(ctx, deps, found, vmName, sp, w)
 }
 
@@ -250,6 +257,15 @@ func executeRecreateLifecycle(
 			InstanceIds: []string{newInstanceID},
 		}, 5*time.Minute); err != nil {
 			return fmt.Errorf("waiting for instance %s to be running: %w", newInstanceID, err)
+		}
+	}
+
+	if deps.waitVolumeAvailable != nil {
+		sp.Update(fmt.Sprintf("  Waiting for volume %s to become available...", volumeID))
+		if err := deps.waitVolumeAvailable.Wait(ctx, &ec2.DescribeVolumesInput{
+			VolumeIds: []string{volumeID},
+		}, 5*time.Minute); err != nil {
+			return fmt.Errorf("waiting for volume to become available: %w", err)
 		}
 	}
 

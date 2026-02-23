@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
@@ -470,14 +471,14 @@ func TestRecreateCommand(t *testing.T) {
 			name:       "successful recreate with --yes and no active sessions",
 			deps:       newHappyRecreateDeps("alice"),
 			args:       []string{"recreate", "--yes"},
-			wantOutput: []string{"Proceeding with recreate", "i-abc123", "Recreate complete", "i-new789"},
+			wantOutput: []string{"i-abc123", "Recreate complete", "i-new789"},
 		},
 		{
 			name:       "successful recreate with confirmation prompt",
 			deps:       newHappyRecreateDeps("alice"),
 			args:       []string{"recreate"},
 			stdin:      "default\n",
-			wantOutput: []string{"Proceeding with recreate", "Recreate complete"},
+			wantOutput: []string{"Recreate complete"},
 		},
 		{
 			name:           "confirmation prompt rejects wrong name",
@@ -555,7 +556,7 @@ func TestRecreateCommand(t *testing.T) {
 				return d
 			}(),
 			args:       []string{"recreate", "--yes", "--force"},
-			wantOutput: []string{"Warning: proceeding despite active sessions", "Proceeding with recreate", "Recreate complete"},
+			wantOutput: []string{"Warning: proceeding despite active sessions", "Recreate complete"},
 		},
 		{
 			name: "describe API error propagates",
@@ -577,7 +578,6 @@ func TestRecreateCommand(t *testing.T) {
 			wantOutput: []string{
 				"Discovering VM",
 				"Checking for active sessions",
-				"Proceeding with recreate",
 				"Step 1/9",
 				"Step 2/9",
 				"Step 3/9",
@@ -619,7 +619,7 @@ func TestRecreateCommand(t *testing.T) {
 				}
 			}(),
 			args:       []string{"recreate", "--vm", "dev", "--yes"},
-			wantOutput: []string{"Proceeding with recreate", "Recreate complete"},
+			wantOutput: []string{"Recreate complete"},
 		},
 		{
 			name: "non-default VM name confirmation requires correct name",
@@ -652,7 +652,7 @@ func TestRecreateCommand(t *testing.T) {
 			}(),
 			args:       []string{"recreate", "--vm", "dev"},
 			stdin:      "dev\n",
-			wantOutput: []string{"Proceeding with recreate", "Recreate complete"},
+			wantOutput: []string{"Recreate complete"},
 		},
 		{
 			name:  "shows what will be destroyed before confirming",
@@ -682,8 +682,8 @@ func TestRecreateCommand(t *testing.T) {
 				return d
 			}(),
 			args: []string{"recreate", "--yes", "--verbose"},
-			// Session detection error is non-fatal; command should proceed.
-			wantOutput: []string{"Warning: could not detect active sessions", "Proceeding with recreate"},
+			// Session detection error is non-fatal; command should proceed to completion.
+			wantOutput: []string{"Warning: could not detect active sessions", "Recreate complete"},
 		},
 	}
 
@@ -1727,6 +1727,220 @@ func TestRecreateDetectsManualExtend(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "Manual extend active until") {
 		t.Errorf("error %q does not mention manual extend", err.Error())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests — WaitVolumeAvailable between DetachVolume and AttachVolume
+// ---------------------------------------------------------------------------
+
+// mockWaitVolumeAvailable is a WaitVolumeAvailableAPI mock that records the
+// order in which it was called relative to detach and attach operations.
+type mockWaitVolumeAvailable struct {
+	err      error
+	called   bool
+	// callOrder records the name of each operation in the order it occurred.
+	// Populated by the ordering wrappers on detach/attach.
+	callOrder *[]string
+}
+
+func (m *mockWaitVolumeAvailable) Wait(
+	ctx context.Context,
+	params *ec2.DescribeVolumesInput,
+	maxWaitDur time.Duration,
+	optFns ...func(*ec2.VolumeAvailableWaiterOptions),
+) error {
+	m.called = true
+	if m.callOrder != nil {
+		*m.callOrder = append(*m.callOrder, "wait")
+	}
+	return m.err
+}
+
+// mockDetachVolumeOrdered wraps mockDetachVolume and appends to callOrder.
+type mockDetachVolumeOrdered struct {
+	mockDetachVolume
+	callOrder *[]string
+}
+
+func (m *mockDetachVolumeOrdered) DetachVolume(ctx context.Context, params *ec2.DetachVolumeInput, optFns ...func(*ec2.Options)) (*ec2.DetachVolumeOutput, error) {
+	if m.callOrder != nil {
+		*m.callOrder = append(*m.callOrder, "detach")
+	}
+	return m.mockDetachVolume.DetachVolume(ctx, params, optFns...)
+}
+
+// mockAttachVolumeOrdered wraps mockAttachVolume and appends to callOrder.
+type mockAttachVolumeOrdered struct {
+	mockAttachVolume
+	callOrder *[]string
+}
+
+func (m *mockAttachVolumeOrdered) AttachVolume(ctx context.Context, params *ec2.AttachVolumeInput, optFns ...func(*ec2.Options)) (*ec2.AttachVolumeOutput, error) {
+	if m.callOrder != nil {
+		*m.callOrder = append(*m.callOrder, "attach")
+	}
+	return m.mockAttachVolume.AttachVolume(ctx, params, optFns...)
+}
+
+func TestRecreateWaitVolumeAvailableCalledAfterDetachBeforeAttach(t *testing.T) {
+	// RED: Verify that WaitVolumeAvailable is called, and that the call order
+	// is: detach → wait → attach.
+	callOrder := []string{}
+
+	lm := defaultLifecycleMocks()
+	deps := newHappyRecreateDepsWithMocks("alice", lm)
+
+	// Replace detach/attach with order-tracking variants.
+	orderedDetach := &mockDetachVolumeOrdered{
+		mockDetachVolume: mockDetachVolume{output: &ec2.DetachVolumeOutput{}},
+		callOrder:        &callOrder,
+	}
+	orderedAttach := &mockAttachVolumeOrdered{
+		mockAttachVolume: mockAttachVolume{output: &ec2.AttachVolumeOutput{}},
+		callOrder:        &callOrder,
+	}
+	waiter := &mockWaitVolumeAvailable{callOrder: &callOrder}
+
+	deps.detachVolume = orderedDetach
+	deps.attachVolume = orderedAttach
+	deps.waitVolumeAvailable = waiter
+
+	buf := new(bytes.Buffer)
+	cmd := newRecreateCommandWithDeps(deps)
+	root := newRecreateTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"recreate", "--yes"})
+
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Waiter must have been called.
+	if !waiter.called {
+		t.Fatal("WaitVolumeAvailable was not called")
+	}
+
+	// Call order must be detach → wait → attach.
+	wantOrder := []string{"detach", "wait", "attach"}
+	if len(callOrder) < 3 {
+		t.Fatalf("expected at least 3 ordered operations, got %v", callOrder)
+	}
+	// Find the trio within the full callOrder (other ops may also appear).
+	dIdx, wIdx, aIdx := -1, -1, -1
+	for i, op := range callOrder {
+		switch op {
+		case "detach":
+			if dIdx == -1 {
+				dIdx = i
+			}
+		case "wait":
+			if wIdx == -1 {
+				wIdx = i
+			}
+		case "attach":
+			if aIdx == -1 {
+				aIdx = i
+			}
+		}
+	}
+	if dIdx == -1 || wIdx == -1 || aIdx == -1 {
+		t.Fatalf("missing operations in callOrder %v (want %v)", callOrder, wantOrder)
+	}
+	if !(dIdx < wIdx && wIdx < aIdx) {
+		t.Errorf("operation order = %v (indices detach=%d wait=%d attach=%d), want detach < wait < attach",
+			callOrder, dIdx, wIdx, aIdx)
+	}
+}
+
+func TestRecreateWaitVolumeAvailableTimeoutProducesFriendlyError(t *testing.T) {
+	// When the waiter times out, the error message should be user-friendly.
+	lm := defaultLifecycleMocks()
+	deps := newHappyRecreateDepsWithMocks("alice", lm)
+	deps.waitVolumeAvailable = &mockWaitVolumeAvailable{
+		err: fmt.Errorf("exceeded max wait time for VolumeAvailable waiter"),
+	}
+
+	buf := new(bytes.Buffer)
+	cmd := newRecreateCommandWithDeps(deps)
+	root := newRecreateTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"recreate", "--yes"})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error from waiter timeout, got nil")
+	}
+	if !strings.Contains(err.Error(), "waiting for volume to become available") {
+		t.Errorf("error %q does not contain friendly message 'waiting for volume to become available'", err.Error())
+	}
+}
+
+func TestRecreateWaitVolumeAvailableNilWaiterSkipped(t *testing.T) {
+	// When waitVolumeAvailable is nil, the recreate must still complete
+	// (nil = no-op, matches behavior of waitRunning).
+	lm := defaultLifecycleMocks()
+	deps := newHappyRecreateDepsWithMocks("alice", lm)
+	deps.waitVolumeAvailable = nil
+
+	buf := new(bytes.Buffer)
+	cmd := newRecreateCommandWithDeps(deps)
+	root := newRecreateTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"recreate", "--yes"})
+
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("unexpected error with nil waiter: %v", err)
+	}
+	output := buf.String()
+	if !strings.Contains(output, "Recreate complete") {
+		t.Errorf("output missing 'Recreate complete', got: %s", output)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests — Confirmation message appears exactly once (#133)
+// ---------------------------------------------------------------------------
+
+// TestRecreateConfirmationMessageAppearsExactlyOnce verifies that the
+// "Recreate complete" post-lifecycle confirmation is printed exactly once
+// and the pre-lifecycle "Proceeding with recreate" banner is not emitted at all.
+// This is the regression test for issue #133 (double confirmation message).
+func TestRecreateConfirmationMessageAppearsExactlyOnce(t *testing.T) {
+	deps := newHappyRecreateDeps("alice")
+
+	buf := new(bytes.Buffer)
+	cmd := newRecreateCommandWithDeps(deps)
+	root := newRecreateTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"recreate", "--yes"})
+
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := buf.String()
+
+	// The post-lifecycle completion message must appear exactly once.
+	const confirmMsg = "Recreate complete"
+	count := strings.Count(output, confirmMsg)
+	if count != 1 {
+		t.Errorf("%q appears %d time(s) in output, want exactly 1\nfull output:\n%s", confirmMsg, count, output)
+	}
+
+	// The pre-lifecycle "Proceeding" banner must NOT appear — it was the
+	// duplicate that the user saw before the lifecycle even started.
+	const preMsg = "Proceeding with recreate"
+	preCount := strings.Count(output, preMsg)
+	if preCount != 0 {
+		t.Errorf("%q appears %d time(s) in output, want 0 (pre-lifecycle duplicate removed)\nfull output:\n%s", preMsg, preCount, output)
 	}
 }
 

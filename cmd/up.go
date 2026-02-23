@@ -242,6 +242,10 @@ func printUpHuman(cmd *cobra.Command, result *provision.ProvisionResult, verbose
 		if result.PublicIP != "" {
 			fmt.Fprintf(w, "IP            %s\n", result.PublicIP)
 		}
+		if result.BootstrapError != nil {
+			fmt.Fprintf(w, "\nBootstrap error: %v\n", result.BootstrapError)
+			return result.BootstrapError
+		}
 		return nil
 	}
 
