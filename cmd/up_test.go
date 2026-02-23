@@ -1367,3 +1367,96 @@ func TestPrintUpHumanAlreadyRunningBootstrapFailed(t *testing.T) {
 		t.Errorf("output should surface bootstrap failure, got:\n%s", output)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Tests: printUpHuman Restarted branch with bootstrap:failed (fix #129)
+// ---------------------------------------------------------------------------
+
+func TestPrintUpHumanRestartedBootstrapFailed(t *testing.T) {
+	// When a stopped VM with bootstrap:failed is restarted, the Restarted branch
+	// must surface the BootstrapError so the user knows to run 'mint recreate'.
+	// printUpHuman returns a non-nil error so the command exits non-zero.
+	buf := new(bytes.Buffer)
+	cmd := &cobra.Command{}
+	cmd.SetOut(buf)
+
+	result := &provision.ProvisionResult{
+		InstanceID:      "i-stopped1",
+		PublicIP:        "54.0.0.1",
+		Restarted:       true,
+		BootstrapStatus: "failed",
+		BootstrapError:  fmt.Errorf("VM \"default\" has a previously failed bootstrap — run 'mint recreate' to recover"),
+	}
+
+	err := printUpHuman(cmd, result, false)
+	// printUpHuman returns the BootstrapError for non-zero exit on bootstrap failure.
+	if err == nil {
+		t.Fatal("printUpHuman should return non-nil error when bootstrap failed on restart")
+	}
+
+	output := buf.String()
+	// Must surface the bootstrap error in output before returning.
+	if !strings.Contains(output, "mint recreate") {
+		t.Errorf("output should mention 'mint recreate', got:\n%s", output)
+	}
+	// Must NOT claim bootstrap is complete or in progress.
+	if strings.Contains(output, "Bootstrap complete") {
+		t.Errorf("output must not say 'Bootstrap complete' when bootstrap failed, got:\n%s", output)
+	}
+}
+
+func TestPrintUpHumanRestartedBootstrapFailedExitCode(t *testing.T) {
+	// printUpHuman must return a non-nil error when BootstrapError is set
+	// on a restarted VM, so the command exits non-zero.
+	buf := new(bytes.Buffer)
+	cmd := &cobra.Command{}
+	cmd.SetOut(buf)
+
+	result := &provision.ProvisionResult{
+		InstanceID:      "i-stopped1",
+		PublicIP:        "54.0.0.1",
+		Restarted:       true,
+		BootstrapStatus: "failed",
+		BootstrapError:  fmt.Errorf("VM \"default\" has a previously failed bootstrap — run 'mint recreate' to recover"),
+	}
+
+	err := printUpHuman(cmd, result, false)
+	if err == nil {
+		t.Fatal("printUpHuman should return an error (non-zero exit) when bootstrap failed on restart")
+	}
+	if !strings.Contains(err.Error(), "mint recreate") {
+		t.Errorf("error = %q, should mention 'mint recreate'", err.Error())
+	}
+}
+
+func TestPrintUpHumanRestartedBootstrapFailedJSON(t *testing.T) {
+	// --json output for a restarted bootstrap:failed VM must include bootstrap_error.
+	buf := new(bytes.Buffer)
+	cmd := &cobra.Command{}
+	cmd.SetOut(buf)
+
+	result := &provision.ProvisionResult{
+		InstanceID:      "i-stopped1",
+		PublicIP:        "54.0.0.1",
+		Restarted:       true,
+		BootstrapStatus: "failed",
+		BootstrapError:  fmt.Errorf("VM \"default\" has a previously failed bootstrap — run 'mint recreate' to recover"),
+	}
+
+	err := printUpJSON(cmd, result)
+	if err != nil {
+		t.Fatalf("printUpJSON error: %v", err)
+	}
+
+	var data map[string]any
+	if jsonErr := json.Unmarshal(buf.Bytes(), &data); jsonErr != nil {
+		t.Fatalf("output is not valid JSON: %v\nOutput: %s", jsonErr, buf.String())
+	}
+
+	if _, ok := data["bootstrap_error"]; !ok {
+		t.Error("JSON output should include 'bootstrap_error' when BootstrapError is set")
+	}
+	if data["restarted"] != true {
+		t.Errorf("JSON output restarted = %v, want true", data["restarted"])
+	}
+}
