@@ -815,6 +815,136 @@ func TestStatusJSONVersionFieldsOnLatestVersion(t *testing.T) {
 	}
 }
 
+// TestStatusJSONErrorRouting verifies that when --json is set, error conditions
+// (VM not found, AWS error) write {"error":"..."} to stdout and nothing to
+// stderr, instead of plaintext to stderr. This is the JSON contract for
+// machine-readable consumers.
+func TestStatusJSONErrorRouting(t *testing.T) {
+	tests := []struct {
+		name           string
+		describe       *mockDescribeInstances
+		owner          string
+		wantErrKey     string // substring expected inside the JSON "error" value
+	}{
+		{
+			name: "VM not found writes JSON error to stdout",
+			describe: &mockDescribeInstances{
+				output: &ec2.DescribeInstancesOutput{},
+			},
+			owner:      "alice",
+			wantErrKey: "not found",
+		},
+		{
+			name: "AWS error writes JSON error to stdout",
+			describe: &mockDescribeInstances{
+				err: fmt.Errorf("access denied"),
+			},
+			owner:      "alice",
+			wantErrKey: "access denied",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stdout := new(bytes.Buffer)
+			stderr := new(bytes.Buffer)
+
+			deps := &statusDeps{
+				describe: tt.describe,
+				owner:    tt.owner,
+			}
+
+			cmd := newStatusCommandWithDeps(deps)
+			root := newTestRoot()
+			root.AddCommand(cmd)
+			// Separate stdout from stderr so we can verify routing.
+			root.SetOut(stdout)
+			root.SetErr(stderr)
+			root.SetArgs([]string{"status", "--json"})
+
+			err := root.Execute()
+
+			// Command must exit non-zero (return non-nil error or silentExitError).
+			// silentExitError has an empty message — either way we expect failure.
+			if err == nil {
+				t.Fatal("expected non-nil error, got nil")
+			}
+
+			// Stderr must be empty — no plaintext error messages when --json is set.
+			if got := stderr.String(); got != "" {
+				t.Errorf("stderr must be empty in --json mode, got: %q", got)
+			}
+
+			// Stdout must contain valid JSON with an "error" key.
+			outStr := strings.TrimSpace(stdout.String())
+			if outStr == "" {
+				t.Fatal("stdout must contain JSON error object, got empty string")
+			}
+
+			var result map[string]interface{}
+			if err := json.Unmarshal([]byte(outStr), &result); err != nil {
+				t.Fatalf("stdout is not valid JSON: %v\nGot: %s", err, outStr)
+			}
+
+			errVal, ok := result["error"]
+			if !ok {
+				t.Fatalf("JSON output missing \"error\" key; got: %s", outStr)
+			}
+
+			errStr, ok := errVal.(string)
+			if !ok {
+				t.Fatalf("JSON \"error\" value is not a string; got type %T", errVal)
+			}
+
+			if !strings.Contains(errStr, tt.wantErrKey) {
+				t.Errorf("JSON error %q does not contain %q", errStr, tt.wantErrKey)
+			}
+		})
+	}
+}
+
+func TestStatusJSONErrorRoutingHappyPath(t *testing.T) {
+	// When VM is found and --json is set, stdout must contain the VM JSON
+	// object (not an error), and stderr must be empty.
+	recentLaunch := time.Now().Add(-30 * time.Minute)
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+
+	deps := &statusDeps{
+		describe: &mockDescribeInstances{
+			output: makeInstanceWithTime("i-rte1", "default", "alice", "running", "1.2.3.4", "m6i.xlarge", "complete", recentLaunch),
+		},
+		owner: "alice",
+	}
+
+	cmd := newStatusCommandWithDeps(deps)
+	root := newTestRoot()
+	root.AddCommand(cmd)
+	root.SetOut(stdout)
+	root.SetErr(stderr)
+	root.SetArgs([]string{"status", "--json"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if got := stderr.String(); got != "" {
+		t.Errorf("stderr must be empty on happy path, got: %q", got)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(stdout.String())), &result); err != nil {
+		t.Fatalf("stdout is not valid JSON: %v\nGot: %s", err, stdout.String())
+	}
+
+	if _, hasErr := result["error"]; hasErr {
+		t.Errorf("happy path JSON must not contain \"error\" key; got: %s", stdout.String())
+	}
+	if _, hasID := result["id"]; !hasID {
+		t.Errorf("happy path JSON must contain \"id\" key; got: %s", stdout.String())
+	}
+}
+
 func TestParseDiskUsagePct(t *testing.T) {
 	tests := []struct {
 		name    string
