@@ -321,10 +321,13 @@ func runProjectAdd(cmd *cobra.Command, deps *projectAddDeps, gitURL string) erro
 }
 
 // buildCloneCommand constructs the git clone command arguments.
-// The -c credential.helper= flag suppresses interactive credential prompts,
-// which fail immediately over non-TTY SSH pipes with "fatal: could not read Username".
+// GIT_TERMINAL_PROMPT=0 prevents git from opening /dev/tty for interactive
+// credential prompts, which fail with "No such device or address" over
+// non-interactive SSH sessions (BatchMode=yes). The -c credential.helper=
+// flag additionally suppresses the credential helper chain so git never
+// attempts to source credentials interactively.
 func buildCloneCommand(gitURL, projectPath, branch string) []string {
-	cmd := []string{"git", "-c", "credential.helper=", "clone"}
+	cmd := []string{"env", "GIT_TERMINAL_PROMPT=0", "git", "-c", "credential.helper=", "clone"}
 	if branch != "" {
 		cmd = append(cmd, "--branch", branch)
 	}
