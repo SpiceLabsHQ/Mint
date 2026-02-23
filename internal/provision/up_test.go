@@ -1888,8 +1888,83 @@ func TestProvisionerNilLoggerNoChange(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Tests: handleExistingVM bootstrap status checking (fix for #97)
+// Tests: handleExistingVM bootstrap status checking (fix for #97 and #129)
 // ---------------------------------------------------------------------------
+
+func stoppedVMInstance(instanceID, publicIP, bootstrapStatus string) *ec2.DescribeInstancesOutput {
+	vmTags := []ec2types.Tag{
+		{Key: aws.String("mint:vm"), Value: aws.String("default")},
+		{Key: aws.String("mint:owner"), Value: aws.String("alice")},
+	}
+	if bootstrapStatus != "" {
+		vmTags = append(vmTags, ec2types.Tag{
+			Key:   aws.String("mint:bootstrap"),
+			Value: aws.String(bootstrapStatus),
+		})
+	}
+	return &ec2.DescribeInstancesOutput{
+		Reservations: []ec2types.Reservation{{
+			Instances: []ec2types.Instance{{
+				InstanceId:      aws.String(instanceID),
+				InstanceType:    ec2types.InstanceTypeM6iXlarge,
+				PublicIpAddress: aws.String(publicIP),
+				State: &ec2types.InstanceState{
+					Name: ec2types.InstanceStateNameStopped,
+				},
+				Tags: vmTags,
+			}},
+		}},
+	}
+}
+
+func TestHandleExistingVMStoppedBootstrapFailed(t *testing.T) {
+	// Stopped VM with mint:bootstrap=failed must surface BootstrapError
+	// so the caller can warn the user before they connect to a broken VM.
+	m := newUpHappyMocks()
+	m.describeInstances.output = stoppedVMInstance("i-stopped1", "54.0.0.1", "failed")
+	p := m.build()
+
+	result, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", defaultConfig())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// StartInstances should still be called — we start the VM (so SSH works) but warn.
+	if !m.startInstances.called {
+		t.Error("StartInstances should be called for stopped VM even when bootstrap failed")
+	}
+	if !result.Restarted {
+		t.Error("result.Restarted should be true for stopped VM")
+	}
+	if result.BootstrapError == nil {
+		t.Fatal("BootstrapError should be non-nil for stopped VM with bootstrap:failed tag")
+	}
+	if !strings.Contains(result.BootstrapError.Error(), "mint recreate") {
+		t.Errorf("BootstrapError = %q, should mention 'mint recreate'", result.BootstrapError.Error())
+	}
+	if result.BootstrapStatus != tags.BootstrapFailed {
+		t.Errorf("BootstrapStatus = %q, want %q", result.BootstrapStatus, tags.BootstrapFailed)
+	}
+}
+
+func TestHandleExistingVMStoppedBootstrapComplete(t *testing.T) {
+	// Stopped VM with mint:bootstrap=complete should restart cleanly with no error.
+	m := newUpHappyMocks()
+	m.describeInstances.output = stoppedVMInstance("i-stopped1", "54.0.0.1", "complete")
+	p := m.build()
+
+	result, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", defaultConfig())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !result.Restarted {
+		t.Error("result.Restarted should be true for stopped VM")
+	}
+	if result.BootstrapError != nil {
+		t.Errorf("BootstrapError should be nil for stopped VM with bootstrap:complete, got: %v", result.BootstrapError)
+	}
+}
 
 func runningVMInstance(instanceID, publicIP, bootstrapStatus string) *ec2.DescribeInstancesOutput {
 	tags := []ec2types.Tag{

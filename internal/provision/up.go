@@ -354,11 +354,19 @@ func (p *Provisioner) handleExistingVM(ctx context.Context, existing *vm.VM) (*P
 		if err != nil {
 			return nil, fmt.Errorf("starting stopped VM %s: %w", existing.ID, err)
 		}
-		return &ProvisionResult{
-			InstanceID: existing.ID,
-			PublicIP:   existing.PublicIP,
-			Restarted:  true,
-		}, nil
+		result := &ProvisionResult{
+			InstanceID:      existing.ID,
+			PublicIP:        existing.PublicIP,
+			Restarted:       true,
+			BootstrapStatus: existing.BootstrapStatus,
+		}
+		if existing.BootstrapStatus == tags.BootstrapFailed {
+			result.BootstrapError = fmt.Errorf(
+				"VM %q has a previously failed bootstrap — run 'mint recreate' to recover",
+				existing.Name,
+			)
+		}
+		return result, nil
 	}
 
 	// VM exists and is running (or in another non-stopped state).
