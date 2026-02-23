@@ -202,6 +202,37 @@ func TestUpdateCommand_ChecksumMismatch(t *testing.T) {
 	}
 }
 
+// TestUpdateCommand_NoReleasesExitsZero verifies that when the GitHub API
+// returns 404 (no releases published yet), mint update exits 0 with a
+// friendly message instead of exiting 1 with an alarming error.
+func TestUpdateCommand_NoReleasesExitsZero(t *testing.T) {
+	mock := &mockUpdater{
+		checkLatestFn: func(ctx context.Context) (*selfupdate.Release, error) {
+			return nil, &selfupdate.NoReleasesError{}
+		},
+	}
+
+	cmd := newUpdateCommandWithDeps(&updateDeps{
+		updater:    mock,
+		binaryPath: "/usr/local/bin/mint",
+	})
+
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+	cmd.SetContext(context.Background())
+
+	err := cmd.Execute()
+	if err != nil {
+		t.Fatalf("expected exit 0 for no releases, got error: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "No releases found") {
+		t.Errorf("output should mention 'No releases found', got: %s", output)
+	}
+}
+
 // TestUpdateCommand_RateLimitExitsZero verifies that when the GitHub API
 // returns 403 (rate limit exceeded), mint update exits 0 with a friendly
 // message instead of exiting 1 with an alarming error.

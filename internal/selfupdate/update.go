@@ -39,6 +39,15 @@ func (e *RateLimitError) Error() string {
 	return "GitHub API rate limit exceeded. Try again later."
 }
 
+// NoReleasesError is returned by CheckLatest when no GitHub releases exist
+// (HTTP 404). Callers should exit 0 — this is not a failure; the binary may
+// be running a pre-release or development build.
+type NoReleasesError struct{}
+
+func (e *NoReleasesError) Error() string {
+	return "no releases found — mint may be running a pre-release version"
+}
+
 // Updater performs self-update operations against GitHub Releases.
 type Updater struct {
 	// Client is the HTTP client used for all requests.
@@ -106,7 +115,7 @@ func (u *Updater) CheckLatest(ctx context.Context) (*Release, error) {
 		return nil, &RateLimitError{}
 	}
 	if resp.StatusCode == http.StatusNotFound {
-		return nil, fmt.Errorf("no releases found — mint may be running a pre-release version")
+		return nil, &NoReleasesError{}
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("GitHub API returned status %d", resp.StatusCode)

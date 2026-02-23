@@ -304,10 +304,13 @@ func TestProjectAddCommand(t *testing.T) {
 			wantStreamingCalls: 2,
 			checkStreamingCalls: func(t *testing.T, calls []projectStreamingCall) {
 				t.Helper()
-				// Streaming call 0: git clone
+				// Streaming call 0: git clone with credential suppression
 				cloneCmd := strings.Join(calls[0].command, " ")
-				if !strings.Contains(cloneCmd, "git clone") {
+				if !strings.Contains(cloneCmd, "clone") {
 					t.Errorf("first streaming call should be git clone, got: %s", cloneCmd)
+				}
+				if !strings.Contains(cloneCmd, "credential.helper=") {
+					t.Errorf("clone should suppress credentials, got: %s", cloneCmd)
 				}
 				if !strings.Contains(cloneCmd, "https://github.com/org/repo.git") {
 					t.Errorf("clone should include URL, got: %s", cloneCmd)
@@ -812,6 +815,120 @@ func TestProjectAddCommand(t *testing.T) {
 
 			if tt.checkOutput != nil {
 				tt.checkOutput(t, buf.String())
+			}
+		})
+	}
+}
+
+// TestBuildCloneCommandSuppressesCredentials verifies that buildCloneCommand
+// always includes the git -c credential.helper= flag to prevent interactive
+// credential prompts over non-TTY SSH pipes (fatal: could not read Username).
+func TestBuildCloneCommandSuppressesCredentials(t *testing.T) {
+	tests := []struct {
+		name       string
+		gitURL     string
+		projectPath string
+		branch     string
+	}{
+		{
+			name:        "https url no branch",
+			gitURL:      "https://github.com/org/repo.git",
+			projectPath: "/mint/projects/repo",
+			branch:      "",
+		},
+		{
+			name:        "https url with branch",
+			gitURL:      "https://github.com/org/repo.git",
+			projectPath: "/mint/projects/repo",
+			branch:      "develop",
+		},
+		{
+			name:        "ssh url no branch",
+			gitURL:      "git@github.com:org/repo.git",
+			projectPath: "/mint/projects/repo",
+			branch:      "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := buildCloneCommand(tt.gitURL, tt.projectPath, tt.branch)
+
+			// Verify -c flag is present.
+			foundDashC := false
+			foundCredentialHelper := false
+			for _, arg := range cmd {
+				if arg == "-c" {
+					foundDashC = true
+				}
+				if arg == "credential.helper=" {
+					foundCredentialHelper = true
+				}
+			}
+
+			if !foundDashC {
+				t.Errorf("buildCloneCommand(%q, %q, %q) missing -c flag; got %v",
+					tt.gitURL, tt.projectPath, tt.branch, cmd)
+			}
+			if !foundCredentialHelper {
+				t.Errorf("buildCloneCommand(%q, %q, %q) missing credential.helper= value; got %v",
+					tt.gitURL, tt.projectPath, tt.branch, cmd)
+			}
+
+			// Verify -c precedes credential.helper= (they must be adjacent).
+			for i, arg := range cmd {
+				if arg == "-c" && i+1 < len(cmd) {
+					if cmd[i+1] != "credential.helper=" {
+						t.Errorf("expected credential.helper= after -c, got %q", cmd[i+1])
+					}
+				}
+			}
+
+			// Verify git is still the first element and clone is present.
+			if len(cmd) == 0 || cmd[0] != "git" {
+				t.Errorf("first element should be git, got %v", cmd)
+			}
+			foundClone := false
+			for _, arg := range cmd {
+				if arg == "clone" {
+					foundClone = true
+					break
+				}
+			}
+			if !foundClone {
+				t.Errorf("clone subcommand missing from %v", cmd)
+			}
+
+			// Verify URL and path are still present.
+			foundURL := false
+			foundPath := false
+			for _, arg := range cmd {
+				if arg == tt.gitURL {
+					foundURL = true
+				}
+				if arg == tt.projectPath {
+					foundPath = true
+				}
+			}
+			if !foundURL {
+				t.Errorf("git URL %q missing from %v", tt.gitURL, cmd)
+			}
+			if !foundPath {
+				t.Errorf("project path %q missing from %v", tt.projectPath, cmd)
+			}
+
+			// Verify branch flag is present when specified.
+			if tt.branch != "" {
+				foundBranch := false
+				for i, arg := range cmd {
+					if arg == "--branch" && i+1 < len(cmd) && cmd[i+1] == tt.branch {
+						foundBranch = true
+						break
+					}
+				}
+				if !foundBranch {
+					t.Errorf("--branch %q missing from %v", tt.branch, cmd)
+				}
 			}
 		})
 	}

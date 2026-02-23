@@ -81,6 +81,11 @@ func runUpdate(cmd *cobra.Command, deps *updateDeps) error {
 			fmt.Fprintf(w, "Could not check for updates: GitHub API rate limit exceeded. Try again later.\n")
 			return nil
 		}
+		var noReleasesErr *selfupdate.NoReleasesError
+		if errors.As(err, &noReleasesErr) {
+			fmt.Fprintf(w, "No releases found — mint may be running a pre-release version.\n")
+			return nil
+		}
 		return fmt.Errorf("check for updates: %w", err)
 	}
 	if release == nil {

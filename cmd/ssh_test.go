@@ -785,6 +785,50 @@ func TestSSHCommandTOFUScannerError(t *testing.T) {
 	}
 }
 
+// TestDefaultHostKeyScannerUsesEd25519 verifies that defaultHostKeyScanner
+// passes -t ed25519 to ssh-keyscan so the key type is pinned and fingerprints
+// are deterministic across multiple scans (prevents false TOFU mismatches).
+func TestDefaultHostKeyScannerUsesEd25519(t *testing.T) {
+	// Create a temporary directory and write a fake ssh-keyscan script
+	// that records its arguments to a file, then emits a valid ed25519 key line.
+	dir := t.TempDir()
+
+	// The fake ssh-keyscan script records args and prints a synthetic key.
+	fakeScript := `#!/bin/sh
+echo "$@" > ` + dir + `/args.txt
+echo "1.2.3.4 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GkpQ"
+`
+	scriptPath := dir + "/ssh-keyscan"
+	if err := os.WriteFile(scriptPath, []byte(fakeScript), 0755); err != nil {
+		t.Fatalf("writing fake ssh-keyscan: %v", err)
+	}
+
+	// Prepend our fake binary's directory to PATH so exec.Command finds it first.
+	origPath := os.Getenv("PATH")
+	t.Cleanup(func() { os.Setenv("PATH", origPath) })
+	os.Setenv("PATH", dir+":"+origPath)
+
+	// Call defaultHostKeyScanner — it must invoke our fake ssh-keyscan.
+	_, _, err := defaultHostKeyScanner("1.2.3.4", 41122)
+	if err != nil {
+		t.Fatalf("defaultHostKeyScanner returned error: %v", err)
+	}
+
+	// Read the captured args.
+	argsBytes, readErr := os.ReadFile(dir + "/args.txt")
+	if readErr != nil {
+		t.Fatalf("reading captured args: %v", readErr)
+	}
+	capturedArgs := strings.TrimSpace(string(argsBytes))
+
+	// Assert -t ed25519 is present in the command arguments.
+	if !strings.Contains(capturedArgs, "-t ed25519") {
+		t.Errorf("ssh-keyscan args %q do not contain \"-t ed25519\"; "+
+			"defaultHostKeyScanner must pin key type to avoid non-deterministic TOFU fingerprints",
+			capturedArgs)
+	}
+}
+
 func TestSSHCommandUsesStrictHostKeyChecking(t *testing.T) {
 	describe := &mockDescribeForSSH{
 		output: makeRunningInstanceWithAZ("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
