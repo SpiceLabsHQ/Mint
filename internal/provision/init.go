@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
@@ -188,7 +189,8 @@ func (i *Initializer) validateInstanceProfile(ctx context.Context) error {
 		}
 		var ae smithy.APIError
 		if errors.As(err, &ae) && ae.ErrorCode() == "AccessDenied" {
-			return fmt.Errorf("cannot verify instance profile %q: you lack iam:GetInstanceProfile permission (AccessDenied) — ask your admin to run 'mint admin setup' or verify the profile manually", defaultInstanceProfileName)
+			log.Printf("Warning: cannot verify instance profile %q (iam:GetInstanceProfile permission denied) — assuming profile exists. Ask your admin to run 'mint admin setup' if provisioning fails.", defaultInstanceProfileName)
+			return nil
 		}
 		return fmt.Errorf("get instance profile %q: %w", defaultInstanceProfileName, err)
 	}

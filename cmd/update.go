@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -75,6 +76,11 @@ func runUpdate(cmd *cobra.Command, deps *updateDeps) error {
 	fmt.Fprintln(w, "Checking for updates...")
 	release, err := deps.updater.CheckLatest(ctx)
 	if err != nil {
+		var rateLimitErr *selfupdate.RateLimitError
+		if errors.As(err, &rateLimitErr) {
+			fmt.Fprintf(w, "Could not check for updates: GitHub API rate limit exceeded. Try again later.\n")
+			return nil
+		}
 		return fmt.Errorf("check for updates: %w", err)
 	}
 	if release == nil {

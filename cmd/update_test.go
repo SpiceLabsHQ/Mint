@@ -202,6 +202,37 @@ func TestUpdateCommand_ChecksumMismatch(t *testing.T) {
 	}
 }
 
+// TestUpdateCommand_RateLimitExitsZero verifies that when the GitHub API
+// returns 403 (rate limit exceeded), mint update exits 0 with a friendly
+// message instead of exiting 1 with an alarming error.
+func TestUpdateCommand_RateLimitExitsZero(t *testing.T) {
+	mock := &mockUpdater{
+		checkLatestFn: func(ctx context.Context) (*selfupdate.Release, error) {
+			return nil, &selfupdate.RateLimitError{}
+		},
+	}
+
+	cmd := newUpdateCommandWithDeps(&updateDeps{
+		updater:    mock,
+		binaryPath: "/usr/local/bin/mint",
+	})
+
+	var buf bytes.Buffer
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+	cmd.SetContext(context.Background())
+
+	err := cmd.Execute()
+	if err != nil {
+		t.Fatalf("expected exit 0 for rate limit, got error: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "rate limit") {
+		t.Errorf("output should mention rate limit, got: %s", output)
+	}
+}
+
 func TestUpdateCommand_NetworkFailure(t *testing.T) {
 	mock := &mockUpdater{
 		checkLatestFn: func(ctx context.Context) (*selfupdate.Release, error) {

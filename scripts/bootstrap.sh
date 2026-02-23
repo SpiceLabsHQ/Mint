@@ -200,7 +200,7 @@ if [ -n "${MINT_PROJECT_DEV:-}" ]; then
     # Poll up to 90s for block device (handles NVMe naming on Nitro instances).
     _t=90
     while [ "${_t}" -gt 0 ] && [ ! -b "${MINT_PROJECT_DEV}" ]; do
-        _root_disk=$(lsblk -rno PKNAME "$(findmnt -no SOURCE /)" 2>/dev/null || true)
+        _root_disk=$(lsblk -rno NAME,MOUNTPOINT 2>/dev/null|awk '$2=="/"{n=$1;sub("p[0-9]+$","",n);print n;exit}')
         _candidate=$(lsblk -rno NAME,TYPE 2>/dev/null \
             | awk -v r="${_root_disk}" 'r!="" && $2=="disk" && $1!=r {print "/dev/"$1; exit}')
         if [ -n "${_candidate:-}" ]; then
