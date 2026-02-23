@@ -12,9 +12,11 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awscfg "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/cloudformation"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ec2instanceconnect"
 	"github.com/aws/aws-sdk-go-v2/service/efs"
+	"github.com/aws/aws-sdk-go-v2/service/ssoadmin"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/spf13/cobra"
 
@@ -26,11 +28,13 @@ import (
 // awsClients holds pre-initialized AWS SDK clients and resolved identity.
 // Created once in PersistentPreRunE and stored on the command context.
 type awsClients struct {
-	ec2Client *ec2.Client
-	icClient  *ec2instanceconnect.Client
-	efsClient *efs.Client
-	owner     string // resolved owner name (mint:owner tag value)
-	ownerARN  string // resolved owner ARN (mint:owner-arn tag value)
+	ec2Client      *ec2.Client
+	icClient       *ec2instanceconnect.Client
+	efsClient      *efs.Client
+	cfnClient      *cloudformation.Client
+	ssoAdminClient *ssoadmin.Client
+	owner          string // resolved owner name (mint:owner tag value)
+	ownerARN       string // resolved owner ARN (mint:owner-arn tag value)
 
 	// mintConfig holds the loaded user preferences for instance type,
 	// volume size, idle timeout, etc.
@@ -160,12 +164,14 @@ func initAWSClients(ctx context.Context) (*awsClients, error) {
 	}
 
 	return &awsClients{
-		ec2Client:  ec2.NewFromConfig(cfg),
-		icClient:   ec2instanceconnect.NewFromConfig(cfg),
-		efsClient:  efs.NewFromConfig(cfg),
-		owner:      owner.Name,
-		ownerARN:   owner.ARN,
-		mintConfig: mintCfg,
+		ec2Client:      ec2.NewFromConfig(cfg),
+		icClient:       ec2instanceconnect.NewFromConfig(cfg),
+		efsClient:      efs.NewFromConfig(cfg),
+		cfnClient:      cloudformation.NewFromConfig(cfg),
+		ssoAdminClient: ssoadmin.NewFromConfig(cfg),
+		owner:          owner.Name,
+		ownerARN:       owner.ARN,
+		mintConfig:     mintCfg,
 	}, nil
 }
 
