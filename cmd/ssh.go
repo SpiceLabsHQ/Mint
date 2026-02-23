@@ -213,7 +213,7 @@ func runSSH(cmd *cobra.Command, deps *sshDeps, extraArgs []string) error {
 // defaultHostKeyScanner runs ssh-keyscan to fetch a host's SSH public key
 // and returns its SHA256 fingerprint and the raw key line (type + base64 data).
 func defaultHostKeyScanner(host string, port int) (fingerprint string, hostKeyLine string, err error) {
-	cmd := exec.Command("ssh-keyscan", "-p", fmt.Sprintf("%d", port), "-T", "5", host)
+	cmd := exec.Command("ssh-keyscan", "-p", fmt.Sprintf("%d", port), "-T", "5", "-t", "ed25519", host)
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

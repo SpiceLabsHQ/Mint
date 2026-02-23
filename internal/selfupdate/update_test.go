@@ -173,6 +173,32 @@ func TestCheckLatest_404FriendlyMessage(t *testing.T) {
 	}
 }
 
+// TestCheckLatest_404ReturnsNoReleasesError verifies that a 404 response from
+// the GitHub API returns a *NoReleasesError sentinel so callers can exit 0
+// with a friendly message rather than treating it as a hard failure.
+func TestCheckLatest_404ReturnsNoReleasesError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	u := &Updater{
+		Client:         srv.Client(),
+		CurrentVersion: "v1.0.0",
+		APIEndpoint:    srv.URL + "/releases/latest",
+	}
+
+	_, err := u.CheckLatest(context.Background())
+	if err == nil {
+		t.Fatal("expected error for 404 response")
+	}
+
+	var noReleasesErr *NoReleasesError
+	if !errors.As(err, &noReleasesErr) {
+		t.Errorf("expected *NoReleasesError, got %T: %v", err, err)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // VerifyChecksum tests — now verifies archive hash, not extracted binary
 // ---------------------------------------------------------------------------
