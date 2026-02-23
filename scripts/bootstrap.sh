@@ -197,25 +197,26 @@ fi
 
 # Format and mount project EBS at /mint/projects
 if [ -n "${MINT_PROJECT_DEV:-}" ]; then
+    _dev="${MINT_PROJECT_DEV}"
     # Poll up to 90s for block device (handles NVMe naming on Nitro instances).
     _t=90
-    while [ "${_t}" -gt 0 ] && [ ! -b "${MINT_PROJECT_DEV}" ]; do
+    while [ "${_t}" -gt 0 ] && [ ! -b "${_dev}" ]; do
         _root_disk=$(lsblk -rno NAME,MOUNTPOINT 2>/dev/null|awk '$2=="/"{n=$1;sub("p[0-9]+$","",n);print n;exit}')
         _candidate=$(lsblk -rno NAME,TYPE 2>/dev/null \
             | awk -v r="${_root_disk}" 'r!="" && $2=="disk" && $1!=r {print "/dev/"$1; exit}')
         if [ -n "${_candidate:-}" ]; then
-            MINT_PROJECT_DEV="${_candidate}"
+            _dev="${_candidate}"
             break
         fi
         sleep 5
         _t=$(( _t - 5 ))
     done
-    log "Setting up project volume ${MINT_PROJECT_DEV} at /mint/projects"
-    if ! blkid "${MINT_PROJECT_DEV}" &> /dev/null; then
-        mkfs.ext4 -q "${MINT_PROJECT_DEV}"
+    log "Setting up project volume ${_dev} at /mint/projects"
+    if ! blkid "${_dev}" &> /dev/null; then
+        mkfs.ext4 -q "${_dev}"
     fi
-    mount "${MINT_PROJECT_DEV}" /mint/projects
-    PROJECT_UUID=$(blkid -s UUID -o value "${MINT_PROJECT_DEV}")
+    mount "${_dev}" /mint/projects
+    PROJECT_UUID=$(blkid -s UUID -o value "${_dev}")
     if ! grep -q '/mint/projects' /etc/fstab; then
         echo "UUID=${PROJECT_UUID} /mint/projects ext4 defaults,nofail 0 2" >> /etc/fstab
     fi
