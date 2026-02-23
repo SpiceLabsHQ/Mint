@@ -17,6 +17,7 @@ import (
 	efstypes "github.com/aws/aws-sdk-go-v2/service/efs/types"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
+	smithy "github.com/aws/smithy-go"
 
 	mintaws "github.com/nicholasgasior/mint/internal/aws"
 	"github.com/nicholasgasior/mint/internal/tags"
@@ -184,6 +185,10 @@ func (i *Initializer) validateInstanceProfile(ctx context.Context) error {
 		if errors.As(err, &noSuchEntity) {
 			return fmt.Errorf("instance profile %q not found; run the admin setup "+
 				"CloudFormation stack first (see docs/admin-setup.md)", defaultInstanceProfileName)
+		}
+		var ae smithy.APIError
+		if errors.As(err, &ae) && ae.ErrorCode() == "AccessDenied" {
+			return fmt.Errorf("cannot verify instance profile %q: you lack iam:GetInstanceProfile permission (AccessDenied) — ask your admin to run 'mint admin setup' or verify the profile manually", defaultInstanceProfileName)
 		}
 		return fmt.Errorf("get instance profile %q: %w", defaultInstanceProfileName, err)
 	}

@@ -747,6 +747,8 @@ Validates prerequisites and creates per-user resources. This command must be run
 
 **Flags:** Supports `--json` for machine-readable output.
 
+**IAM permissions note:** `mint init` calls `iam:GetInstanceProfile` to verify the admin-created instance profile exists. PowerUserAccess does not include this permission — if your credentials lack it, `mint init` returns a friendly error directing you to your administrator rather than a raw SDK chain. Ask your admin to run `mint admin setup` to create the instance profile, or verify the profile exists manually via the AWS Console.
+
 **Examples:**
 
 ```bash
