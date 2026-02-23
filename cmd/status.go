@@ -97,11 +97,21 @@ func runStatus(cmd *cobra.Command, deps *statusDeps) error {
 
 	found, err := vm.FindVM(ctx, deps.describe, deps.owner, vmName)
 	if err != nil {
-		return fmt.Errorf("finding VM: %w", err)
+		msg := fmt.Sprintf("finding VM: %v", err)
+		if jsonOutput {
+			fmt.Fprintf(cmd.OutOrStdout(), "{\"error\":%q}\n", msg)
+			return silentExitError{}
+		}
+		return fmt.Errorf("%s", msg)
 	}
 
 	if found == nil {
-		return fmt.Errorf("VM %q not found for owner %q", vmName, deps.owner)
+		msg := fmt.Sprintf("VM %q not found for owner %q", vmName, deps.owner)
+		if jsonOutput {
+			fmt.Fprintf(cmd.OutOrStdout(), "{\"error\":%q}\n", msg)
+			return silentExitError{}
+		}
+		return fmt.Errorf("%s", msg)
 	}
 
 	// Fetch disk usage when VM is running and SSH deps are available.
