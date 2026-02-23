@@ -764,6 +764,122 @@ mint init --json
 
 ---
 
+## Admin Setup
+
+One-time account setup commands for AWS administrators. These commands require PowerUser or AdministratorAccess permissions and are run once per AWS account before any user can run `mint init`.
+
+### `mint admin`
+
+```
+mint admin <subcommand> [flags]
+```
+
+Parent command for account-level administration. All subcommands accept `--json` for machine-readable output. See [admin-setup.md](admin-setup.md) for the full operator guide.
+
+---
+
+### `mint admin setup`
+
+Run the full admin setup in one shot.
+
+```
+mint admin setup [flags]
+```
+
+Composite command that runs `mint admin deploy` then `mint admin attach-policy` in sequence. The attach-policy step is skipped gracefully if IAM Identity Center is not configured in the account.
+
+**Flags:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--stack-name` | `mint-admin-setup` | CloudFormation stack name |
+| `--permission-set` | `PowerUserAccess` | IAM Identity Center permission set name |
+| `--policy` | `mint-pass-instance-role` | Customer-managed policy name to attach |
+| `--json` | `false` | Output result as JSON |
+
+**Examples:**
+
+```bash
+# Full one-shot setup
+mint admin setup
+
+# With a specific AWS profile
+mint admin setup --profile AdministratorAccess-123456789012
+
+# JSON output (useful for CI)
+mint admin setup --json
+```
+
+**JSON output fields:** `deploy` (see `mint admin deploy`) and `attach_policy` (see `mint admin attach-policy`, omitted if SSO is not configured).
+
+---
+
+### `mint admin deploy`
+
+Deploy the Mint CloudFormation stack.
+
+```
+mint admin deploy [flags]
+```
+
+Creates or updates the `mint-admin-setup` CloudFormation stack. Auto-discovers the default VPC and subnets. Streams CloudFormation events to stderr during deployment. Idempotent — safe to re-run. If a previous creation attempt left the stack in `ROLLBACK_COMPLETE`, the stuck stack is deleted and re-created automatically.
+
+**What the stack creates:**
+
+- `mint-efs` — EFS filesystem (Elastic throughput) for persistent user storage
+- `mint-efs` security group — NFS inbound scoped to Mint VMs
+- `mint-instance-role` — IAM role allowing VMs to self-stop and update their bootstrap tag
+- `mint-instance-profile` — Instance profile wrapping the role
+- `mint-pass-instance-role` — IAM policy granting PowerUsers permission to pass the instance role at launch
+
+**Flags:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--stack-name` | `mint-admin-setup` | CloudFormation stack name |
+| `--json` | `false` | Output result as JSON |
+
+**Examples:**
+
+```bash
+mint admin deploy
+mint admin deploy --json
+```
+
+**JSON output fields:** `StackName`, `EfsFileSystemId`, `EfsSecurityGroupId`, `InstanceProfileArn`, `PassRolePolicyArn`.
+
+---
+
+### `mint admin attach-policy`
+
+Attach the PassRole policy to an IAM Identity Center permission set.
+
+```
+mint admin attach-policy [flags]
+```
+
+Finds the `mint-pass-instance-role` customer-managed policy and attaches it to the specified IAM Identity Center permission set. Triggers reprovisioning and polls until it completes. If IAM Identity Center is not configured in the account, the command prints a notice and exits successfully.
+
+**Flags:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--permission-set` | `PowerUserAccess` | IAM Identity Center permission set name |
+| `--policy` | `mint-pass-instance-role` | Customer-managed policy name to attach |
+| `--json` | `false` | Output result as JSON |
+
+**Examples:**
+
+```bash
+mint admin attach-policy
+mint admin attach-policy --permission-set MyCustomPermissionSet
+mint admin attach-policy --json
+```
+
+**JSON output fields:** `PermissionSetArn`, `ProvisioningStatus`.
+
+---
+
 ## Informational
 
 Commands for viewing VM state and build info.
@@ -859,6 +975,9 @@ date: 2025-01-15
 
 | Command | Purpose |
 |---------|---------|
+| `mint admin setup` | One-time account setup (admin) |
+| `mint admin deploy` | Deploy admin CloudFormation stack |
+| `mint admin attach-policy` | Attach PassRole policy to SSO |
 | `mint init` | One-time setup for new users |
 | `mint up` | Create or start a VM |
 | `mint down` | Stop a VM (preserves resources) |

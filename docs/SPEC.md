@@ -69,7 +69,7 @@ An AWS administrator performs this once per account. It creates shared infrastru
 
 **EFS Filesystem** — A shared Amazon EFS filesystem with Elastic throughput mode for user configuration volumes. The CloudFormation template creates the filesystem, a dedicated `mint-efs` security group with an NFS inbound rule referencing itself, and configures the filesystem for Elastic throughput. Every Mint VM is launched with the `mint-efs` security group attached, scoping NFS access to Mint VMs only.
 
-Mint ships with documentation containing the exact IAM policy JSON and a CloudFormation template the admin can deploy directly.
+Mint automates this with `mint admin setup` (or `mint admin deploy` + `mint admin attach-policy` individually). See [docs/admin-setup.md](admin-setup.md) for the operator guide.
 
 ### Validation
 
