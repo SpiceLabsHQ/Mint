@@ -16,6 +16,7 @@ import (
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
 
 	"github.com/nicholasgasior/mint/internal/cli"
+	"github.com/nicholasgasior/mint/internal/config"
 	"github.com/nicholasgasior/mint/internal/provision"
 	"github.com/spf13/cobra"
 )
@@ -342,5 +343,68 @@ func TestInitCommandRegistered(t *testing.T) {
 
 	if !found {
 		t.Error("init command not registered on root command")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests for effectiveAWSProfile profile-selection logic (Bug #156)
+// ---------------------------------------------------------------------------
+
+// TestEffectiveAWSProfileConfigFallback verifies that when the --profile CLI
+// flag is empty, effectiveAWSProfile returns the aws_profile from config.toml.
+func TestEffectiveAWSProfileConfigFallback(t *testing.T) {
+	cliCtx := &cli.CLIContext{Profile: ""} // no --profile flag
+	mintConfig := &config.Config{AWSProfile: "config-profile"}
+
+	got := effectiveAWSProfile(cliCtx, mintConfig)
+	if got != "config-profile" {
+		t.Errorf("effectiveAWSProfile = %q, want %q", got, "config-profile")
+	}
+}
+
+// TestEffectiveAWSProfileCLIFlagPrecedence verifies that the --profile CLI
+// flag takes precedence over aws_profile set in config.toml.
+func TestEffectiveAWSProfileCLIFlagPrecedence(t *testing.T) {
+	cliCtx := &cli.CLIContext{Profile: "flag-profile"} // --profile set
+	mintConfig := &config.Config{AWSProfile: "config-profile"}
+
+	got := effectiveAWSProfile(cliCtx, mintConfig)
+	if got != "flag-profile" {
+		t.Errorf("effectiveAWSProfile = %q, want %q", got, "flag-profile")
+	}
+}
+
+// TestEffectiveAWSProfileBothEmpty verifies that when neither --profile nor
+// config aws_profile is set, effectiveAWSProfile returns "", allowing the AWS
+// SDK to resolve the profile through its own default chain.
+func TestEffectiveAWSProfileBothEmpty(t *testing.T) {
+	cliCtx := &cli.CLIContext{Profile: ""}
+	mintConfig := &config.Config{AWSProfile: ""}
+
+	got := effectiveAWSProfile(cliCtx, mintConfig)
+	if got != "" {
+		t.Errorf("effectiveAWSProfile = %q, want empty string", got)
+	}
+}
+
+// TestEffectiveAWSProfileNilCLICtx verifies that a nil cliCtx falls back to
+// the config aws_profile value without panicking.
+func TestEffectiveAWSProfileNilCLICtx(t *testing.T) {
+	mintConfig := &config.Config{AWSProfile: "config-profile"}
+
+	got := effectiveAWSProfile(nil, mintConfig)
+	if got != "config-profile" {
+		t.Errorf("effectiveAWSProfile = %q, want %q", got, "config-profile")
+	}
+}
+
+// TestEffectiveAWSProfileNilMintConfig verifies that a nil mintConfig falls
+// back to the CLI flag value without panicking.
+func TestEffectiveAWSProfileNilMintConfig(t *testing.T) {
+	cliCtx := &cli.CLIContext{Profile: "flag-profile"}
+
+	got := effectiveAWSProfile(cliCtx, nil)
+	if got != "flag-profile" {
+		t.Errorf("effectiveAWSProfile = %q, want %q", got, "flag-profile")
 	}
 }

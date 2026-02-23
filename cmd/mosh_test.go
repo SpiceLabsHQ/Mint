@@ -186,6 +186,7 @@ func TestMoshCommand(t *testing.T) {
 				owner:      tt.owner,
 				runner:     runner,
 				lookupPath: tt.lookupMosh,
+				isTerminal: func() bool { return true },
 			}
 
 			cmd := newMoshCommandWithDeps(deps)
@@ -268,6 +269,7 @@ func TestMoshCommandEmptyAvailabilityZone(t *testing.T) {
 			return nil
 		},
 		lookupPath: func(string) (string, error) { return "/usr/bin/mosh", nil },
+		isTerminal: func() bool { return true },
 	}
 
 	err := runMoshWithDeps(t, deps, "default")
@@ -284,6 +286,33 @@ func TestMoshCommandEmptyAvailabilityZone(t *testing.T) {
 	// SendSSHPublicKey should NOT have been called.
 	if sendKey.called {
 		t.Error("SendSSHPublicKey should not have been called when AZ is empty")
+	}
+}
+
+func TestMoshRequiresInteractiveTerminal(t *testing.T) {
+	sendKey := &mockSendSSHPublicKey{}
+
+	deps := &moshDeps{
+		describe:   &mockDescribeForSSH{output: makeRunningInstanceWithAZ("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a")},
+		sendKey:    sendKey,
+		owner:      "alice",
+		runner:     func(name string, args ...string) error { return nil },
+		lookupPath: func(string) (string, error) { return "/usr/bin/mosh", nil },
+		isTerminal: func() bool { return false },
+	}
+
+	err := runMoshWithDeps(t, deps, "default")
+	if err == nil {
+		t.Fatal("expected error when stdin is not a terminal, got nil")
+	}
+	if !strings.Contains(err.Error(), "interactive terminal") {
+		t.Errorf("error %q does not contain 'interactive terminal'", err.Error())
+	}
+
+	// SendSSHPublicKey (and by extension, the mosh-server start) must NOT be
+	// called when stdin is not a terminal — that is the core of the bug fix.
+	if sendKey.called {
+		t.Error("SendSSHPublicKey should NOT be called when stdin is not a terminal")
 	}
 }
 
@@ -428,6 +457,7 @@ func newTOFUMoshDeps(t *testing.T, describe *mockDescribeForSSH, sendKey *mockSe
 		lookupPath:     func(string) (string, error) { return "/usr/bin/mosh", nil },
 		hostKeyStore:   store,
 		hostKeyScanner: scanner,
+		isTerminal:     func() bool { return true },
 	}, &captured
 }
 

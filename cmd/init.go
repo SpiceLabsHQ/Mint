@@ -9,6 +9,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 
 	"github.com/nicholasgasior/mint/internal/cli"
+	"github.com/nicholasgasior/mint/internal/config"
 	"github.com/nicholasgasior/mint/internal/provision"
 	"github.com/spf13/cobra"
 )
@@ -47,10 +48,10 @@ func runInit(cmd *cobra.Command, args []string) error {
 	// already validated by PersistentPreRunE so this is just client wiring.
 	var awsOpts []func(*awsconfig.LoadOptions) error
 
-	// Pass --profile so the IAM client uses the same AWS profile as the
-	// rest of the mint command invocation.
-	if cliCtx != nil && cliCtx.Profile != "" {
-		awsOpts = append(awsOpts, awsconfig.WithSharedConfigProfile(cliCtx.Profile))
+	// Mirror the profile fallback from initAWSClients: --profile flag takes
+	// precedence, then fall back to the aws_profile stored in config.toml.
+	if p := effectiveAWSProfile(cliCtx, clients.mintConfig); p != "" {
+		awsOpts = append(awsOpts, awsconfig.WithSharedConfigProfile(p))
 	}
 
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, awsOpts...)
@@ -122,6 +123,20 @@ func printInitHuman(cmd *cobra.Command, result *provision.InitResult) error {
 
 	fmt.Fprintln(w, "\nInitialization complete.")
 	return nil
+}
+
+// effectiveAWSProfile returns the AWS profile to use for the IAM client.
+// The --profile CLI flag takes precedence; if unset, the aws_profile value
+// from config.toml is used.  Returns "" when neither is set, letting the
+// AWS SDK resolve the profile through its default chain.
+func effectiveAWSProfile(cliCtx *cli.CLIContext, mintConfig *config.Config) string {
+	if cliCtx != nil && cliCtx.Profile != "" {
+		return cliCtx.Profile
+	}
+	if mintConfig != nil && mintConfig.AWSProfile != "" {
+		return mintConfig.AWSProfile
+	}
+	return ""
 }
 
 // initWithInitializer runs init with a pre-built Initializer (for testing).
