@@ -13,6 +13,7 @@ import (
 	efstypes "github.com/aws/aws-sdk-go-v2/service/efs/types"
 
 	mintaws "github.com/nicholasgasior/mint/internal/aws"
+	"github.com/nicholasgasior/mint/internal/bootstrap"
 	"github.com/nicholasgasior/mint/internal/cli"
 	"github.com/nicholasgasior/mint/internal/progress"
 	"github.com/nicholasgasior/mint/internal/provision"
@@ -185,6 +186,7 @@ func runUp(cmd *cobra.Command, deps *upDeps) error {
 		VolumeSize:      deps.volumeSize,
 		VolumeIOPS:      deps.volumeIOPS,
 		BootstrapScript: deps.bootstrapScript,
+		BootstrapURL:    bootstrap.ScriptURL(version),
 		EFSID:           efsID,
 	}
 
@@ -350,6 +352,7 @@ func upWithProvisioner(ctx context.Context, cmd *cobra.Command, cliCtx *cli.CLIC
 		VolumeSize:      deps.volumeSize,
 		VolumeIOPS:      deps.volumeIOPS,
 		BootstrapScript: deps.bootstrapScript,
+		BootstrapURL:    bootstrap.ScriptURL(version),
 	}
 
 	verbose := false

@@ -32,6 +32,7 @@ type ProvisionConfig struct {
 	VolumeSize      int32
 	VolumeIOPS      int32  // IOPS for the project gp3 EBS volume (0 defaults to 3000)
 	BootstrapScript []byte
+	BootstrapURL    string // URL to fetch bootstrap.sh at instance startup (from bootstrap.ScriptURL)
 	EFSID           string // EFS filesystem ID for user storage
 	IdleTimeout     int    // Idle timeout in minutes (0 defaults to 60)
 }
@@ -626,13 +627,18 @@ func (p *Provisioner) launchInstance(
 		idleTimeout = 60
 	}
 
-	interpolated := InterpolateBootstrap(cfg.BootstrapScript, map[string]string{
-		"MINT_EFS_ID":       cfg.EFSID,
-		"MINT_PROJECT_DEV":  "/dev/xvdf",
-		"MINT_VM_NAME":      vmName,
-		"MINT_IDLE_TIMEOUT": strconv.Itoa(idleTimeout),
-	})
-	userData := base64.StdEncoding.EncodeToString(interpolated)
+	stub, err := bootstrap.RenderStub(
+		bootstrap.ScriptSHA256,
+		cfg.BootstrapURL,
+		cfg.EFSID,
+		"/dev/xvdf",
+		vmName,
+		strconv.Itoa(idleTimeout),
+	)
+	if err != nil {
+		return "", "", fmt.Errorf("rendering bootstrap stub: %w", err)
+	}
+	userData := base64.StdEncoding.EncodeToString(stub)
 
 	instanceTags := tags.NewTagBuilder(owner, ownerARN, vmName).
 		WithComponent(tags.ComponentInstance).

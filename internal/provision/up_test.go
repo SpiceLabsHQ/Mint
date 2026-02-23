@@ -14,8 +14,29 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	mintaws "github.com/nicholasgasior/mint/internal/aws"
+	"github.com/nicholasgasior/mint/internal/bootstrap"
 	"github.com/nicholasgasior/mint/internal/tags"
 )
+
+// testStubTemplate is a minimal stub template used by provision tests.
+// It contains all __PLACEHOLDER__ tokens expected by bootstrap.RenderStub.
+const testStubTemplate = `#!/bin/bash
+export MINT_EFS_ID="__MINT_EFS_ID__"
+export MINT_PROJECT_DEV="__MINT_PROJECT_DEV__"
+export MINT_VM_NAME="__MINT_VM_NAME__"
+export MINT_IDLE_TIMEOUT="__MINT_IDLE_TIMEOUT__"
+_STUB_URL="__MINT_BOOTSTRAP_URL__"
+_STUB_SHA256="__MINT_BOOTSTRAP_SHA256__"
+exec /tmp/bootstrap.sh
+`
+
+// TestMain loads the test stub template once for the entire provision test
+// package. This ensures that bootstrap.RenderStub does not fail with
+// "stub template not loaded" during any test that exercises the launch path.
+func TestMain(m *testing.M) {
+	bootstrap.SetStub([]byte(testStubTemplate))
+	m.Run()
+}
 
 // ---------------------------------------------------------------------------
 // Inline mocks for up
@@ -333,6 +354,7 @@ func defaultConfig() ProvisionConfig {
 		InstanceType:    "m6i.xlarge",
 		VolumeSize:      50,
 		BootstrapScript: []byte("#!/bin/bash\necho hello"),
+		BootstrapURL:    "https://example.com/bootstrap.sh",
 	}
 }
 
@@ -474,10 +496,17 @@ func TestProvisionerFullHappyPath(t *testing.T) {
 		t.Errorf("IamInstanceProfile.Name = %q, want %q", aws.ToString(input.IamInstanceProfile.Name), "mint-instance-profile")
 	}
 
-	// Verify user-data is base64-encoded bootstrap script.
-	expectedUD := base64.StdEncoding.EncodeToString([]byte("#!/bin/bash\necho hello"))
-	if aws.ToString(input.UserData) != expectedUD {
-		t.Errorf("UserData = %q, want %q", aws.ToString(input.UserData), expectedUD)
+	// Verify user-data is a base64-encoded rendered bootstrap stub.
+	rawUD, decErr := base64.StdEncoding.DecodeString(aws.ToString(input.UserData))
+	if decErr != nil {
+		t.Fatalf("UserData is not valid base64: %v", decErr)
+	}
+	udStr := string(rawUD)
+	if strings.Contains(udStr, "__MINT_") {
+		t.Errorf("UserData still contains unrendered __MINT_ placeholders:\n%s", udStr)
+	}
+	if !strings.Contains(udStr, "#!/bin/bash") {
+		t.Errorf("UserData does not look like a shell script:\n%s", udStr)
 	}
 
 	// Verify project EBS was specified via BlockDeviceMappings in RunInstances.
@@ -994,16 +1023,11 @@ func TestLaunchInstanceInterpolatesBootstrapScript(t *testing.T) {
 	m := newUpHappyMocks()
 	p := m.build()
 
-	scriptWithVars := []byte(`#!/bin/bash
-EFS="${MINT_EFS_ID}"
-DEV="${MINT_PROJECT_DEV}"
-VM="${MINT_VM_NAME}"
-TIMEOUT="${MINT_IDLE_TIMEOUT:-60}"`)
-
 	cfg := ProvisionConfig{
 		InstanceType:    "m6i.xlarge",
 		VolumeSize:      50,
-		BootstrapScript: scriptWithVars,
+		BootstrapScript: []byte("#!/bin/bash\necho hello"),
+		BootstrapURL:    "https://example.com/bootstrap.sh",
 		EFSID:           "fs-test789",
 		IdleTimeout:     45,
 	}
@@ -1017,26 +1041,30 @@ TIMEOUT="${MINT_IDLE_TIMEOUT:-60}"`)
 		t.Fatal("RunInstances was not called")
 	}
 
-	// Decode UserData and verify variables were interpolated.
+	// Decode UserData and verify stub tokens were substituted.
 	ud, err := base64.StdEncoding.DecodeString(aws.ToString(m.runInstances.input.UserData))
 	if err != nil {
 		t.Fatalf("failed to decode UserData: %v", err)
 	}
 
 	decoded := string(ud)
-	checks := map[string]string{
-		"MINT_EFS_ID":       "fs-test789",
-		"MINT_PROJECT_DEV":  "/dev/xvdf",
-		"MINT_VM_NAME":      "testvm",
-		"MINT_IDLE_TIMEOUT": "45",
+
+	// No __PLACEHOLDER__ tokens should remain.
+	if strings.Contains(decoded, "__MINT_") {
+		t.Errorf("UserData still contains unrendered __MINT_ placeholders:\n%s", decoded)
 	}
 
-	for varName, wantVal := range checks {
-		if strings.Contains(decoded, "${"+varName) {
-			t.Errorf("UserData still contains uninterpolated ${%s}", varName)
-		}
+	// Verify expected values appear in the rendered stub.
+	checks := map[string]string{
+		"EFSID":        "fs-test789",
+		"ProjectDev":   "/dev/xvdf",
+		"VMName":       "testvm",
+		"IdleTimeout":  "45",
+		"BootstrapURL": "https://example.com/bootstrap.sh",
+	}
+	for label, wantVal := range checks {
 		if !strings.Contains(decoded, wantVal) {
-			t.Errorf("UserData missing interpolated value %q for %s\nUserData:\n%s", wantVal, varName, decoded)
+			t.Errorf("UserData missing expected value %q (%s)\nUserData:\n%s", wantVal, label, decoded)
 		}
 	}
 }
@@ -1045,12 +1073,11 @@ func TestLaunchInstanceDefaultsIdleTimeout(t *testing.T) {
 	m := newUpHappyMocks()
 	p := m.build()
 
-	scriptWithVars := []byte(`TIMEOUT="${MINT_IDLE_TIMEOUT:-60}"`)
-
 	cfg := ProvisionConfig{
 		InstanceType:    "m6i.xlarge",
 		VolumeSize:      50,
-		BootstrapScript: scriptWithVars,
+		BootstrapScript: []byte("#!/bin/bash\necho hello"),
+		BootstrapURL:    "https://example.com/bootstrap.sh",
 		EFSID:           "fs-test789",
 		IdleTimeout:     0, // zero means use default (60)
 	}
@@ -1065,8 +1092,14 @@ func TestLaunchInstanceDefaultsIdleTimeout(t *testing.T) {
 		t.Fatalf("failed to decode UserData: %v", err)
 	}
 
+	// The rendered stub should contain "60" for the default idle timeout.
 	if !strings.Contains(string(ud), "60") {
-		t.Errorf("expected default idle timeout of 60, got:\n%s", string(ud))
+		t.Errorf("expected default idle timeout of 60 in rendered stub, got:\n%s", string(ud))
+	}
+
+	// No unrendered placeholders should remain.
+	if strings.Contains(string(ud), "__MINT_") {
+		t.Errorf("UserData still contains unrendered __MINT_ placeholders:\n%s", string(ud))
 	}
 }
 

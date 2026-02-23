@@ -651,14 +651,19 @@ func launchRecreateInstance(
 		}
 	}
 
-	// Interpolate bootstrap script with mint variables.
-	interpolated := provision.InterpolateBootstrap(bootstrapScript, map[string]string{
-		"MINT_EFS_ID":       efsID,
-		"MINT_PROJECT_DEV":  "/dev/xvdf",
-		"MINT_VM_NAME":      vmName,
-		"MINT_IDLE_TIMEOUT": strconv.Itoa(idleTimeout),
-	})
-	userData := base64.StdEncoding.EncodeToString(interpolated)
+	// Render the bootstrap stub with runtime values.
+	stub, renderErr := bootstrap.RenderStub(
+		bootstrap.ScriptSHA256,
+		bootstrap.ScriptURL(version),
+		efsID,
+		"/dev/xvdf",
+		vmName,
+		strconv.Itoa(idleTimeout),
+	)
+	if renderErr != nil {
+		return "", fmt.Errorf("rendering bootstrap stub: %w", renderErr)
+	}
+	userData := base64.StdEncoding.EncodeToString(stub)
 
 	// Build instance tags.
 	instanceTags := tags.NewTagBuilder(deps.owner, deps.ownerARN, vmName).

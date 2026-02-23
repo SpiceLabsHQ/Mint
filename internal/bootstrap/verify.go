@@ -1,42 +1,28 @@
-// Package bootstrap provides integrity verification for the EC2 user-data
-// bootstrap script. The script's SHA256 hash is embedded at compile time
-// (via go generate) and verified before the script is sent to EC2 (ADR-0009).
+// Package bootstrap provides integrity verification for the EC2 bootstrap
+// script and template rendering for the bootstrap stub. The real bootstrap.sh
+// SHA256 hash is embedded at compile time (via go generate) so that the stub
+// can pass a pinned hash to EC2; the stub fetches and re-verifies at runtime
+// (ADR-0009).
 package bootstrap
 
-import (
-	"crypto/sha256"
-	"encoding/hex"
-	"fmt"
-)
+import "fmt"
 
 //go:generate go run hash_gen.go
 
-// Verify checks that the given script content matches the SHA-256 hash
-// embedded at compile time via go:generate.
+// Verify is a compile-time sanity check that go generate has been run and
+// that ScriptSHA256 is non-empty. The content parameter is accepted for API
+// compatibility but is not hashed here — the stub no longer embeds the full
+// script, so there is nothing to hash at provision time.
 //
-// IMPORTANT: This hash verifies the committed template, NOT the rendered
-// script after variable substitution. If substitution variables ever
-// reference external data (AMI IDs, dynamic package versions), the
-// integrity guarantee no longer holds. Do not extend substitution scope
-// without re-evaluating this boundary.
+// The real integrity check happens on the EC2 instance: the stub script
+// downloads bootstrap.sh, verifies its sha256sum against ScriptSHA256, and
+// aborts if they differ.
 //
-// If the hash does not match, mint up must abort immediately. The script must
-// never be sent to EC2 with a mismatched hash (ADR-0009).
+// If ScriptSHA256 is empty (go generate was not run), mint up must abort
+// before sending user-data to EC2.
 func Verify(content []byte) error {
-	if len(content) == 0 {
-		return fmt.Errorf("bootstrap script is empty")
+	if ScriptSHA256 == "" {
+		return fmt.Errorf("ScriptSHA256 is empty — run go generate ./internal/bootstrap/...")
 	}
-
-	actual := sha256.Sum256(content)
-	actualHex := hex.EncodeToString(actual[:])
-
-	if actualHex != ScriptSHA256 {
-		return fmt.Errorf(
-			"bootstrap script hash mismatch: expected %s, got %s — "+
-				"update your mint binary or re-run go generate",
-			ScriptSHA256, actualHex,
-		)
-	}
-
 	return nil
 }

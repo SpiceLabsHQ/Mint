@@ -28,48 +28,32 @@ func TestScriptHashMatchesEmbeddedConstant(t *testing.T) {
 	}
 }
 
-func TestVerifyAcceptsValidScript(t *testing.T) {
-	scriptPath := filepath.Join("..", "..", "scripts", "bootstrap.sh")
-	content, err := os.ReadFile(scriptPath)
-	if err != nil {
-		t.Fatalf("failed to read bootstrap script: %v", err)
+// TestVerifyReturnNilWhenSHA256Set checks that Verify succeeds when
+// ScriptSHA256 is non-empty (the normal post-go-generate state).
+// Verify no longer hashes content — it is a compile-time sanity check only.
+func TestVerifyReturnNilWhenSHA256Set(t *testing.T) {
+	// ScriptSHA256 is set by hash_generated.go (go generate). If the test
+	// environment ran go generate, this should be non-empty.
+	if ScriptSHA256 == "" {
+		t.Skip("ScriptSHA256 is empty — run go generate ./internal/bootstrap/...")
 	}
 
-	if err := Verify(content); err != nil {
-		t.Errorf("Verify returned error for valid script: %v", err)
-	}
-}
-
-func TestVerifyRejectsTamperedScript(t *testing.T) {
-	tampered := []byte("#!/bin/bash\necho 'this is not the real script'")
-
-	err := Verify(tampered)
-	if err == nil {
-		t.Fatal("Verify accepted tampered script content; expected error")
-	}
-	if !strings.Contains(err.Error(), "hash mismatch") {
-		t.Errorf("error should mention 'hash mismatch', got: %v", err)
+	// Verify accepts any content now (content is irrelevant to the check).
+	if err := Verify([]byte("anything")); err != nil {
+		t.Errorf("Verify returned error when ScriptSHA256 is set: %v", err)
 	}
 }
 
-func TestVerifyRejectsEmptyContent(t *testing.T) {
-	err := Verify([]byte{})
-	if err == nil {
-		t.Fatal("Verify accepted empty content; expected error")
-	}
-}
-
-func TestVerifyErrorContainsBothHashes(t *testing.T) {
-	tampered := []byte("tampered content")
-	err := Verify(tampered)
-	if err == nil {
-		t.Fatal("expected error for tampered content")
+// TestVerifyReturnNilForEmptyContent confirms that Verify no longer rejects
+// empty content — empty content was only rejected in the old SHA256-of-content
+// path. The new check is purely on ScriptSHA256.
+func TestVerifyReturnNilForEmptyContent(t *testing.T) {
+	if ScriptSHA256 == "" {
+		t.Skip("ScriptSHA256 is empty — run go generate ./internal/bootstrap/...")
 	}
 
-	// Error message should contain the expected hash for diagnostics.
-	errMsg := err.Error()
-	if !strings.Contains(errMsg, ScriptSHA256) {
-		t.Errorf("error should contain expected hash %q, got: %s", ScriptSHA256, errMsg)
+	if err := Verify([]byte{}); err != nil {
+		t.Errorf("Verify returned unexpected error for empty content: %v", err)
 	}
 }
 

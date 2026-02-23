@@ -38,11 +38,20 @@ This behavior aligns with the Transparency value: surface the problem, show the 
 
 ### Bootstrap script hash pinning
 
-The Go binary embeds the expected SHA256 hash of the user-data script at compile time. Before sending user-data to EC2 on instance launch, Mint verifies the embedded script matches its expected hash.
+The Go binary embeds the expected SHA256 hash of `scripts/bootstrap.sh` at compile time via `go generate`. EC2 user-data is no longer the full bootstrap script — it is a small stub (~900 bytes) that fetches `bootstrap.sh` from GitHub at instance startup and verifies its SHA256 before executing it.
 
-This closes a supply-chain attack surface: a compromised CDN, a tampered repository, or a build artifact substitution could otherwise deliver a malicious bootstrap script to new instances. Hash pinning provides strong integrity guarantees without requiring full signing infrastructure or a key management system.
+**How it works:**
 
-If the hash does not match, `mint up` aborts immediately with an error directing the user to update their Mint binary. The script is never sent to EC2.
+1. At compile time, `go generate ./internal/bootstrap/...` computes the SHA256 of `scripts/bootstrap.sh` and writes it into `internal/bootstrap/hash_generated.go` as the constant `ScriptSHA256`.
+2. At instance launch, `mint up` renders a bootstrap stub via `bootstrap.RenderStub(...)`, substituting `ScriptSHA256`, the GitHub raw URL (`bootstrap.ScriptURL(version)`), EFS ID, device path, VM name, and idle timeout into the stub template.
+3. The rendered stub is base64-encoded and sent as EC2 user-data.
+4. On the instance, the stub fetches `bootstrap.sh` from GitHub, computes its `sha256sum`, and aborts if the hash does not match `ScriptSHA256`.
+
+This architecture maintains integrity guarantees while removing the EC2 user-data 16,384-byte size constraint on `bootstrap.sh`. The actual script can grow freely since only the ~900-byte stub is sent as user-data.
+
+Before sending user-data to EC2, Mint verifies `ScriptSHA256` is non-empty (i.e., `go generate` was run). If it is empty, `mint up` aborts immediately.
+
+This closes a supply-chain attack surface: a compromised CDN or tampered repository would produce a different hash, and the stub would abort before executing the script. Hash pinning provides strong integrity guarantees without requiring full signing infrastructure or a key management system.
 
 ### Reconciliation strategy
 
@@ -60,7 +69,8 @@ This enables drift detection across Mint upgrades without requiring the reconcil
 - **Reliable "ready" signal.** `mint up` only reports success when the VM is verified functional. Developers do not connect to half-bootstrapped instances.
 - **Diagnosable failures.** Bootstrap failures are surfaced to the user with actionable guidance instead of manifesting as mysterious connection or tooling errors.
 - **User-controlled failure handling.** On timeout, the user chooses how to proceed — stop, terminate, or debug. No silent resource destruction.
-- **Supply-chain integrity.** Hash pinning prevents tampered bootstrap scripts from reaching EC2, at the cost of requiring a binary update when the script changes.
+- **Supply-chain integrity.** Hash pinning prevents tampered bootstrap scripts from executing on EC2. The stub verifies the SHA256 of `bootstrap.sh` before execution; a hash mismatch aborts the bootstrap immediately. Requires a binary update when the script changes (to update `ScriptSHA256`).
+- **No user-data size constraint.** The stub is ~900 bytes, well within the 16,384-byte EC2 user-data limit. `bootstrap.sh` can grow freely without impacting user-data delivery.
 - **Drift detection.** The restart reconciliation unit catches configuration drift but does not auto-fix. Repair requires explicit `mint doctor --fix`, preserving auditability.
 - **Added boot time.** The health check adds seconds to the first-boot sequence. Acceptable given it runs once.
 - **Tag dependency.** The verification protocol depends on the instance being able to tag itself, requiring the IAM instance role to include `ec2:CreateTags` permission on its own resource.
