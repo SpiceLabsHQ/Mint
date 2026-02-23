@@ -56,6 +56,7 @@ type recreateDeps struct {
 	resolveAMI          provision.AMIResolver
 	verifyBootstrap     provision.BootstrapVerifier
 	removeHostKey       func(vmName string) error
+	sleepFunc           func(time.Duration)
 }
 
 // WithWaitVolumeAvailable sets the waiter used to poll until the EBS volume
@@ -496,10 +497,23 @@ func findProjectVolume(ctx context.Context, deps *recreateDeps, vmName string) (
 	return aws.ToString(vol.VolumeId), aws.ToString(vol.AvailabilityZone), nil
 }
 
+// eipDisassociateMaxAttempts is the number of polling attempts before
+// reassociateElasticIP gives up waiting for the old ENI association to clear.
+const eipDisassociateMaxAttempts = 12
+
+// eipDisassociateSleepDuration is the default wait between polling attempts.
+const eipDisassociateSleepDuration = 5 * time.Second
+
 // reassociateElasticIP discovers the existing EIP by tags and associates it
 // with the new instance. If no EIP is found, it logs a warning but does not
 // fail (the VM still has an auto-assigned public IP). If association fails,
 // it returns an error.
+//
+// Before calling AssociateAddress, this function polls DescribeAddresses until
+// the EIP shows no AssociationId (i.e. the old terminated instance's ENI has
+// been cleaned up by AWS). This avoids the InvalidNetworkInterfaceID.NotFound
+// race condition that occurs when AssociateAddress is called before AWS
+// finishes clearing the stale ENI reference.
 func reassociateElasticIP(
 	ctx context.Context,
 	deps *recreateDeps,
@@ -540,6 +554,45 @@ func reassociateElasticIP(
 
 	if deps.associateAddr == nil {
 		return fmt.Errorf("no AssociateAddress client configured")
+	}
+
+	// Determine the sleep function to use — injectable for tests.
+	sleepFn := deps.sleepFunc
+	if sleepFn == nil {
+		sleepFn = time.Sleep
+	}
+
+	// Poll until the EIP shows no AssociationId. The old terminated instance's
+	// ENI is cleaned up asynchronously by AWS; calling AssociateAddress before
+	// that happens returns InvalidNetworkInterfaceID.NotFound.
+	for attempt := 1; attempt <= eipDisassociateMaxAttempts; attempt++ {
+		pollOut, pollErr := deps.describeAddrs.DescribeAddresses(ctx, &ec2.DescribeAddressesInput{
+			AllocationIds: []string{allocID},
+		})
+		if pollErr != nil {
+			return fmt.Errorf("polling EIP disassociation status: %w", pollErr)
+		}
+
+		if len(pollOut.Addresses) == 0 {
+			// EIP no longer visible — treat as disassociated.
+			break
+		}
+
+		if aws.ToString(pollOut.Addresses[0].AssociationId) == "" {
+			// AssociationId is clear; safe to associate.
+			break
+		}
+
+		if attempt == eipDisassociateMaxAttempts {
+			return fmt.Errorf(
+				"EIP %s still associated after %d attempts (%s); old ENI not yet cleaned up — retry recreate",
+				allocID, eipDisassociateMaxAttempts, eipDisassociateSleepDuration*time.Duration(eipDisassociateMaxAttempts),
+			)
+		}
+
+		sp.Update(fmt.Sprintf("  Waiting for old ENI association to clear (attempt %d/%d)...",
+			attempt, eipDisassociateMaxAttempts))
+		sleepFn(eipDisassociateSleepDuration)
 	}
 
 	_, err = deps.associateAddr.AssociateAddress(ctx, &ec2.AssociateAddressInput{
