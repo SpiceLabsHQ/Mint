@@ -13,6 +13,7 @@ import (
 	efstypes "github.com/aws/aws-sdk-go-v2/service/efs/types"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	iamtypes "github.com/aws/aws-sdk-go-v2/service/iam/types"
+	smithy "github.com/aws/smithy-go"
 )
 
 // ---------------------------------------------------------------------------
@@ -625,6 +626,16 @@ func TestValidateInstanceProfile(t *testing.T) {
 			},
 			wantErr: "get instance profile",
 		},
+		{
+			name: "AccessDenied (403) returns friendly error",
+			mock: &mockGetInstanceProfile{
+				err: &smithy.GenericAPIError{
+					Code:    "AccessDenied",
+					Message: "User: arn:aws:iam::123456789012:user/dev is not authorized to perform: iam:GetInstanceProfile",
+				},
+			},
+			wantErr: "iam:GetInstanceProfile",
+		},
 	}
 
 	for _, tt := range tests {
@@ -648,6 +659,44 @@ func TestValidateInstanceProfile(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 		})
+	}
+}
+
+// TestValidateInstanceProfileAccessDeniedNotRawSDK verifies that a 403
+// AccessDenied from iam:GetInstanceProfile produces a friendly error message
+// that does NOT expose raw SDK chain strings.
+func TestValidateInstanceProfileAccessDeniedNotRawSDK(t *testing.T) {
+	accessDeniedErr := &smithy.GenericAPIError{
+		Code:    "AccessDenied",
+		Message: "User is not authorized to perform: iam:GetInstanceProfile",
+	}
+	m := newHappyMocks()
+	m.instanceProfile = &mockGetInstanceProfile{err: accessDeniedErr}
+	init := m.build()
+
+	err := init.validateInstanceProfile(context.Background())
+
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	msg := err.Error()
+
+	// Must contain the permission name and a pointer to remediation.
+	if !strings.Contains(msg, "iam:GetInstanceProfile") {
+		t.Errorf("error should mention missing permission: %q", msg)
+	}
+	if !strings.Contains(msg, "AccessDenied") {
+		t.Errorf("error should contain 'AccessDenied': %q", msg)
+	}
+	if !strings.Contains(msg, "mint admin setup") {
+		t.Errorf("error should direct user to 'mint admin setup': %q", msg)
+	}
+
+	// Must NOT leak raw SDK chain.
+	for _, rawToken := range []string{"smithy", "operation error", "api error"} {
+		if strings.Contains(msg, rawToken) {
+			t.Errorf("error leaks raw SDK token %q: %q", rawToken, msg)
+		}
 	}
 }
 
