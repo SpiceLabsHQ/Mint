@@ -471,14 +471,14 @@ func TestRecreateCommand(t *testing.T) {
 			name:       "successful recreate with --yes and no active sessions",
 			deps:       newHappyRecreateDeps("alice"),
 			args:       []string{"recreate", "--yes"},
-			wantOutput: []string{"Proceeding with recreate", "i-abc123", "Recreate complete", "i-new789"},
+			wantOutput: []string{"i-abc123", "Recreate complete", "i-new789"},
 		},
 		{
 			name:       "successful recreate with confirmation prompt",
 			deps:       newHappyRecreateDeps("alice"),
 			args:       []string{"recreate"},
 			stdin:      "default\n",
-			wantOutput: []string{"Proceeding with recreate", "Recreate complete"},
+			wantOutput: []string{"Recreate complete"},
 		},
 		{
 			name:           "confirmation prompt rejects wrong name",
@@ -556,7 +556,7 @@ func TestRecreateCommand(t *testing.T) {
 				return d
 			}(),
 			args:       []string{"recreate", "--yes", "--force"},
-			wantOutput: []string{"Warning: proceeding despite active sessions", "Proceeding with recreate", "Recreate complete"},
+			wantOutput: []string{"Warning: proceeding despite active sessions", "Recreate complete"},
 		},
 		{
 			name: "describe API error propagates",
@@ -578,7 +578,6 @@ func TestRecreateCommand(t *testing.T) {
 			wantOutput: []string{
 				"Discovering VM",
 				"Checking for active sessions",
-				"Proceeding with recreate",
 				"Step 1/9",
 				"Step 2/9",
 				"Step 3/9",
@@ -620,7 +619,7 @@ func TestRecreateCommand(t *testing.T) {
 				}
 			}(),
 			args:       []string{"recreate", "--vm", "dev", "--yes"},
-			wantOutput: []string{"Proceeding with recreate", "Recreate complete"},
+			wantOutput: []string{"Recreate complete"},
 		},
 		{
 			name: "non-default VM name confirmation requires correct name",
@@ -653,7 +652,7 @@ func TestRecreateCommand(t *testing.T) {
 			}(),
 			args:       []string{"recreate", "--vm", "dev"},
 			stdin:      "dev\n",
-			wantOutput: []string{"Proceeding with recreate", "Recreate complete"},
+			wantOutput: []string{"Recreate complete"},
 		},
 		{
 			name:  "shows what will be destroyed before confirming",
@@ -683,8 +682,8 @@ func TestRecreateCommand(t *testing.T) {
 				return d
 			}(),
 			args: []string{"recreate", "--yes", "--verbose"},
-			// Session detection error is non-fatal; command should proceed.
-			wantOutput: []string{"Warning: could not detect active sessions", "Proceeding with recreate"},
+			// Session detection error is non-fatal; command should proceed to completion.
+			wantOutput: []string{"Warning: could not detect active sessions", "Recreate complete"},
 		},
 	}
 
@@ -1901,6 +1900,47 @@ func TestRecreateWaitVolumeAvailableNilWaiterSkipped(t *testing.T) {
 	output := buf.String()
 	if !strings.Contains(output, "Recreate complete") {
 		t.Errorf("output missing 'Recreate complete', got: %s", output)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests — Confirmation message appears exactly once (#133)
+// ---------------------------------------------------------------------------
+
+// TestRecreateConfirmationMessageAppearsExactlyOnce verifies that the
+// "Recreate complete" post-lifecycle confirmation is printed exactly once
+// and the pre-lifecycle "Proceeding with recreate" banner is not emitted at all.
+// This is the regression test for issue #133 (double confirmation message).
+func TestRecreateConfirmationMessageAppearsExactlyOnce(t *testing.T) {
+	deps := newHappyRecreateDeps("alice")
+
+	buf := new(bytes.Buffer)
+	cmd := newRecreateCommandWithDeps(deps)
+	root := newRecreateTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"recreate", "--yes"})
+
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := buf.String()
+
+	// The post-lifecycle completion message must appear exactly once.
+	const confirmMsg = "Recreate complete"
+	count := strings.Count(output, confirmMsg)
+	if count != 1 {
+		t.Errorf("%q appears %d time(s) in output, want exactly 1\nfull output:\n%s", confirmMsg, count, output)
+	}
+
+	// The pre-lifecycle "Proceeding" banner must NOT appear — it was the
+	// duplicate that the user saw before the lifecycle even started.
+	const preMsg = "Proceeding with recreate"
+	preCount := strings.Count(output, preMsg)
+	if preCount != 0 {
+		t.Errorf("%q appears %d time(s) in output, want 0 (pre-lifecycle duplicate removed)\nfull output:\n%s", preMsg, preCount, output)
 	}
 }
 

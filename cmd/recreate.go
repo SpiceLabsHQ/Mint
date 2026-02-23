@@ -204,8 +204,6 @@ func runRecreate(cmd *cobra.Command, deps *recreateDeps) error {
 	}
 
 	// Guards passed — execute the 9-step recreate lifecycle.
-	fmt.Fprintf(w, "Proceeding with recreate of VM %q (%s)...\n", vmName, found.ID)
-
 	return executeRecreateLifecycle(ctx, deps, found, vmName, sp, w)
 }
 
