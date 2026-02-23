@@ -139,7 +139,8 @@ func isTmuxNoSessionsError(err error) bool {
 	}
 	msg := err.Error()
 	return strings.Contains(msg, "no server running") ||
-		strings.Contains(msg, "no sessions")
+		strings.Contains(msg, "no sessions") ||
+		strings.Contains(msg, "error connecting to") // Ubuntu 24.04 tmux: socket not found
 }
 
 // parseTmuxSessions parses the output of tmux list-sessions -F into

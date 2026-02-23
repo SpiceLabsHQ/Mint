@@ -146,6 +146,19 @@ func TestSessionsCommand(t *testing.T) {
 			wantOutput:   []string{"No active sessions"},
 		},
 		{
+			// Bug #141: Ubuntu 24.04 tmux outputs "error connecting to <socket>"
+			// instead of "no server running" when the server socket doesn't exist.
+			// This must be treated as "no sessions", not an error.
+			name: "ubuntu 24.04 tmux socket not found is not an error",
+			describe: &mockDescribeForSessions{
+				output: makeRunningInstanceForSessions("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
+			},
+			remoteOutput: nil,
+			remoteErr:    fmt.Errorf("remote command failed: exit status 1 (stderr: error connecting to /tmp/tmux-1000/default (No such file or directory))"),
+			owner:        "alice",
+			wantOutput:   []string{"No active sessions"},
+		},
+		{
 			name: "VM not found returns error",
 			describe: &mockDescribeForSessions{
 				output: &ec2.DescribeInstancesOutput{},
@@ -425,6 +438,19 @@ func TestIsTmuxNoSessionsError(t *testing.T) {
 			name:     "generic error",
 			err:      fmt.Errorf("something went wrong"),
 			expected: false,
+		},
+		{
+			// Bug #141: Ubuntu 24.04 tmux outputs a different message when the
+			// socket file doesn't exist — must be treated as "no sessions".
+			name:     "ubuntu 24.04 tmux error connecting to socket",
+			err:      fmt.Errorf("remote command failed: exit status 1 (stderr: error connecting to /tmp/tmux-1000/default (No such file or directory))"),
+			expected: true,
+		},
+		{
+			// Ubuntu 24.04 bare error message without remote wrapper.
+			name:     "ubuntu 24.04 bare error connecting message",
+			err:      fmt.Errorf("error connecting to /tmp/tmux-1000/default (No such file or directory)"),
+			expected: true,
 		},
 	}
 

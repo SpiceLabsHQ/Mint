@@ -16,6 +16,7 @@ import (
 	"github.com/nicholasgasior/mint/internal/cli"
 	"github.com/nicholasgasior/mint/internal/config"
 	"github.com/nicholasgasior/mint/internal/sshconfig"
+	"github.com/nicholasgasior/mint/internal/tags"
 	"github.com/nicholasgasior/mint/internal/vm"
 )
 
@@ -127,6 +128,22 @@ func runKeyAdd(cmd *cobra.Command, deps *keyAddDeps, arg string) error {
 	if found.State != string(ec2types.InstanceStateNameRunning) {
 		return fmt.Errorf("VM %q (%s) is not running (state: %s) — run mint up to start it",
 			vmName, found.ID, found.State)
+	}
+
+	// Check bootstrap status before attempting any SSH/keyscan operation (ADR-0001).
+	// The SSH daemon is not listening until bootstrap completes.
+	switch found.BootstrapStatus {
+	case tags.BootstrapPending:
+		return fmt.Errorf(
+			"VM %q bootstrap is not complete (status: pending).\n"+
+				"Run 'mint doctor' for details or 'mint recreate' to rebuild.",
+			vmName,
+		)
+	case tags.BootstrapFailed:
+		return fmt.Errorf(
+			"VM %q bootstrap failed.\nRun 'mint recreate' to rebuild.",
+			vmName,
+		)
 	}
 
 	// Build a TOFU-verified remote runner for write commands (ADR-0019).

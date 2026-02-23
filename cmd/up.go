@@ -279,10 +279,10 @@ func printUpHuman(cmd *cobra.Command, result *provision.ProvisionResult, verbose
 	}
 
 	if result.BootstrapError != nil {
-		fmt.Fprintf(w, "\nBootstrap warning: %v\n", result.BootstrapError)
-	} else {
-		fmt.Fprintln(w, "\nBootstrap complete. VM is ready.")
+		fmt.Fprintf(w, "\nBootstrap error: %v\n", result.BootstrapError)
+		return result.BootstrapError
 	}
+	fmt.Fprintln(w, "\nBootstrap complete. VM is ready.")
 	return nil
 }
 
