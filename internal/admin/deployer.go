@@ -66,6 +66,7 @@ type DeployResult struct {
 type Deployer struct {
 	cfnCreate   mintaws.CreateStackAPI
 	cfnUpdate   mintaws.UpdateStackAPI
+	cfnDelete   mintaws.DeleteStackAPI
 	cfnDescribe mintaws.DescribeStacksAPI
 	cfnEvents   mintaws.DescribeStackEventsAPI
 	ec2Vpcs     mintaws.DescribeVpcsAPI
@@ -83,6 +84,7 @@ type Deployer struct {
 func NewDeployer(
 	cfnCreate mintaws.CreateStackAPI,
 	cfnUpdate mintaws.UpdateStackAPI,
+	cfnDelete mintaws.DeleteStackAPI,
 	cfnDescribe mintaws.DescribeStacksAPI,
 	cfnEvents mintaws.DescribeStackEventsAPI,
 	ec2Vpcs mintaws.DescribeVpcsAPI,
@@ -91,6 +93,7 @@ func NewDeployer(
 	return &Deployer{
 		cfnCreate:    cfnCreate,
 		cfnUpdate:    cfnUpdate,
+		cfnDelete:    cfnDelete,
 		cfnDescribe:  cfnDescribe,
 		cfnEvents:    cfnEvents,
 		ec2Vpcs:      ec2Vpcs,
@@ -227,9 +230,22 @@ func (d *Deployer) stackExists(ctx context.Context, stackName string) (bool, err
 		}
 		return false, fmt.Errorf("describe stack %q: %w", stackName, err)
 	}
-	// A stack in DELETE_COMPLETE state is effectively gone.
-	if len(out.Stacks) > 0 && out.Stacks[0].StackStatus == cftypes.StackStatusDeleteComplete {
-		return false, nil
+	// Treat stacks that cannot be updated as non-existent so Deploy re-creates them.
+	// DELETE_COMPLETE: stack was fully deleted.
+	// ROLLBACK_COMPLETE: initial creation failed and rolled back — must be deleted
+	//   before it can be re-created; CloudFormation rejects CreateStack on a stack
+	//   in this state, so we treat it as "not usable" and let the caller delete it.
+	if len(out.Stacks) > 0 {
+		switch out.Stacks[0].StackStatus {
+		case cftypes.StackStatusDeleteComplete:
+			return false, nil
+		case cftypes.StackStatusRollbackComplete:
+			// The stack exists but is stuck; delete it so we can retry.
+			if err := d.deleteStack(ctx, stackName); err != nil {
+				return false, fmt.Errorf("delete stuck stack %q before retry: %w", stackName, err)
+			}
+			return false, nil
+		}
 	}
 	return len(out.Stacks) > 0, nil
 }
@@ -237,14 +253,17 @@ func (d *Deployer) stackExists(ctx context.Context, stackName string) (bool, err
 // isStackDoesNotExistError returns true when CloudFormation signals that the
 // named stack does not exist. The service returns a generic error message
 // containing the stack name rather than a distinct error code.
+// We deliberately do NOT match the bare "ValidationError" prefix here because
+// that would swallow unrelated validation errors (e.g. invalid stack name
+// format). We only match the specific message patterns that indicate the named
+// stack has never been created or is fully deleted.
 func isStackDoesNotExistError(err error) bool {
 	if err == nil {
 		return false
 	}
 	msg := err.Error()
 	return strings.Contains(msg, "does not exist") ||
-		strings.Contains(msg, "Stack with id") ||
-		strings.Contains(msg, "ValidationError")
+		strings.Contains(msg, "Stack with id")
 }
 
 // ---------------------------------------------------------------------------
@@ -262,6 +281,38 @@ func (d *Deployer) createStack(ctx context.Context, stackName string, params []c
 		return fmt.Errorf("create stack %q: %w", stackName, err)
 	}
 	return nil
+}
+
+func (d *Deployer) deleteStack(ctx context.Context, stackName string) error {
+	_, err := d.cfnDelete.DeleteStack(ctx, &cloudformation.DeleteStackInput{
+		StackName: aws.String(stackName),
+	})
+	if err != nil {
+		return fmt.Errorf("delete stack %q: %w", stackName, err)
+	}
+	// Poll until DELETE_COMPLETE or an error.
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(d.pollInterval):
+		}
+		out, err := d.cfnDescribe.DescribeStacks(ctx, &cloudformation.DescribeStacksInput{
+			StackName: aws.String(stackName),
+		})
+		if err != nil {
+			if isStackDoesNotExistError(err) {
+				return nil // successfully deleted
+			}
+			return fmt.Errorf("poll stack deletion: %w", err)
+		}
+		if len(out.Stacks) == 0 || out.Stacks[0].StackStatus == cftypes.StackStatusDeleteComplete {
+			return nil
+		}
+		if out.Stacks[0].StackStatus == cftypes.StackStatusDeleteFailed {
+			return fmt.Errorf("stack %q deletion failed", stackName)
+		}
+	}
 }
 
 func (d *Deployer) updateStack(ctx context.Context, stackName string, params []cftypes.Parameter) error {
@@ -364,8 +415,12 @@ func (d *Deployer) streamNewEvents(ctx context.Context, stackName string, startT
 	// Print in chronological order (oldest first).
 	for i := len(fresh) - 1; i >= 0; i-- {
 		ev := fresh[i]
+		ts := ""
+		if ev.Timestamp != nil {
+			ts = ev.Timestamp.UTC().Format("15:04:05")
+		}
 		fmt.Fprintf(w, "%s  %-40s  %-30s  %s\n",
-			aws.ToString(ev.EventId),
+			ts,
 			aws.ToString(ev.LogicalResourceId),
 			string(ev.ResourceStatus),
 			aws.ToString(ev.ResourceStatusReason),

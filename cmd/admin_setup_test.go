@@ -57,6 +57,7 @@ func newSuccessDeployDeps(stackName, efsID, sgID, instanceProfileARN, passRoleAR
 	return &adminDeployDeps{
 		cfnCreate:          &mockCFNCreate{output: &cloudformation.CreateStackOutput{}},
 		cfnUpdate:          &mockCFNUpdate{output: &cloudformation.UpdateStackOutput{}},
+		cfnDelete:          noopCFNDelete(),
 		cfnDescribe:        newStackSuccessDescribe(stackName, efsID, sgID, instanceProfileARN, passRoleARN),
 		cfnEvents:          &mockCFNEvents{output: &cloudformation.DescribeStackEventsOutput{}},
 		ec2DescribeVPCs:    &mockEC2DescribeVPCs{output: makeVPCOutput("vpc-111")},
@@ -232,6 +233,7 @@ func TestAdminSetupDeployFails(t *testing.T) {
 	deployDeps := &adminDeployDeps{
 		cfnCreate:   &mockCFNCreate{},
 		cfnUpdate:   &mockCFNUpdate{},
+		cfnDelete:   noopCFNDelete(),
 		cfnDescribe: &mockCFNDescribe{outputs: []*cloudformation.DescribeStacksOutput{makeDescribeStacksNotFound()}},
 		cfnEvents:   &mockCFNEvents{},
 		// Empty VPC slice triggers ErrVPCNotFound immediately.
@@ -287,6 +289,7 @@ func TestAdminSetupDeployFailsWithEmptyVPC(t *testing.T) {
 	deployDeps := &adminDeployDeps{
 		cfnCreate:   &mockCFNCreate{},
 		cfnUpdate:   &mockCFNUpdate{},
+		cfnDelete:   noopCFNDelete(),
 		cfnDescribe: &mockCFNDescribe{outputs: []*cloudformation.DescribeStacksOutput{makeDescribeStacksNotFound()}},
 		cfnEvents:   &mockCFNEvents{},
 		ec2DescribeVPCs: &mockEC2DescribeVPCs{

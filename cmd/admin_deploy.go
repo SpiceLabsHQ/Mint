@@ -15,10 +15,11 @@ import (
 
 // adminDeployDeps holds the injectable dependencies for the admin deploy command.
 type adminDeployDeps struct {
-	cfnCreate       mintaws.CreateStackAPI
-	cfnUpdate       mintaws.UpdateStackAPI
-	cfnDescribe     mintaws.DescribeStacksAPI
-	cfnEvents       mintaws.DescribeStackEventsAPI
+	cfnCreate          mintaws.CreateStackAPI
+	cfnUpdate          mintaws.UpdateStackAPI
+	cfnDelete          mintaws.DeleteStackAPI
+	cfnDescribe        mintaws.DescribeStacksAPI
+	cfnEvents          mintaws.DescribeStackEventsAPI
 	ec2DescribeVPCs    mintaws.DescribeVpcsAPI
 	ec2DescribeSubnets mintaws.DescribeSubnetsAPI
 }
@@ -48,6 +49,7 @@ func newAdminDeployCommandWithDeps(deps *adminDeployDeps) *cobra.Command {
 			return runAdminDeploy(cmd, &adminDeployDeps{
 				cfnCreate:          clients.cfnClient,
 				cfnUpdate:          clients.cfnClient,
+				cfnDelete:          clients.cfnClient,
 				cfnDescribe:        clients.cfnClient,
 				cfnEvents:          clients.cfnClient,
 				ec2DescribeVPCs:    clients.ec2Client,
@@ -81,6 +83,7 @@ func runAdminDeploy(cmd *cobra.Command, deps *adminDeployDeps) error {
 	deployer := admin.NewDeployer(
 		deps.cfnCreate,
 		deps.cfnUpdate,
+		deps.cfnDelete,
 		deps.cfnDescribe,
 		deps.cfnEvents,
 		deps.ec2DescribeVPCs,

@@ -41,6 +41,13 @@ type DescribeStackEventsAPI interface {
 	DescribeStackEvents(ctx context.Context, params *cloudformation.DescribeStackEventsInput, optFns ...func(*cloudformation.Options)) (*cloudformation.DescribeStackEventsOutput, error)
 }
 
+// DeleteStackAPI defines the subset of the CloudFormation API used for deleting
+// a stack. Used by the admin deployer to remove a stuck ROLLBACK_COMPLETE stack
+// before retrying the create operation.
+type DeleteStackAPI interface {
+	DeleteStack(ctx context.Context, params *cloudformation.DeleteStackInput, optFns ...func(*cloudformation.Options)) (*cloudformation.DeleteStackOutput, error)
+}
+
 // ---------------------------------------------------------------------------
 // Compile-time interface satisfaction checks
 // ---------------------------------------------------------------------------
@@ -50,4 +57,5 @@ var (
 	_ UpdateStackAPI         = (*cloudformation.Client)(nil)
 	_ DescribeStacksAPI      = (*cloudformation.Client)(nil)
 	_ DescribeStackEventsAPI = (*cloudformation.Client)(nil)
+	_ DeleteStackAPI         = (*cloudformation.Client)(nil)
 )

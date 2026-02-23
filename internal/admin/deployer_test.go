@@ -41,6 +41,17 @@ func (m *mockUpdateStack) UpdateStack(_ context.Context, _ *cloudformation.Updat
 	return m.output, m.err
 }
 
+type mockDeleteStack struct {
+	output *cloudformation.DeleteStackOutput
+	err    error
+	called bool
+}
+
+func (m *mockDeleteStack) DeleteStack(_ context.Context, _ *cloudformation.DeleteStackInput, _ ...func(*cloudformation.Options)) (*cloudformation.DeleteStackOutput, error) {
+	m.called = true
+	return m.output, m.err
+}
+
 // mockDescribeStacks supports multiple sequential responses so tests can
 // exercise the polling loop — first call returns IN_PROGRESS, subsequent calls
 // return the terminal status.
@@ -173,7 +184,8 @@ func newDeployerForTest(
 	vpcs *mockDescribeVpcs,
 	subnets *mockDescribeSubnets,
 ) *Deployer {
-	d := NewDeployer(create, update, describe, events, vpcs, subnets)
+	del := &mockDeleteStack{output: &cloudformation.DeleteStackOutput{}}
+	d := NewDeployer(create, update, del, describe, events, vpcs, subnets)
 	// Override poll interval to zero to avoid real sleeps in tests.
 	d.pollInterval = 0
 	// Fix the clock so startTime filtering is predictable.
@@ -320,6 +332,10 @@ func TestDeployer_EventStreaming(t *testing.T) {
 	}
 	if !strings.Contains(output, "CREATE_COMPLETE") {
 		t.Errorf("expected EventWriter to contain resource status, got:\n%s", output)
+	}
+	// Timestamp should appear as HH:MM:SS, not as a UUID event ID.
+	if !strings.Contains(output, "00:01:00") {
+		t.Errorf("expected EventWriter to contain timestamp 00:01:00, got:\n%s", output)
 	}
 }
 

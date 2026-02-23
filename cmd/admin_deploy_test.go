@@ -38,6 +38,19 @@ func (m *mockCFNUpdate) UpdateStack(ctx context.Context, params *cloudformation.
 	return m.output, m.err
 }
 
+type mockCFNDelete struct {
+	output *cloudformation.DeleteStackOutput
+	err    error
+}
+
+func (m *mockCFNDelete) DeleteStack(ctx context.Context, params *cloudformation.DeleteStackInput, optFns ...func(*cloudformation.Options)) (*cloudformation.DeleteStackOutput, error) {
+	return m.output, m.err
+}
+
+func noopCFNDelete() *mockCFNDelete {
+	return &mockCFNDelete{output: &cloudformation.DeleteStackOutput{}}
+}
+
 type mockCFNDescribe struct {
 	outputs []*cloudformation.DescribeStacksOutput
 	err     error
@@ -176,6 +189,7 @@ func TestAdminDeploySuccess(t *testing.T) {
 	deps := &adminDeployDeps{
 		cfnCreate:      &mockCFNCreate{output: &cloudformation.CreateStackOutput{}},
 		cfnUpdate:      &mockCFNUpdate{output: &cloudformation.UpdateStackOutput{}},
+		cfnDelete:      noopCFNDelete(),
 		cfnDescribe:    newStackSuccessDescribe(stackName, efsID, sgID, instanceProfileARN, passRoleARN),
 		cfnEvents:      &mockCFNEvents{output: &cloudformation.DescribeStackEventsOutput{}},
 		ec2DescribeVPCs:     &mockEC2DescribeVPCs{output: makeVPCOutput("vpc-111")},
@@ -212,10 +226,11 @@ func TestAdminDeploySuccess(t *testing.T) {
 // TestAdminDeployVPCNotFound verifies that ErrVPCNotFound produces a non-zero exit.
 func TestAdminDeployVPCNotFound(t *testing.T) {
 	deps := &adminDeployDeps{
-		cfnCreate:  &mockCFNCreate{},
-		cfnUpdate:  &mockCFNUpdate{},
+		cfnCreate:   &mockCFNCreate{},
+		cfnUpdate:   &mockCFNUpdate{},
+		cfnDelete:   noopCFNDelete(),
 		cfnDescribe: &mockCFNDescribe{outputs: []*cloudformation.DescribeStacksOutput{makeDescribeStacksNotFound()}},
-		cfnEvents:  &mockCFNEvents{},
+		cfnEvents:   &mockCFNEvents{},
 		ec2DescribeVPCs:    &mockEC2DescribeVPCs{output: &ec2.DescribeVpcsOutput{Vpcs: []ec2types.Vpc{}}},
 		ec2DescribeSubnets: &mockEC2DescribeSubnets{output: &ec2.DescribeSubnetsOutput{}},
 	}
@@ -253,6 +268,7 @@ func TestAdminDeployDefaultStackName(t *testing.T) {
 	deps := &adminDeployDeps{
 		cfnCreate:   cfnCreate,
 		cfnUpdate:   &mockCFNUpdate{},
+		cfnDelete:   noopCFNDelete(),
 		cfnDescribe: describe,
 		cfnEvents:   &mockCFNEvents{output: &cloudformation.DescribeStackEventsOutput{}},
 		ec2DescribeVPCs:    &mockEC2DescribeVPCs{output: makeVPCOutput("vpc-222")},

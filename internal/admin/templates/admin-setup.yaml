@@ -147,11 +147,6 @@ Resources:
       InstanceProfileName: mint-instance-profile
       Roles:
         - !Ref MintInstanceRole
-      Tags:
-        - Key: mint
-          Value: "true"
-        - Key: "mint:component"
-          Value: admin
 
   # ---------------------------------------------------------------------------
   # PassRole Policy — grants Mint users permission to pass mint-instance-role
@@ -182,11 +177,6 @@ Resources:
             Condition:
               StringEquals:
                 iam:PassedToService: ec2.amazonaws.com
-      Tags:
-        - Key: mint
-          Value: "true"
-        - Key: "mint:component"
-          Value: admin
 
   # ---------------------------------------------------------------------------
   # EFS Filesystem — persistent storage for user configuration (ADR-0004).

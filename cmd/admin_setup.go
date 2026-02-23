@@ -52,6 +52,7 @@ func newAdminSetupCommandWithDeps(deps *adminSetupDeps) *cobra.Command {
 				deploy: &adminDeployDeps{
 					cfnCreate:          clients.cfnClient,
 					cfnUpdate:          clients.cfnClient,
+					cfnDelete:          clients.cfnClient,
 					cfnDescribe:        clients.cfnClient,
 					cfnEvents:          clients.cfnClient,
 					ec2DescribeVPCs:    clients.ec2Client,
@@ -98,6 +99,7 @@ func runAdminSetup(cmd *cobra.Command, deps *adminSetupDeps) error {
 	deployer := admin.NewDeployer(
 		deps.deploy.cfnCreate,
 		deps.deploy.cfnUpdate,
+		deps.deploy.cfnDelete,
 		deps.deploy.cfnDescribe,
 		deps.deploy.cfnEvents,
 		deps.deploy.ec2DescribeVPCs,
