@@ -110,3 +110,10 @@ go mod tidy                       # always run after adding new dependencies
 | `docs/adr/0001-*.md` through `docs/adr/0021-*.md` | Architecture Decision Records — binding constraints |
 | `docs/command-reference.md` | Complete command documentation with ADR cross-references |
 | `.devcontainer/` | Developer isolated environment (Go 1.24, AWS CLI, isolated `MINT_CONFIG_DIR`) |
+
+## Quality Gates
+
+The following commands are used during automated quality gates:
+
+**Test command**: `go test ./... -count=1`
+**Lint command**: `go vet ./...`
