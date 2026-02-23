@@ -10,6 +10,7 @@ import (
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2instanceconnect"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	mintaws "github.com/nicholasgasior/mint/internal/aws"
 	"github.com/nicholasgasior/mint/internal/cli"
@@ -27,6 +28,9 @@ type moshDeps struct {
 	lookupPath     func(string) (string, error)
 	hostKeyStore   *sshconfig.HostKeyStore
 	hostKeyScanner HostKeyScanner
+	// isTerminal reports whether stdin is an interactive terminal.
+	// Defaults to a real os.Stdin TTY check; override in tests.
+	isTerminal func() bool
 }
 
 // newMoshCommand creates the production mosh command.
@@ -60,6 +64,7 @@ func newMoshCommandWithDeps(deps *moshDeps) *cobra.Command {
 				lookupPath:     exec.LookPath,
 				hostKeyStore:   sshconfig.NewHostKeyStore(configDir),
 				hostKeyScanner: defaultHostKeyScanner,
+				isTerminal:     func() bool { return term.IsTerminal(int(os.Stdin.Fd())) },
 			})
 		},
 	}
@@ -70,6 +75,18 @@ func newMoshCommandWithDeps(deps *moshDeps) *cobra.Command {
 // runMosh executes the mosh command logic: check mosh binary, discover VM,
 // verify running, generate ephemeral key, push via Instance Connect, exec mosh.
 func runMosh(cmd *cobra.Command, deps *moshDeps) error {
+	// Check for an interactive terminal before doing any AWS work.
+	// Mosh requires a TTY; without one, mosh-client exits immediately with
+	// "tcgetattr: Inappropriate ioctl for device" but mosh-server on the VM
+	// is already running and becomes orphaned.
+	isTTY := deps.isTerminal
+	if isTTY == nil {
+		isTTY = func() bool { return term.IsTerminal(int(os.Stdin.Fd())) }
+	}
+	if !isTTY() {
+		return fmt.Errorf("mosh requires an interactive terminal; use 'mint ssh' for non-interactive connections")
+	}
+
 	// Check that mosh is installed locally before doing any AWS work.
 	lookup := deps.lookupPath
 	if lookup == nil {
