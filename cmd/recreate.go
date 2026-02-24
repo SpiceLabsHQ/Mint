@@ -316,6 +316,9 @@ func executeRecreateLifecycle(
 	// sp.Stop clears the spinner line in interactive mode before we print.
 	sp.Stop("")
 	fmt.Fprintf(w, "Recreate complete. New instance: %s\n", newInstanceID)
+	if deps.pollBootstrap != nil {
+		fmt.Fprintln(w, "\nBootstrap complete. VM is ready.")
+	}
 	return nil
 }
 
