@@ -6,20 +6,24 @@ import (
 	"github.com/nicholasgasior/mint/internal/bootstrap"
 )
 
-func TestEmbeddedBootstrapScriptIsNonEmpty(t *testing.T) {
-	if len(bootstrapScript) == 0 {
-		t.Fatal("embedded bootstrap script is empty; go:embed may not be working")
+func TestEmbeddedBootstrapStubIsNonEmpty(t *testing.T) {
+	if len(bootstrapStub) == 0 {
+		t.Fatal("embedded bootstrap stub is empty; go:embed may not be working")
 	}
 }
 
-func TestEmbeddedBootstrapScriptPassesVerify(t *testing.T) {
-	if err := bootstrap.Verify(bootstrapScript); err != nil {
-		t.Fatalf("embedded bootstrap script failed verification: %v", err)
+// TestEmbeddedBootstrapStubPassesVerify checks that the compile-time
+// ScriptSHA256 constant is non-empty (i.e., go generate has been run).
+// Verify no longer hashes the embedded content — the stub is a template,
+// not the full script — so this is purely a sanity check on the constant.
+func TestEmbeddedBootstrapStubPassesVerify(t *testing.T) {
+	if err := bootstrap.Verify(bootstrapStub); err != nil {
+		t.Fatalf("bootstrap.Verify sanity check failed: %v", err)
 	}
 }
 
-func TestEmbeddedBootstrapScriptHasShebang(t *testing.T) {
-	if len(bootstrapScript) < 2 || string(bootstrapScript[:2]) != "#!" {
-		t.Fatal("embedded bootstrap script does not start with a shebang (#!)")
+func TestEmbeddedBootstrapStubHasShebang(t *testing.T) {
+	if len(bootstrapStub) < 2 || string(bootstrapStub[:2]) != "#!" {
+		t.Fatal("embedded bootstrap stub does not start with a shebang (#!)")
 	}
 }

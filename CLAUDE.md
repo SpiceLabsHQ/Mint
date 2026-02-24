@@ -83,7 +83,7 @@ go mod tidy                       # always run after adding new dependencies
 | `internal/sshconfig/` | Managed SSH config blocks with checksum hand-edit detection (ADR-0008/ADR-0019) |
 | `internal/selfupdate/` | GitHub Releases self-update with SHA256 verification (ADR-0020) |
 | `internal/version/` | Embedded version string |
-| `scripts/` | `bootstrap.sh` — EC2 user-data script for Ubuntu 24.04 (16,384-byte hard limit) |
+| `scripts/` | `bootstrap.sh` — full VM setup script for Ubuntu 24.04; `bootstrap-stub.sh` — 871-byte EC2 user-data stub that fetches and verifies bootstrap.sh at runtime |
 | `tests/e2e/` | End-to-end test scaffolding (see `/live-test` slash command) |
 
 ## Development Patterns
@@ -96,7 +96,7 @@ go mod tidy                       # always run after adding new dependencies
 - **Tag constants**: All tag keys and bootstrap status values live in `internal/tags/tags.go`. Never inline tag strings — always use `tags.TagBootstrap`, `tags.BootstrapComplete`, etc.
 - **VM discovery**: Always use `vm.FindVM(ctx, client, owner, vmName)` or `vm.ListVMs(...)`. `FindVM` returns `(nil, nil)` when no VM exists — that is not an error. Never call DescribeInstances without `tags.FilterByOwner()`.
 - **EC2 state sequencing**: Use waiter interfaces before dependent operations: `WaitInstanceRunningAPI` before EBS attach; `WaitInstanceTerminatedAPI` before volume deletion. Waiters are injected via `WithWaitRunning()` / `WithWaitTerminated()` builder methods.
-- **Bootstrap script size**: `scripts/bootstrap.sh` has a hard 16,384-byte EC2 user-data limit. Current size is ~16,331 bytes (~53 bytes headroom). After any change: (1) verify `wc -c scripts/bootstrap.sh < 16384`, (2) run `go generate ./internal/bootstrap/...`, (3) confirm `hash_generated.go` changed.
+- **Bootstrap script size**: `scripts/bootstrap.sh` is **no longer size-constrained** — EC2 user-data is now the 871-byte `scripts/bootstrap-stub.sh` which fetches bootstrap.sh at runtime (ADR-0009, #159). After any change to `bootstrap.sh`: run `go generate ./internal/bootstrap/...` and confirm `hash_generated.go` changed.
 - **Bootstrap pre-check before SSH**: Check `found.BootstrapStatus` before SSH operations. Use `tags.BootstrapPending` / `tags.BootstrapFailed` constants. Use `isSSHConnectionError(err)` and `isTOFUError(err)` helpers in `cmd/sshutil.go`.
 - **Optional-AWS commands**: Commands that sometimes need AWS (doctor, ssh-config) return `false` from `commandNeedsAWS()` and self-initialize clients in `RunE`. Follow the doctor pattern with `errorIdentityResolver` for graceful credential failures.
 - **TTY-aware behavior**: For code that checks terminal state, inject a `func() bool` field (e.g., `isTerminal`) rather than calling `term.IsTerminal()` directly. This allows test-time override without subprocess spawning.
