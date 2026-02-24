@@ -104,7 +104,8 @@ log "Installing Claude Code CLI"
 curl -fsSL https://claude.ai/install.sh | bash
 # The standalone installer places the binary at ~/.claude/claude.
 # Symlink it into /usr/local/bin so it's on PATH for all users.
-ln -sf /root/.local/bin/claude /usr/local/bin/claude
+cp /root/.local/bin/claude /usr/local/bin/claude
+chmod 755 /usr/local/bin/claude
 
 # --- tmux ---
 
