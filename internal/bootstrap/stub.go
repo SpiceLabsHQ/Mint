@@ -5,6 +5,18 @@ import (
 	"strings"
 )
 
+// bootstrapRawBase is the base URL for fetching bootstrap.sh from the public GitHub repo.
+const bootstrapRawBase = "https://raw.githubusercontent.com/SpiceLabsHQ/Mint"
+
+// ScriptURL returns the URL to fetch bootstrap.sh for the given version.
+// When version is empty or "dev", it falls back to the develop branch.
+func ScriptURL(version string) string {
+	if version == "" || version == "dev" {
+		return bootstrapRawBase + "/develop/scripts/bootstrap.sh"
+	}
+	return fmt.Sprintf("%s/v%s/scripts/bootstrap.sh", bootstrapRawBase, version)
+}
+
 // embeddedStub holds the bootstrap stub template loaded from
 // scripts/bootstrap-stub.sh via SetStub (called from main.go's go:embed).
 var embeddedStub []byte
@@ -27,7 +39,7 @@ func GetStub() []byte {
 //
 // Parameters:
 //   - sha256:      expected SHA256 hex digest of bootstrap.sh (from ScriptSHA256)
-//   - url:         presigned S3 URL to fetch bootstrap.sh (from UploadAndPresign)
+//   - url:         GitHub raw URL to fetch bootstrap.sh (from ScriptURL)
 //   - efsID:       EFS file system ID to mount
 //   - projectDev:  project EBS device path
 //   - vmName:      VM name tag
