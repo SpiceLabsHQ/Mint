@@ -350,8 +350,8 @@ func TestBootstrapPoller(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestHandleTimeoutNonInteractive verifies that when stdin is not a terminal,
-// handleTimeout skips the prompt, leaves the instance running, emits a clear
-// message, and returns nil.
+// handleTimeout skips the prompt, emits a clear message, and returns a non-nil
+// error so that mint up exits non-zero when bootstrap times out in non-TTY mode.
 func TestHandleTimeoutNonInteractive(t *testing.T) {
 	descMock := &mockPollDescribeInstances{
 		responses: []describeResponse{
@@ -372,8 +372,14 @@ func TestHandleTimeoutNonInteractive(t *testing.T) {
 	poller.isTerminal = func() bool { return false }
 
 	err := poller.Poll(context.Background(), "alice", "default", "i-abc123")
-	if err != nil {
-		t.Fatalf("expected nil error in non-interactive mode, got: %v", err)
+	if err == nil {
+		t.Fatal("expected non-nil error in non-interactive timeout, got nil")
+	}
+	if !strings.Contains(err.Error(), "timed out") {
+		t.Errorf("error %q does not contain %q", err.Error(), "timed out")
+	}
+	if !strings.Contains(err.Error(), "i-abc123") {
+		t.Errorf("error %q does not contain instance ID %q", err.Error(), "i-abc123")
 	}
 
 	got := output.String()
