@@ -84,6 +84,23 @@ _SHA="__MINT_BOOTSTRAP_SHA256__"
 	}
 }
 
+func TestScriptURL(t *testing.T) {
+	tests := []struct {
+		version string
+		want    string
+	}{
+		{"", "https://raw.githubusercontent.com/SpiceLabsHQ/Mint/develop/scripts/bootstrap.sh"},
+		{"dev", "https://raw.githubusercontent.com/SpiceLabsHQ/Mint/develop/scripts/bootstrap.sh"},
+		{"1.2.3", "https://raw.githubusercontent.com/SpiceLabsHQ/Mint/v1.2.3/scripts/bootstrap.sh"},
+	}
+	for _, tc := range tests {
+		got := ScriptURL(tc.version)
+		if got != tc.want {
+			t.Errorf("ScriptURL(%q) = %q; want %q", tc.version, got, tc.want)
+		}
+	}
+}
+
 func TestRenderStubNoRemainingPlaceholders(t *testing.T) {
 	original := embeddedStub
 	defer func() { embeddedStub = original }()

@@ -43,7 +43,7 @@ type upDeps struct {
 	owner               string
 	ownerARN            string
 	bootstrapScript     []byte
-	bootstrapURL        string // presigned S3 URL for bootstrap.sh delivery
+	bootstrapURL        string // GitHub raw URL for bootstrap.sh delivery
 	instanceType        string
 	volumeSize          int32
 	volumeIOPS          int32
@@ -105,21 +105,6 @@ func newUpCommandWithDeps(deps *upDeps) *cobra.Command {
 			if flagIOPS, _ := cmd.Flags().GetInt32("volume-iops"); flagIOPS > 0 {
 				volumeIOPS = flagIOPS
 			}
-			// Upload bootstrap.sh to S3 and obtain a presigned GET URL for the
-			// EC2 stub. The VM fetches the script via this URL at boot time,
-			// so no IAM role is required on the instance for the download.
-			bsURL, err := bootstrap.UploadAndPresign(
-				cmd.Context(),
-				clients.s3Client,
-				clients.s3PresignClient,
-				clients.region,
-				extractAccountID(clients.ownerARN),
-				GetBootstrapScript(),
-				bootstrap.ScriptSHA256,
-			)
-			if err != nil {
-				return fmt.Errorf("uploading bootstrap script to S3: %w", err)
-			}
 			return runUp(cmd, &upDeps{
 				provisioner: provision.NewProvisioner(
 					clients.ec2Client, // DescribeInstancesAPI
@@ -140,7 +125,7 @@ func newUpCommandWithDeps(deps *upDeps) *cobra.Command {
 				owner:               clients.owner,
 				ownerARN:            clients.ownerARN,
 				bootstrapScript:     GetBootstrapScript(),
-				bootstrapURL:        bsURL,
+				bootstrapURL:        bootstrap.ScriptURL(version),
 				instanceType:        clients.mintConfig.InstanceType,
 				volumeSize:          int32(clients.mintConfig.VolumeSizeGB),
 				volumeIOPS:          volumeIOPS,
@@ -385,17 +370,6 @@ func upWithProvisioner(ctx context.Context, cmd *cobra.Command, cliCtx *cli.CLIC
 	}
 
 	return printUpResult(cmd, cliCtx, result, jsonOutput, verbose)
-}
-
-// extractAccountID extracts the AWS account ID from a caller ARN.
-// For example: "arn:aws:iam::123456789012:user/foo" → "123456789012".
-// Returns an empty string if the ARN format is unexpected.
-func extractAccountID(arn string) string {
-	parts := strings.Split(arn, ":")
-	if len(parts) >= 5 {
-		return parts[4]
-	}
-	return ""
 }
 
 // newCommandSpinner creates a Spinner for command progress output.
