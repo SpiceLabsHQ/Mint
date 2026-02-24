@@ -16,6 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ec2instanceconnect"
 	"github.com/aws/aws-sdk-go-v2/service/efs"
+	s3sdk "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/ssoadmin"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/spf13/cobra"
@@ -28,13 +29,16 @@ import (
 // awsClients holds pre-initialized AWS SDK clients and resolved identity.
 // Created once in PersistentPreRunE and stored on the command context.
 type awsClients struct {
-	ec2Client      *ec2.Client
-	icClient       *ec2instanceconnect.Client
-	efsClient      *efs.Client
-	cfnClient      *cloudformation.Client
-	ssoAdminClient *ssoadmin.Client
-	owner          string // resolved owner name (mint:owner tag value)
-	ownerARN       string // resolved owner ARN (mint:owner-arn tag value)
+	ec2Client       *ec2.Client
+	icClient        *ec2instanceconnect.Client
+	efsClient       *efs.Client
+	cfnClient       *cloudformation.Client
+	ssoAdminClient  *ssoadmin.Client
+	s3Client        *s3sdk.Client
+	s3PresignClient *s3sdk.PresignClient
+	owner           string // resolved owner name (mint:owner tag value)
+	ownerARN        string // resolved owner ARN (mint:owner-arn tag value)
+	region          string // resolved AWS region from SDK config chain
 
 	// mintConfig holds the loaded user preferences for instance type,
 	// volume size, idle timeout, etc.
@@ -163,15 +167,19 @@ func initAWSClients(ctx context.Context) (*awsClients, error) {
 		return nil, fmt.Errorf("resolve identity: %w", err)
 	}
 
+	s3c := s3sdk.NewFromConfig(cfg)
 	return &awsClients{
-		ec2Client:      ec2.NewFromConfig(cfg),
-		icClient:       ec2instanceconnect.NewFromConfig(cfg),
-		efsClient:      efs.NewFromConfig(cfg),
-		cfnClient:      cloudformation.NewFromConfig(cfg),
-		ssoAdminClient: ssoadmin.NewFromConfig(cfg),
-		owner:          owner.Name,
-		ownerARN:       owner.ARN,
-		mintConfig:     mintCfg,
+		ec2Client:       ec2.NewFromConfig(cfg),
+		icClient:        ec2instanceconnect.NewFromConfig(cfg),
+		efsClient:       efs.NewFromConfig(cfg),
+		cfnClient:       cloudformation.NewFromConfig(cfg),
+		ssoAdminClient:  ssoadmin.NewFromConfig(cfg),
+		s3Client:        s3c,
+		s3PresignClient: s3sdk.NewPresignClient(s3c),
+		owner:           owner.Name,
+		ownerARN:        owner.ARN,
+		region:          cfg.Region,
+		mintConfig:      mintCfg,
 	}, nil
 }
 

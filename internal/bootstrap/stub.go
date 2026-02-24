@@ -20,20 +20,6 @@ func GetStub() []byte {
 	return embeddedStub
 }
 
-// ScriptURL returns the raw GitHub URL for bootstrap.sh at the given version.
-// If version is empty or "dev", the "main" branch is used so that development
-// builds always fetch the latest committed script.
-func ScriptURL(version string) string {
-	ref := version
-	if ref == "" || ref == "dev" {
-		ref = "main"
-	}
-	return fmt.Sprintf(
-		"https://raw.githubusercontent.com/nicholasgasior/mint/%s/scripts/bootstrap.sh",
-		ref,
-	)
-}
-
 // RenderStub substitutes the given runtime values into the bootstrap stub
 // template and returns the rendered user-data bytes ready to send to EC2.
 // It replaces __PLACEHOLDER__ tokens (not bash ${VAR} syntax) so the template
@@ -41,7 +27,7 @@ func ScriptURL(version string) string {
 //
 // Parameters:
 //   - sha256:      expected SHA256 hex digest of bootstrap.sh (from ScriptSHA256)
-//   - url:         URL to fetch bootstrap.sh at runtime (from ScriptURL)
+//   - url:         presigned S3 URL to fetch bootstrap.sh (from UploadAndPresign)
 //   - efsID:       EFS file system ID to mount
 //   - projectDev:  project EBS device path
 //   - vmName:      VM name tag
