@@ -1095,10 +1095,10 @@ func TestUpCommandVolumeIOPSDefault(t *testing.T) {
 	if ri.input == nil {
 		t.Fatal("RunInstances was not called")
 	}
-	if len(ri.input.BlockDeviceMappings) == 0 {
-		t.Fatal("RunInstances: no BlockDeviceMappings")
+	if len(ri.input.BlockDeviceMappings) < 2 {
+		t.Fatal("RunInstances: expected at least 2 BlockDeviceMappings (root + project EBS)")
 	}
-	if got := aws.ToInt32(ri.input.BlockDeviceMappings[0].Ebs.Iops); got != 3000 {
+	if got := aws.ToInt32(ri.input.BlockDeviceMappings[1].Ebs.Iops); got != 3000 {
 		t.Errorf("BDM Iops = %d, want 3000 (default when volumeIOPS is 0)", got)
 	}
 }
@@ -1142,10 +1142,10 @@ func TestUpCommandVolumeIOPSFromDeps(t *testing.T) {
 	if ri.input == nil {
 		t.Fatal("RunInstances was not called")
 	}
-	if len(ri.input.BlockDeviceMappings) == 0 {
-		t.Fatal("RunInstances: no BlockDeviceMappings")
+	if len(ri.input.BlockDeviceMappings) < 2 {
+		t.Fatal("RunInstances: expected at least 2 BlockDeviceMappings (root + project EBS)")
 	}
-	if got := aws.ToInt32(ri.input.BlockDeviceMappings[0].Ebs.Iops); got != 6000 {
+	if got := aws.ToInt32(ri.input.BlockDeviceMappings[1].Ebs.Iops); got != 6000 {
 		t.Errorf("BDM Iops = %d, want 6000", got)
 	}
 }

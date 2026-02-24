@@ -509,11 +509,23 @@ func TestProvisionerFullHappyPath(t *testing.T) {
 		t.Errorf("UserData does not look like a shell script:\n%s", udStr)
 	}
 
-	// Verify project EBS was specified via BlockDeviceMappings in RunInstances.
-	if len(input.BlockDeviceMappings) == 0 {
-		t.Fatal("RunInstances: expected BlockDeviceMappings for project EBS")
+	// Verify root EBS is sized to 200GB (ADR-0004).
+	if len(input.BlockDeviceMappings) < 2 {
+		t.Fatalf("RunInstances: expected 2 BlockDeviceMappings (root + project), got %d", len(input.BlockDeviceMappings))
 	}
-	bdm := input.BlockDeviceMappings[0]
+	root := input.BlockDeviceMappings[0]
+	if aws.ToString(root.DeviceName) != "/dev/sda1" {
+		t.Errorf("root BDM DeviceName = %q, want /dev/sda1", aws.ToString(root.DeviceName))
+	}
+	if aws.ToInt32(root.Ebs.VolumeSize) != 200 {
+		t.Errorf("root BDM VolumeSize = %d, want 200", aws.ToInt32(root.Ebs.VolumeSize))
+	}
+	if !aws.ToBool(root.Ebs.DeleteOnTermination) {
+		t.Error("root BDM DeleteOnTermination should be true")
+	}
+
+	// Verify project EBS was specified via BlockDeviceMappings in RunInstances.
+	bdm := input.BlockDeviceMappings[1]
 	if aws.ToString(bdm.DeviceName) != "/dev/xvdf" {
 		t.Errorf("BDM DeviceName = %q, want /dev/xvdf", aws.ToString(bdm.DeviceName))
 	}
@@ -864,7 +876,7 @@ func TestProvisionerDefaultVolumeSize(t *testing.T) {
 	if !m.runInstances.called || len(m.runInstances.input.BlockDeviceMappings) == 0 {
 		t.Fatal("RunInstances: expected BlockDeviceMappings")
 	}
-	if got := aws.ToInt32(m.runInstances.input.BlockDeviceMappings[0].Ebs.VolumeSize); got != 50 {
+	if got := aws.ToInt32(m.runInstances.input.BlockDeviceMappings[1].Ebs.VolumeSize); got != 50 {
 		t.Errorf("BDM VolumeSize = %d, want 50 (default)", got)
 	}
 }
@@ -884,7 +896,7 @@ func TestProvisionerCustomVolumeSize(t *testing.T) {
 	if !m.runInstances.called || len(m.runInstances.input.BlockDeviceMappings) == 0 {
 		t.Fatal("RunInstances: expected BlockDeviceMappings")
 	}
-	if got := aws.ToInt32(m.runInstances.input.BlockDeviceMappings[0].Ebs.VolumeSize); got != 100 {
+	if got := aws.ToInt32(m.runInstances.input.BlockDeviceMappings[1].Ebs.VolumeSize); got != 100 {
 		t.Errorf("BDM VolumeSize = %d, want 100", got)
 	}
 }
@@ -1685,7 +1697,7 @@ func TestProvisionerDefaultVolumeIOPS(t *testing.T) {
 	if !m.runInstances.called || len(m.runInstances.input.BlockDeviceMappings) == 0 {
 		t.Fatal("RunInstances: expected BlockDeviceMappings")
 	}
-	if got := aws.ToInt32(m.runInstances.input.BlockDeviceMappings[0].Ebs.Iops); got != 3000 {
+	if got := aws.ToInt32(m.runInstances.input.BlockDeviceMappings[1].Ebs.Iops); got != 3000 {
 		t.Errorf("BDM Iops = %d, want 3000 (default)", got)
 	}
 }
@@ -1706,7 +1718,7 @@ func TestProvisionerCustomVolumeIOPS(t *testing.T) {
 	if !m.runInstances.called || len(m.runInstances.input.BlockDeviceMappings) == 0 {
 		t.Fatal("RunInstances: expected BlockDeviceMappings")
 	}
-	if got := aws.ToInt32(m.runInstances.input.BlockDeviceMappings[0].Ebs.Iops); got != 6000 {
+	if got := aws.ToInt32(m.runInstances.input.BlockDeviceMappings[1].Ebs.Iops); got != 6000 {
 		t.Errorf("BDM Iops = %d, want 6000", got)
 	}
 }
@@ -1726,7 +1738,7 @@ func TestProvisionerMaxVolumeIOPS(t *testing.T) {
 	if !m.runInstances.called || len(m.runInstances.input.BlockDeviceMappings) == 0 {
 		t.Fatal("RunInstances: expected BlockDeviceMappings")
 	}
-	if got := aws.ToInt32(m.runInstances.input.BlockDeviceMappings[0].Ebs.Iops); got != 16000 {
+	if got := aws.ToInt32(m.runInstances.input.BlockDeviceMappings[1].Ebs.Iops); got != 16000 {
 		t.Errorf("BDM Iops = %d, want 16000", got)
 	}
 }

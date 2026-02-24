@@ -475,15 +475,15 @@ func TestWorkflow_ProvisionWithCustomIOPS(t *testing.T) {
 	if ri.lastInput == nil {
 		t.Fatal("RunInstances was not called — cannot verify IOPS")
 	}
-	if len(ri.lastInput.BlockDeviceMappings) == 0 {
-		t.Fatal("RunInstances: no BlockDeviceMappings; expected project EBS in BDM")
+	if len(ri.lastInput.BlockDeviceMappings) < 2 {
+		t.Fatal("RunInstances: expected at least 2 BlockDeviceMappings (root + project EBS)")
 	}
-	bdm := ri.lastInput.BlockDeviceMappings[0]
+	bdm := ri.lastInput.BlockDeviceMappings[1]
 	if bdm.Ebs == nil {
-		t.Fatal("BlockDeviceMappings[0].Ebs is nil")
+		t.Fatal("BlockDeviceMappings[1].Ebs is nil")
 	}
 	if got := aws.ToInt32(bdm.Ebs.Iops); got != 6000 {
-		t.Errorf("BlockDeviceMappings[0].Ebs.Iops = %d, want 6000", got)
+		t.Errorf("BlockDeviceMappings[1].Ebs.Iops = %d, want 6000", got)
 	}
 }
 

@@ -680,21 +680,33 @@ func (p *Provisioner) launchInstance(
 		},
 	}
 
+	// Always override the root EBS to 200GB gp3 (ADR-0004). The AMI default
+	// is 8GB which is insufficient for devcontainer builds.
+	bdms := []ec2types.BlockDeviceMapping{
+		{
+			DeviceName: aws.String("/dev/sda1"),
+			Ebs: &ec2types.EbsBlockDevice{
+				VolumeSize:          aws.Int32(200),
+				VolumeType:          ec2types.VolumeTypeGp3,
+				DeleteOnTermination: aws.Bool(true),
+			},
+		},
+	}
+
 	// When provisioning fresh, create the project EBS via BlockDeviceMappings
 	// so it is attached before user-data runs (no race condition).
 	if projectVolSize > 0 {
-		input.BlockDeviceMappings = []ec2types.BlockDeviceMapping{
-			{
-				DeviceName: aws.String("/dev/xvdf"),
-				Ebs: &ec2types.EbsBlockDevice{
-					VolumeSize:          aws.Int32(projectVolSize),
-					VolumeType:          ec2types.VolumeTypeGp3,
-					Iops:                aws.Int32(projectVolIOPS),
-					DeleteOnTermination: aws.Bool(false),
-				},
+		bdms = append(bdms, ec2types.BlockDeviceMapping{
+			DeviceName: aws.String("/dev/xvdf"),
+			Ebs: &ec2types.EbsBlockDevice{
+				VolumeSize:          aws.Int32(projectVolSize),
+				VolumeType:          ec2types.VolumeTypeGp3,
+				Iops:                aws.Int32(projectVolIOPS),
+				DeleteOnTermination: aws.Bool(false),
 			},
-		}
+		})
 	}
+	input.BlockDeviceMappings = bdms
 
 	start := time.Now()
 	out, launchErr := p.runInstances.RunInstances(ctx, input)
