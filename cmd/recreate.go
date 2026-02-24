@@ -91,6 +91,23 @@ func newRecreateCommandWithDeps(deps *recreateDeps) *cobra.Command {
 			if clients == nil {
 				return fmt.Errorf("AWS clients not configured")
 			}
+			cliCtx := cli.FromCommand(cmd)
+			verbose := cliCtx != nil && cliCtx.Verbose
+			sp := newCommandSpinner(cmd.OutOrStdout(), verbose)
+			var pollerWriter io.Writer
+			if verbose {
+				pollerWriter = &spinnerWriter{sp: sp}
+			} else {
+				pollerWriter = sp.Writer
+			}
+			poller := provision.NewBootstrapPoller(
+				clients.ec2Client, // DescribeInstancesAPI
+				clients.ec2Client, // StopInstancesAPI
+				clients.ec2Client, // TerminateInstancesAPI
+				clients.ec2Client, // CreateTagsAPI
+				pollerWriter,
+				cmd.InOrStdin(),
+			)
 			hostKeyStore := sshconfig.NewHostKeyStore(config.DefaultConfigDir())
 			return runRecreate(cmd, &recreateDeps{
 				describe:            clients.ec2Client,
@@ -120,6 +137,7 @@ func newRecreateCommandWithDeps(deps *recreateDeps) *cobra.Command {
 				verifyBootstrap:     bootstrap.Verify,
 				mintConfig:          clients.mintConfig,
 				removeHostKey:       hostKeyStore.RemoveKey,
+				pollBootstrap:       poller.Poll,
 			})
 		},
 	}
