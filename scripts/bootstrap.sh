@@ -101,7 +101,7 @@ npm install -g @devcontainers/cli
 # --- Claude Code CLI ---
 
 log "Installing Claude Code CLI"
-curl -fsSL https://claude.ai/install.sh | sh
+curl -fsSL https://claude.ai/install.sh | bash
 
 # --- tmux ---
 
