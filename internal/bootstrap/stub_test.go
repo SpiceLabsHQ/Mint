@@ -5,31 +5,6 @@ import (
 	"testing"
 )
 
-func TestScriptURL(t *testing.T) {
-	tests := []struct {
-		version string
-		wantRef string
-	}{
-		{"", "main"},
-		{"dev", "main"},
-		{"v1.2.3", "v1.2.3"},
-		{"abc123", "abc123"},
-	}
-
-	for _, tc := range tests {
-		url := ScriptURL(tc.version)
-		if !strings.Contains(url, "/"+tc.wantRef+"/") {
-			t.Errorf("ScriptURL(%q) = %q, want ref %q in URL", tc.version, url, tc.wantRef)
-		}
-		if !strings.HasSuffix(url, "/scripts/bootstrap.sh") {
-			t.Errorf("ScriptURL(%q) = %q, want suffix /scripts/bootstrap.sh", tc.version, url)
-		}
-		if !strings.HasPrefix(url, "https://raw.githubusercontent.com/") {
-			t.Errorf("ScriptURL(%q) = %q, want https://raw.githubusercontent.com/ prefix", tc.version, url)
-		}
-	}
-}
-
 func TestSetStubAndGetStub(t *testing.T) {
 	original := embeddedStub
 	defer func() { embeddedStub = original }()

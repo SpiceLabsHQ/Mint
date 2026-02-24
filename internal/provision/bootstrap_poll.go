@@ -152,12 +152,13 @@ func (bp *BootstrapPoller) checkBootstrapStatus(ctx context.Context, owner, vmNa
 
 // handleTimeout presents the user with three options when bootstrap does not
 // complete within the timeout window. In non-interactive (non-TTY) contexts
-// it skips the prompt and defaults to leaving the instance running so that
-// CI pipelines and piped invocations do not crash.
+// it skips the prompt, logs a message, and returns an error so the caller
+// exits non-zero — CI pipelines and piped invocations must not silently
+// succeed when bootstrap has not completed.
 func (bp *BootstrapPoller) handleTimeout(ctx context.Context, instanceID string) error {
 	if !bp.isTerminal() {
 		fmt.Fprintf(bp.output, "Bootstrap timed out. Instance %s left running — SSH in or run 'mint doctor' to investigate.\n", instanceID)
-		return nil
+		return fmt.Errorf("bootstrap timed out for instance %s", instanceID)
 	}
 
 	fmt.Fprintln(bp.output, "")

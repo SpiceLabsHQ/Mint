@@ -52,6 +52,7 @@ type recreateDeps struct {
 	associateAddr       mintaws.AssociateAddressAPI
 	disassociateAddr    mintaws.DisassociateAddressAPI
 	bootstrapScript     []byte
+	bootstrapURL        string // presigned S3 URL for bootstrap.sh delivery
 	mintConfig          *config.Config
 	pollBootstrap       provision.BootstrapPollFunc
 	resolveAMI          provision.AMIResolver
@@ -91,6 +92,21 @@ func newRecreateCommandWithDeps(deps *recreateDeps) *cobra.Command {
 				return fmt.Errorf("AWS clients not configured")
 			}
 			hostKeyStore := sshconfig.NewHostKeyStore(config.DefaultConfigDir())
+			// Upload bootstrap.sh to S3 and obtain a presigned GET URL for the
+			// EC2 stub. The VM fetches the script via this URL at boot time,
+			// so no IAM role is required on the instance for the download.
+			bsURL, err := bootstrap.UploadAndPresign(
+				cmd.Context(),
+				clients.s3Client,
+				clients.s3PresignClient,
+				clients.region,
+				extractAccountID(clients.ownerARN),
+				GetBootstrapScript(),
+				bootstrap.ScriptSHA256,
+			)
+			if err != nil {
+				return fmt.Errorf("uploading bootstrap script to S3: %w", err)
+			}
 			return runRecreate(cmd, &recreateDeps{
 				describe:            clients.ec2Client,
 				sendKey:             clients.icClient,
@@ -115,9 +131,10 @@ func newRecreateCommandWithDeps(deps *recreateDeps) *cobra.Command {
 				associateAddr:       clients.ec2Client,
 				disassociateAddr:    clients.ec2Client,
 				bootstrapScript:     GetBootstrapScript(),
+				bootstrapURL:        bsURL,
 				verifyBootstrap:     bootstrap.Verify,
-				mintConfig:      clients.mintConfig,
-				removeHostKey:   hostKeyStore.RemoveKey,
+				mintConfig:          clients.mintConfig,
+				removeHostKey:       hostKeyStore.RemoveKey,
 			})
 		},
 	}
@@ -654,7 +671,7 @@ func launchRecreateInstance(
 	// Render the bootstrap stub with runtime values.
 	stub, renderErr := bootstrap.RenderStub(
 		bootstrap.ScriptSHA256,
-		bootstrap.ScriptURL(version),
+		deps.bootstrapURL,
 		efsID,
 		"/dev/xvdf",
 		vmName,

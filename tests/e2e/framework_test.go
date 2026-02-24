@@ -28,7 +28,6 @@ import (
 	efstypes "github.com/aws/aws-sdk-go-v2/service/efs/types"
 	"github.com/spf13/cobra"
 
-	"github.com/nicholasgasior/mint/internal/bootstrap"
 	"github.com/nicholasgasior/mint/internal/cli"
 	mintaws "github.com/nicholasgasior/mint/internal/aws"
 	"github.com/nicholasgasior/mint/internal/provision"
@@ -458,7 +457,7 @@ func newE2EUpCommand(cfg *e2eConfig) *cobra.Command {
 				VolumeSize:      50,
 				VolumeIOPS:      volumeIOPS,
 				BootstrapScript: []byte("#!/bin/bash\necho test"),
-				BootstrapURL:    bootstrap.ScriptURL("dev"),
+				BootstrapURL:    "https://s3.example.com/bootstrap-stub-for-e2e-tests",
 				EFSID:           efsID,
 			}
 

@@ -323,6 +323,31 @@ func TestInitAWSClientsProfileFallbackPrecedence(t *testing.T) {
 	})
 }
 
+func TestExtractAccountID(t *testing.T) {
+	tests := []struct {
+		arn  string
+		want string
+	}{
+		// Standard IAM user ARN.
+		{"arn:aws:iam::123456789012:user/alice", "123456789012"},
+		// Assumed-role ARN (SSO, etc.).
+		{"arn:aws:sts::999888777666:assumed-role/MyRole/session", "999888777666"},
+		// Root ARN.
+		{"arn:aws:iam::000000000001:root", "000000000001"},
+		// Empty string → empty result.
+		{"", ""},
+		// Malformed (too few colons) → empty result.
+		{"not:an:arn", ""},
+	}
+
+	for _, tc := range tests {
+		got := extractAccountID(tc.arn)
+		if got != tc.want {
+			t.Errorf("extractAccountID(%q) = %q; want %q", tc.arn, got, tc.want)
+		}
+	}
+}
+
 func TestAWSClients_IdleTimeout(t *testing.T) {
 	t.Run("returns config value", func(t *testing.T) {
 		clients := &awsClients{
