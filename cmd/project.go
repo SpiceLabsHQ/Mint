@@ -321,13 +321,33 @@ func runProjectAdd(cmd *cobra.Command, deps *projectAddDeps, gitURL string) erro
 }
 
 // buildCloneCommand constructs the git clone command arguments.
-// GIT_TERMINAL_PROMPT=0 prevents git from opening /dev/tty for interactive
-// credential prompts, which fail with "No such device or address" over
-// non-interactive SSH sessions (BatchMode=yes). The -c credential.helper=
-// flag additionally suppresses the credential helper chain so git never
-// attempts to source credentials interactively.
+//
+// Three env vars ensure the clone is fully anonymous — no credential helpers,
+// no interactive prompts — regardless of what the VM's system or user git
+// config contains:
+//
+//   - GIT_TERMINAL_PROMPT=0: prevents git from opening /dev/tty for prompts,
+//     which fail with "No such device or address" over non-interactive SSH
+//     sessions (BatchMode=yes).
+//   - GIT_CONFIG_NOSYSTEM=1: skips /etc/gitconfig, where system-level credential
+//     helpers (e.g. git-credential-libsecret, git-credential-manager) are
+//     registered. Without this, those helpers run first and fail headlessly,
+//     causing git to fall back to a terminal prompt even for public repos.
+//   - GIT_CONFIG_GLOBAL=/dev/null: points the global config at an empty file,
+//     bypassing any credential helpers in ~/.gitconfig.
+//
+// Together these guarantee an unauthenticated HTTPS clone for public repos
+// and an SSH-key clone for git@ URLs, with no dependence on any credential
+// helper that may be installed on the VM.
 func buildCloneCommand(gitURL, projectPath, branch string) []string {
-	cmd := []string{"env", "GIT_TERMINAL_PROMPT=0", "git", "-c", "credential.helper=", "clone"}
+	cmd := []string{
+		"env",
+		"GIT_TERMINAL_PROMPT=0",
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_CONFIG_GLOBAL=/dev/null",
+		"git",
+		"clone",
+	}
 	if branch != "" {
 		cmd = append(cmd, "--branch", branch)
 	}

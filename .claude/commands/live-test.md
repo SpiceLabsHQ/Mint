@@ -166,9 +166,9 @@ Work through todos in tier order (Tier 1 → Tier 6). For each test:
 | `./mint-live-test status --vm $TEST_VM` | exit 0, state is `stopped` |
 | `./mint-live-test up --vm $TEST_VM` (restart from stopped) | exit 0, VM running again |
 | `./mint-live-test project list --vm $TEST_VM` | exit 0, lists `/mint/projects/` |
-| `./mint-live-test project add https://github.com/nicholasgasior/gsfmt --vm $TEST_VM` (small public repo, **slow — devcontainer build**) | exit 0, project cloned |
-| `./mint-live-test project list --vm $TEST_VM` | exit 0, project `gsfmt` appears |
-| `./mint-live-test project rebuild gsfmt --vm $TEST_VM --yes` | exit 0, rebuilt |
+| `./mint-live-test project add https://github.com/cli/safeexec --vm $TEST_VM` (small public repo, no devcontainer — verifies clone step only) | exit 0, project cloned |
+| `./mint-live-test project list --vm $TEST_VM` | exit 0, project `safeexec` appears |
+| `./mint-live-test project rebuild safeexec --vm $TEST_VM --yes` | exit 0, rebuilt |
 | `./mint-live-test resize m6i.large --vm $TEST_VM` (or next tier from current default) | exit 0, instance type changed |
 | `./mint-live-test recreate --vm $TEST_VM --yes` | exit 0, VM recreated and running |
 
@@ -244,7 +244,7 @@ mint version                              PASS     —
 mint --version                            PASS     —
 mint config get region --json             PASS     —
 mint list --json                          FAIL     https://github.com/SpiceLabsHQ/Mint/issues/42
-mint project add ...                      SKIP     slow (devcontainer build)
+mint project add https://...safeexec ...  SKIP     slow (devcontainer build)
 mint mosh                                 SKIP     interactive
 mint connect                              SKIP     interactive
 mint code                                 SKIP     interactive

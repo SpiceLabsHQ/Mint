@@ -309,8 +309,8 @@ func TestProjectAddCommand(t *testing.T) {
 				if !strings.Contains(cloneCmd, "clone") {
 					t.Errorf("first streaming call should be git clone, got: %s", cloneCmd)
 				}
-				if !strings.Contains(cloneCmd, "credential.helper=") {
-					t.Errorf("clone should suppress credentials, got: %s", cloneCmd)
+				if !strings.Contains(cloneCmd, "GIT_CONFIG_NOSYSTEM=1") {
+					t.Errorf("clone should suppress credentials via GIT_CONFIG_NOSYSTEM=1, got: %s", cloneCmd)
 				}
 				if !strings.Contains(cloneCmd, "https://github.com/org/repo.git") {
 					t.Errorf("clone should include URL, got: %s", cloneCmd)
@@ -821,15 +821,17 @@ func TestProjectAddCommand(t *testing.T) {
 }
 
 // TestBuildCloneCommandSuppressesCredentials verifies that buildCloneCommand
-// sets GIT_TERMINAL_PROMPT=0 via env(1) and includes the git -c credential.helper=
-// flag to prevent interactive credential prompts over non-TTY SSH pipes
-// (exit 128: could not read Username: No such device or address).
+// sets the three env vars that ensure a fully anonymous clone regardless of
+// what credential helpers are installed on the VM:
+//   - GIT_TERMINAL_PROMPT=0: no interactive prompts
+//   - GIT_CONFIG_NOSYSTEM=1: skips /etc/gitconfig (system credential helpers)
+//   - GIT_CONFIG_GLOBAL=/dev/null: skips ~/.gitconfig (user credential helpers)
 func TestBuildCloneCommandSuppressesCredentials(t *testing.T) {
 	tests := []struct {
-		name       string
-		gitURL     string
+		name        string
+		gitURL      string
 		projectPath string
-		branch     string
+		branch      string
 	}{
 		{
 			name:        "https url no branch",
@@ -845,7 +847,7 @@ func TestBuildCloneCommandSuppressesCredentials(t *testing.T) {
 		},
 		{
 			name:        "ssh url no branch",
-			gitURL:      "git@github.com:org/repo.git",
+			gitURL:      "git@gitlab.com:org/repo.git",
 			projectPath: "/mint/projects/repo",
 			branch:      "",
 		},
@@ -855,42 +857,15 @@ func TestBuildCloneCommandSuppressesCredentials(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cmd := buildCloneCommand(tt.gitURL, tt.projectPath, tt.branch)
 
-			// Verify -c flag is present.
-			foundDashC := false
-			foundCredentialHelper := false
-			for _, arg := range cmd {
-				if arg == "-c" {
-					foundDashC = true
+			// Verify the command starts with: env GIT_TERMINAL_PROMPT=0 GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null git
+			wantPrefix := []string{"env", "GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "git"}
+			if len(cmd) < len(wantPrefix) {
+				t.Fatalf("command too short: %v", cmd)
+			}
+			for i, want := range wantPrefix {
+				if cmd[i] != want {
+					t.Errorf("cmd[%d] = %q, want %q (full cmd: %v)", i, cmd[i], want, cmd)
 				}
-				if arg == "credential.helper=" {
-					foundCredentialHelper = true
-				}
-			}
-
-			if !foundDashC {
-				t.Errorf("buildCloneCommand(%q, %q, %q) missing -c flag; got %v",
-					tt.gitURL, tt.projectPath, tt.branch, cmd)
-			}
-			if !foundCredentialHelper {
-				t.Errorf("buildCloneCommand(%q, %q, %q) missing credential.helper= value; got %v",
-					tt.gitURL, tt.projectPath, tt.branch, cmd)
-			}
-
-			// Verify -c precedes credential.helper= (they must be adjacent).
-			for i, arg := range cmd {
-				if arg == "-c" && i+1 < len(cmd) {
-					if cmd[i+1] != "credential.helper=" {
-						t.Errorf("expected credential.helper= after -c, got %q", cmd[i+1])
-					}
-				}
-			}
-
-			// Verify the command starts with: env GIT_TERMINAL_PROMPT=0 git
-			// env(1) sets GIT_TERMINAL_PROMPT=0 before exec-ing git so that
-			// git never opens /dev/tty for interactive credential prompts over
-			// non-interactive SSH sessions (BatchMode=yes).
-			if len(cmd) < 3 || cmd[0] != "env" || cmd[1] != "GIT_TERMINAL_PROMPT=0" || cmd[2] != "git" {
-				t.Errorf("expected command to start with [env GIT_TERMINAL_PROMPT=0 git], got %v", cmd)
 			}
 			foundClone := false
 			for _, arg := range cmd {
