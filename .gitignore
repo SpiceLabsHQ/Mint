@@ -3,6 +3,7 @@
 
 # Go build artifacts
 /mint
+/mint-live-test
 /dist/
 *.exe
 *.exe~
