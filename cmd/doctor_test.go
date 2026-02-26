@@ -16,10 +16,10 @@ import (
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2instanceconnect"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
-	mintaws "github.com/nicholasgasior/mint/internal/aws"
-	"github.com/nicholasgasior/mint/internal/cli"
-	"github.com/nicholasgasior/mint/internal/identity"
-	"github.com/nicholasgasior/mint/internal/sshconfig"
+	mintaws "github.com/SpiceLabsHQ/Mint/internal/aws"
+	"github.com/SpiceLabsHQ/Mint/internal/cli"
+	"github.com/SpiceLabsHQ/Mint/internal/identity"
+	"github.com/SpiceLabsHQ/Mint/internal/sshconfig"
 	"github.com/spf13/cobra"
 )
 

@@ -14,7 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 
-	mintaws "github.com/nicholasgasior/mint/internal/aws"
+	mintaws "github.com/SpiceLabsHQ/Mint/internal/aws"
 )
 
 // ErrVPCNotFound is returned when no default VPC exists in the region.

@@ -10,7 +10,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ssoadmin"
 	ssoadmintypes "github.com/aws/aws-sdk-go-v2/service/ssoadmin/types"
-	"github.com/nicholasgasior/mint/internal/cli"
+	"github.com/SpiceLabsHQ/Mint/internal/cli"
 	"github.com/spf13/cobra"
 )
 

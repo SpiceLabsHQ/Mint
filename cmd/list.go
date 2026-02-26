@@ -11,13 +11,13 @@ import (
 
 	"github.com/spf13/cobra"
 
-	mintaws "github.com/nicholasgasior/mint/internal/aws"
-	"github.com/nicholasgasior/mint/internal/cli"
-	"github.com/nicholasgasior/mint/internal/config"
-	"github.com/nicholasgasior/mint/internal/progress"
-	"github.com/nicholasgasior/mint/internal/tags"
-	versioncheck "github.com/nicholasgasior/mint/internal/version"
-	"github.com/nicholasgasior/mint/internal/vm"
+	mintaws "github.com/SpiceLabsHQ/Mint/internal/aws"
+	"github.com/SpiceLabsHQ/Mint/internal/cli"
+	"github.com/SpiceLabsHQ/Mint/internal/config"
+	"github.com/SpiceLabsHQ/Mint/internal/progress"
+	"github.com/SpiceLabsHQ/Mint/internal/tags"
+	versioncheck "github.com/SpiceLabsHQ/Mint/internal/version"
+	"github.com/SpiceLabsHQ/Mint/internal/vm"
 )
 
 // VersionCheckerFunc is a function that checks for an available update.

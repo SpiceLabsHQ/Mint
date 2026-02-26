@@ -28,10 +28,10 @@ import (
 	efstypes "github.com/aws/aws-sdk-go-v2/service/efs/types"
 	"github.com/spf13/cobra"
 
-	"github.com/nicholasgasior/mint/internal/cli"
-	mintaws "github.com/nicholasgasior/mint/internal/aws"
-	"github.com/nicholasgasior/mint/internal/provision"
-	"github.com/nicholasgasior/mint/internal/vm"
+	"github.com/SpiceLabsHQ/Mint/internal/cli"
+	mintaws "github.com/SpiceLabsHQ/Mint/internal/aws"
+	"github.com/SpiceLabsHQ/Mint/internal/provision"
+	"github.com/SpiceLabsHQ/Mint/internal/vm"
 )
 
 // ---------------------------------------------------------------------------

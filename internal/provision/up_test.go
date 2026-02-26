@@ -13,9 +13,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
-	mintaws "github.com/nicholasgasior/mint/internal/aws"
-	"github.com/nicholasgasior/mint/internal/bootstrap"
-	"github.com/nicholasgasior/mint/internal/tags"
+	mintaws "github.com/SpiceLabsHQ/Mint/internal/aws"
+	"github.com/SpiceLabsHQ/Mint/internal/bootstrap"
+	"github.com/SpiceLabsHQ/Mint/internal/tags"
 )
 
 // testStubTemplate is a minimal stub template used by provision tests.

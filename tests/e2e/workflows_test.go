@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/nicholasgasior/mint/cmd"
+	"github.com/SpiceLabsHQ/Mint/cmd"
 )
 
 // ---------------------------------------------------------------------------

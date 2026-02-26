@@ -8,10 +8,10 @@ import (
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/spf13/cobra"
 
-	mintaws "github.com/nicholasgasior/mint/internal/aws"
-	"github.com/nicholasgasior/mint/internal/cli"
-	"github.com/nicholasgasior/mint/internal/progress"
-	"github.com/nicholasgasior/mint/internal/vm"
+	mintaws "github.com/SpiceLabsHQ/Mint/internal/aws"
+	"github.com/SpiceLabsHQ/Mint/internal/cli"
+	"github.com/SpiceLabsHQ/Mint/internal/progress"
+	"github.com/SpiceLabsHQ/Mint/internal/vm"
 )
 
 // downDeps holds the injectable dependencies for the down command.

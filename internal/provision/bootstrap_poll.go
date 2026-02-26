@@ -17,9 +17,9 @@ import (
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"golang.org/x/term"
 
-	mintaws "github.com/nicholasgasior/mint/internal/aws"
-	"github.com/nicholasgasior/mint/internal/tags"
-	"github.com/nicholasgasior/mint/internal/vm"
+	mintaws "github.com/SpiceLabsHQ/Mint/internal/aws"
+	"github.com/SpiceLabsHQ/Mint/internal/tags"
+	"github.com/SpiceLabsHQ/Mint/internal/vm"
 )
 
 // DefaultPollInterval is the default time between bootstrap status checks.

@@ -3,7 +3,7 @@ package main
 import (
 	"testing"
 
-	"github.com/nicholasgasior/mint/internal/bootstrap"
+	"github.com/SpiceLabsHQ/Mint/internal/bootstrap"
 )
 
 func TestEmbeddedBootstrapStubIsNonEmpty(t *testing.T) {

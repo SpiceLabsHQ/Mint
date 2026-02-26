@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/nicholasgasior/mint/cmd"
-	"github.com/nicholasgasior/mint/internal/bootstrap"
+	"github.com/SpiceLabsHQ/Mint/cmd"
+	"github.com/SpiceLabsHQ/Mint/internal/bootstrap"
 )
 
 // bootstrapStub is the tiny EC2 user-data stub template embedded at compile

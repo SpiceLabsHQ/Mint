@@ -8,9 +8,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/nicholasgasior/mint/internal/admin"
-	mintaws "github.com/nicholasgasior/mint/internal/aws"
-	"github.com/nicholasgasior/mint/internal/cli"
+	"github.com/SpiceLabsHQ/Mint/internal/admin"
+	mintaws "github.com/SpiceLabsHQ/Mint/internal/aws"
+	"github.com/SpiceLabsHQ/Mint/internal/cli"
 )
 
 // adminDeployDeps holds the injectable dependencies for the admin deploy command.

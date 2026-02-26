@@ -8,8 +8,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/nicholasgasior/mint/internal/admin"
-	"github.com/nicholasgasior/mint/internal/cli"
+	"github.com/SpiceLabsHQ/Mint/internal/admin"
+	"github.com/SpiceLabsHQ/Mint/internal/cli"
 )
 
 // adminSetupDeps holds the injectable dependencies for the admin setup command.

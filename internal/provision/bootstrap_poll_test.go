@@ -12,7 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 
-	"github.com/nicholasgasior/mint/internal/tags"
+	"github.com/SpiceLabsHQ/Mint/internal/tags"
 )
 
 // ---------------------------------------------------------------------------
