@@ -2,6 +2,7 @@ name: Bootstrap CI
 
 on:
   push:
+    branches: ['**']
     paths:
       - 'scripts/bootstrap.sh'
       - 'internal/bootstrap/**'
