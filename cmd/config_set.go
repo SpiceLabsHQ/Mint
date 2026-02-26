@@ -71,7 +71,7 @@ func newConfigSetCommand() *cobra.Command {
 				// it with a single friendly message so the user knows exactly
 				// what to do.
 				if key == "instance_type" && isCredentialError(err) {
-					return fmt.Errorf(`cannot validate instance type: AWS credentials unavailable — run "aws configure", set AWS_PROFILE, or use --profile`)
+					return fmt.Errorf(`cannot validate instance type: AWS credentials unavailable — run "aws configure", set AWS_PROFILE, use --profile, or persist a profile with "mint config set aws_profile <profile>"`)
 				}
 				return err
 			}

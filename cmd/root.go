@@ -33,7 +33,7 @@ func NewRootCommand() *cobra.Command {
 				if err != nil {
 					friendlyMsg := fmt.Sprintf("initialize AWS: %v", err)
 					if isCredentialError(err) {
-						friendlyMsg = `AWS credentials unavailable — run "aws configure", set AWS_PROFILE, or use --profile`
+						friendlyMsg = `AWS credentials unavailable — run "aws configure", set AWS_PROFILE, use --profile, or persist a profile with "mint config set aws_profile <profile>"`
 					}
 					// In JSON mode, write structured error to stdout so machine
 					// consumers get valid JSON instead of plaintext on stderr
