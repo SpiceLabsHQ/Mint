@@ -42,24 +42,6 @@ checksum:
 snapshot:
   version_template: "{{ incpatch .Version }}-next"
 
-brews:
-  - name: mint
-    repository:
-      owner: SpiceLabsHQ
-      name: homebrew-mint
-      # Requires HOMEBREW_TAP_GITHUB_TOKEN secret in the release workflow.
-      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
-    folder: Formula
-    homepage: "https://github.com/SpiceLabsHQ/Mint"
-    description: "CLI tool for managing EC2-based development environments"
-    license: "MIT"
-    commit_author:
-      name: mint-releasebot
-      email: releasebot@spicelab.dev
-    install: |
-      bin.install "mint"
-    test: |
-      system "#{bin}/mint", "version"
 
 changelog:
   sort: asc

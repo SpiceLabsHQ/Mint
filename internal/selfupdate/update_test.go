@@ -25,7 +25,7 @@ import (
 
 func TestCheckLatest_ReturnsRelease(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/repos/nicholasgasior/mint/releases/latest", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/repos/SpiceLabsHQ/Mint/releases/latest", func(w http.ResponseWriter, r *http.Request) {
 		release := githubRelease{
 			TagName: "v1.2.0",
 			Assets: []githubAsset{
@@ -42,7 +42,7 @@ func TestCheckLatest_ReturnsRelease(t *testing.T) {
 	u := &Updater{
 		Client:         srv.Client(),
 		CurrentVersion: "v1.0.0",
-		APIEndpoint:    srv.URL + "/repos/nicholasgasior/mint/releases/latest",
+		APIEndpoint:    srv.URL + "/repos/SpiceLabsHQ/Mint/releases/latest",
 	}
 
 	rel, err := u.CheckLatest(context.Background())
@@ -59,7 +59,7 @@ func TestCheckLatest_ReturnsRelease(t *testing.T) {
 
 func TestCheckLatest_AlreadyCurrent(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/repos/nicholasgasior/mint/releases/latest", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/repos/SpiceLabsHQ/Mint/releases/latest", func(w http.ResponseWriter, r *http.Request) {
 		release := githubRelease{
 			TagName: "v1.0.0",
 			Assets:  []githubAsset{},
@@ -73,7 +73,7 @@ func TestCheckLatest_AlreadyCurrent(t *testing.T) {
 	u := &Updater{
 		Client:         srv.Client(),
 		CurrentVersion: "v1.0.0",
-		APIEndpoint:    srv.URL + "/repos/nicholasgasior/mint/releases/latest",
+		APIEndpoint:    srv.URL + "/repos/SpiceLabsHQ/Mint/releases/latest",
 	}
 
 	rel, err := u.CheckLatest(context.Background())

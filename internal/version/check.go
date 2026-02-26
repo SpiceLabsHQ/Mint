@@ -18,7 +18,7 @@ import (
 
 const (
 	// defaultEndpoint is the GitHub API endpoint for the latest release.
-	defaultEndpoint = "https://api.github.com/repos/nicholasgasior/mint/releases/latest"
+	defaultEndpoint = "https://api.github.com/repos/SpiceLabsHQ/Mint/releases/latest"
 
 	// cacheFileName is the name of the version cache file.
 	cacheFileName = "version-cache.json"
