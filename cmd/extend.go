@@ -12,8 +12,10 @@ import (
 	mintaws "github.com/nicholasgasior/mint/internal/aws"
 	"github.com/nicholasgasior/mint/internal/cli"
 	"github.com/nicholasgasior/mint/internal/config"
+	"github.com/nicholasgasior/mint/internal/progress"
 	"github.com/nicholasgasior/mint/internal/vm"
 )
+
 
 // validateExtendArgs is a cobra Args function that validates the optional
 // [minutes] argument before AWS initialization runs in PersistentPreRunE.
@@ -113,21 +115,29 @@ func runExtend(cmd *cobra.Command, deps *extendDeps, args []string) error {
 
 	cliCtx := cli.FromCommand(cmd)
 	vmName := "default"
+	verbose := false
 	if cliCtx != nil {
 		vmName = cliCtx.VM
+		verbose = cliCtx.Verbose
 	}
 
+	sp := progress.NewCommandSpinner(cmd.OutOrStdout(), verbose)
+
 	// Discover VM by owner + VM name.
+	sp.Start("Looking up VM...")
 	found, err := vm.FindVM(ctx, deps.describe, deps.owner, vmName)
 	if err != nil {
+		sp.Fail(err.Error())
 		return fmt.Errorf("discovering VM: %w", err)
 	}
 	if found == nil {
+		sp.Stop("")
 		return fmt.Errorf("no VM %q found — run mint up first to create one", vmName)
 	}
 
 	// Verify VM is running.
 	if found.State != string(ec2types.InstanceStateNameRunning) {
+		sp.Stop("")
 		return fmt.Errorf("VM %q (%s) is not running (state: %s) — run mint up to start it",
 			vmName, found.ID, found.State)
 	}
@@ -140,6 +150,7 @@ func runExtend(cmd *cobra.Command, deps *extendDeps, args []string) error {
 	}
 
 	// Execute remote command via SSH.
+	sp.Update("Extending session...")
 	_, err = deps.remote(
 		ctx,
 		deps.sendKey,
@@ -151,6 +162,7 @@ func runExtend(cmd *cobra.Command, deps *extendDeps, args []string) error {
 		remoteCmd,
 	)
 	if err != nil {
+		sp.Fail(err.Error())
 		if isSSHConnectionError(err) {
 			return fmt.Errorf(
 				"cannot connect to VM %q (port 41122 refused).\n"+
@@ -160,6 +172,8 @@ func runExtend(cmd *cobra.Command, deps *extendDeps, args []string) error {
 		}
 		return fmt.Errorf("extending idle timer: %w", err)
 	}
+
+	sp.Stop("")
 
 	// Compute the approximate expiry time for the success message.
 	expiry := time.Now().Add(time.Duration(minutes) * time.Minute)

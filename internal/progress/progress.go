@@ -23,6 +23,21 @@ import (
 	"golang.org/x/term"
 )
 
+// NewCommandSpinner creates a Spinner for command progress output.
+// When verbose is false, the spinner writes to io.Discard so no progress is
+// shown and Interactive is forced to false. When verbose is true, the spinner
+// writes to w (or os.Stdout when w is nil) and TTY detection sets Interactive
+// automatically; in non-interactive environments (CI, tests) the spinner emits
+// plain timestamped lines.
+func NewCommandSpinner(w io.Writer, verbose bool) *Spinner {
+	if !verbose {
+		sp := New(io.Discard)
+		sp.Interactive = false
+		return sp
+	}
+	return New(w)
+}
+
 // SpinnerFrames are the braille characters used for the animated spinner in
 // interactive (TTY) mode. Exported so callers can inspect them in tests.
 var SpinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}

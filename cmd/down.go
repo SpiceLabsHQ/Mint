@@ -10,6 +10,7 @@ import (
 
 	mintaws "github.com/nicholasgasior/mint/internal/aws"
 	"github.com/nicholasgasior/mint/internal/cli"
+	"github.com/nicholasgasior/mint/internal/progress"
 	"github.com/nicholasgasior/mint/internal/vm"
 )
 
@@ -90,21 +91,22 @@ func runDown(cmd *cobra.Command, deps *downDeps) error {
 		return nil
 	}
 
-	// Stop the instance
-	if verbose {
-		fmt.Fprintf(w, "Stopping instance %s...\n", found.ID)
-	}
+	// Spinner starts after VM discovery and state check.
+	sp := progress.NewCommandSpinner(w, verbose)
+	sp.Start("Stopping VM...")
 
 	_, err = deps.stop.StopInstances(ctx, &ec2.StopInstancesInput{
 		InstanceIds: []string{found.ID},
 	})
 	if err != nil {
+		sp.Fail(err.Error())
 		return fmt.Errorf("stopping instance %s: %w", found.ID, err)
 	}
 
-	if verbose {
-		fmt.Fprintf(w, "Instance stopped.\n")
-	}
+	// Announce the async stop phase; EC2 stop is fire-and-return, so we
+	// surface the "waiting" label after the API call returns.
+	sp.Update("Waiting for VM to stop...")
+	sp.Stop("")
 
 	fmt.Fprintf(w, "VM %q (%s) stopped. Volumes and Elastic IP persist.\n", vmName, found.ID)
 	return nil

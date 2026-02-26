@@ -12,6 +12,7 @@ import (
 
 	mintaws "github.com/nicholasgasior/mint/internal/aws"
 	"github.com/nicholasgasior/mint/internal/cli"
+	"github.com/nicholasgasior/mint/internal/progress"
 	"github.com/nicholasgasior/mint/internal/vm"
 )
 
@@ -88,7 +89,7 @@ func runResize(cmd *cobra.Command, deps *resizeDeps, newType string) error {
 	}
 
 	w := cmd.OutOrStdout()
-	sp := newCommandSpinner(w, verbose)
+	sp := progress.NewCommandSpinner(w, verbose)
 
 	// Discover VM.
 	sp.Start(fmt.Sprintf("Discovering VM %q for owner %q...", vmName, deps.owner))

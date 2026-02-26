@@ -14,6 +14,7 @@ import (
 
 	mintaws "github.com/nicholasgasior/mint/internal/aws"
 	"github.com/nicholasgasior/mint/internal/cli"
+	"github.com/nicholasgasior/mint/internal/progress"
 	"github.com/nicholasgasior/mint/internal/tags"
 	"github.com/nicholasgasior/mint/internal/vm"
 )
@@ -95,32 +96,42 @@ func runStatus(cmd *cobra.Command, deps *statusDeps) error {
 		jsonOutput = cliCtx.JSON
 	}
 
+	w := cmd.OutOrStdout()
+
+	// Show a spinner during the AWS VM lookup. Suppress in JSON mode so
+	// spinner lines do not corrupt machine-readable output.
+	sp := progress.NewCommandSpinner(w, !jsonOutput)
+	sp.Start("Checking VM status...")
+
 	found, err := vm.FindVM(ctx, deps.describe, deps.owner, vmName)
 	if err != nil {
+		sp.Fail(err.Error())
 		msg := fmt.Sprintf("finding VM: %v", err)
 		if jsonOutput {
-			fmt.Fprintf(cmd.OutOrStdout(), "{\"error\":%q}\n", msg)
+			fmt.Fprintf(w, "{\"error\":%q}\n", msg)
 			return silentExitError{}
 		}
 		return fmt.Errorf("%s", msg)
 	}
 
 	if found == nil {
+		sp.Fail(fmt.Sprintf("VM %q not found", vmName))
 		msg := fmt.Sprintf("VM %q not found for owner %q", vmName, deps.owner)
 		if jsonOutput {
-			fmt.Fprintf(cmd.OutOrStdout(), "{\"error\":%q}\n", msg)
+			fmt.Fprintf(w, "{\"error\":%q}\n", msg)
 			return silentExitError{}
 		}
 		return fmt.Errorf("%s", msg)
 	}
+
+	// Stop the spinner before printing any output to prevent interleaving.
+	sp.Stop("")
 
 	// Fetch disk usage when VM is running and SSH deps are available.
 	var diskUsagePct *int
 	if found.State == string(ec2types.InstanceStateNameRunning) && deps.remoteRun != nil && deps.sendKey != nil {
 		diskUsagePct = fetchDiskUsage(ctx, deps, found)
 	}
-
-	w := cmd.OutOrStdout()
 
 	if jsonOutput {
 		return writeStatusJSON(w, found, diskUsagePct, deps.versionChecker)

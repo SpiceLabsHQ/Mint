@@ -405,6 +405,89 @@ func TestListJSONStructureHasVmsArray(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Tests: Spinner wiring
+// ---------------------------------------------------------------------------
+
+// TestListSpinnerShownInHumanMode verifies that a spinner message is emitted
+// during AWS discovery when --json is NOT set. In non-interactive mode (tests
+// always use a bytes.Buffer, not a TTY), the Spinner emits a timestamped line
+// for each Start/Update call. We confirm the discovery message appears before
+// the VM table output, meaning the spinner ran and stopped cleanly.
+func TestListSpinnerShownInHumanMode(t *testing.T) {
+	recentLaunch := time.Now().Add(-30 * time.Minute)
+	buf := new(bytes.Buffer)
+
+	deps := &listDeps{
+		describe: &mockDescribeInstances{
+			output: makeInstanceWithTime("i-spin1", "default", "alice", "running", "1.2.3.4", "m6i.xlarge", "complete", recentLaunch),
+		},
+		owner:          "alice",
+		idleTimeout:    60 * time.Minute,
+		versionChecker: stubVersionChecker(false, nil),
+	}
+
+	cmd := newListCommandWithDeps(deps)
+	root := newTestRoot()
+	root.AddCommand(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"list"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := buf.String()
+	// In non-interactive mode the spinner writes "[HH:MM:SS] Discovering VMs..."
+	if !strings.Contains(output, "Discovering VMs") {
+		t.Errorf("expected spinner message %q in human output, got:\n%s", "Discovering VMs", output)
+	}
+	// VM table must also be present — spinner must have stopped before output.
+	if !strings.Contains(output, "default") {
+		t.Errorf("VM table missing from output:\n%s", output)
+	}
+}
+
+// TestListSpinnerSuppressedInJSONMode verifies that no spinner messages appear
+// when --json is set. JSON consumers must receive a clean JSON object with no
+// prefixed spinner lines.
+func TestListSpinnerSuppressedInJSONMode(t *testing.T) {
+	recentLaunch := time.Now().Add(-30 * time.Minute)
+	buf := new(bytes.Buffer)
+
+	deps := &listDeps{
+		describe: &mockDescribeInstances{
+			output: makeInstanceWithTime("i-spin2", "default", "alice", "running", "1.2.3.4", "m6i.xlarge", "complete", recentLaunch),
+		},
+		owner:          "alice",
+		idleTimeout:    60 * time.Minute,
+		versionChecker: stubVersionChecker(false, nil),
+	}
+
+	cmd := newListCommandWithDeps(deps)
+	root := newTestRoot()
+	root.AddCommand(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"list", "--json"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := buf.String()
+	// Spinner message must NOT appear in JSON mode.
+	if strings.Contains(output, "Discovering VMs") {
+		t.Errorf("spinner message must not appear in --json mode, got:\n%s", output)
+	}
+	// Output must be valid JSON.
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &result); err != nil {
+		t.Errorf("JSON output invalid (spinner may have polluted it): %v\nOutput: %s", err, output)
+	}
+}
+
 // errThrottled is a reusable test error.
 var errThrottled = errForTest("throttled")
 
