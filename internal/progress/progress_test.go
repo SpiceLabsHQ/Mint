@@ -2,6 +2,7 @@ package progress_test
 
 import (
 	"bytes"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -300,4 +301,79 @@ func TestFailBeforeStartDoesNotPanic(t *testing.T) {
 	var buf bytes.Buffer
 	s := newTestSpinner(&buf)
 	s.Fail("No start yet")
+}
+
+// ---------------------------------------------------------------------------
+// NewCommandSpinner
+// ---------------------------------------------------------------------------
+
+// TestNewCommandSpinnerVerboseFalseDiscardsOutput verifies that when
+// verbose=false the spinner writes to io.Discard and produces no visible
+// output. The spinner must still be functional (Start/Stop without panic).
+func TestNewCommandSpinnerVerboseFalseDiscardsOutput(t *testing.T) {
+	var buf bytes.Buffer
+	sp := progress.NewCommandSpinner(&buf, false)
+	if sp == nil {
+		t.Fatal("NewCommandSpinner returned nil")
+	}
+
+	sp.Start("Should not appear")
+	sp.Update("Still nothing")
+	sp.Stop("Done")
+
+	// verbose=false discards all output; buf must be empty.
+	if buf.Len() != 0 {
+		t.Errorf("verbose=false: expected no output to writer, got %q", buf.String())
+	}
+}
+
+// TestNewCommandSpinnerVerboseFalseInteractiveDisabled verifies that when
+// verbose=false the spinner has Interactive=false (no goroutine races).
+func TestNewCommandSpinnerVerboseFalseInteractiveDisabled(t *testing.T) {
+	sp := progress.NewCommandSpinner(io.Discard, false)
+	if sp.Interactive {
+		t.Error("verbose=false: expected Interactive=false to prevent goroutine-based animation")
+	}
+}
+
+// TestNewCommandSpinnerVerboseTrueWritesToWriter verifies that when
+// verbose=true output is written to the provided writer.
+func TestNewCommandSpinnerVerboseTrueWritesToWriter(t *testing.T) {
+	var buf bytes.Buffer
+	sp := progress.NewCommandSpinner(&buf, true)
+	if sp == nil {
+		t.Fatal("NewCommandSpinner returned nil")
+	}
+
+	// Force non-interactive so the test does not spin a goroutine on a non-TTY.
+	sp.Interactive = false
+
+	sp.Start("Running step")
+	sp.Stop("Complete")
+
+	out := buf.String()
+	if !strings.Contains(out, "Running step") {
+		t.Errorf("verbose=true: expected output to contain message, got %q", out)
+	}
+}
+
+// TestNewCommandSpinnerNilWriterVerboseFalse verifies that a nil writer is
+// safe when verbose=false (falls through to io.Discard path, no panic).
+func TestNewCommandSpinnerNilWriterVerboseFalse(t *testing.T) {
+	sp := progress.NewCommandSpinner(nil, false)
+	if sp == nil {
+		t.Fatal("NewCommandSpinner(nil, false) returned nil")
+	}
+	sp.Start("safe")
+	sp.Stop("")
+}
+
+// TestNewCommandSpinnerNilWriterVerboseTrue verifies that a nil writer is
+// safe when verbose=true (falls through to os.Stdout, no panic).
+func TestNewCommandSpinnerNilWriterVerboseTrue(t *testing.T) {
+	sp := progress.NewCommandSpinner(nil, true)
+	if sp == nil {
+		t.Fatal("NewCommandSpinner(nil, true) returned nil")
+	}
+	// Do not call Start in this case; os.Stdout write is fine but noisy in tests.
 }
