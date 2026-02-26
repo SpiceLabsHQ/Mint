@@ -64,7 +64,8 @@ latest_version() {
 
 need curl
 need tar
-need sha256sum 2>/dev/null || need shasum
+command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1 \
+  || fatal "required tool not found: sha256sum or shasum"
 
 OS=$(detect_os)
 ARCH=$(detect_arch)
@@ -92,7 +93,7 @@ if command -v sha256sum >/dev/null 2>&1; then
     || fatal "checksum verification failed"
 else
   # macOS ships shasum, not sha256sum
-  grep "${ASSET}" checksums.txt | sed 's/  / /' | shasum -a 256 --check --status \
+  grep "${ASSET}" checksums.txt | shasum -a 256 --check --status \
     || fatal "checksum verification failed"
 fi
 ok "Checksum verified"
