@@ -24,9 +24,9 @@ builds:
       - arm64
     ldflags:
       - -s -w
-      - -X github.com/nicholasgasior/mint/cmd.version={{ .Version }}
-      - -X github.com/nicholasgasior/mint/cmd.commit={{ .Commit }}
-      - -X github.com/nicholasgasior/mint/cmd.date={{ .Date }}
+      - -X github.com/SpiceLabsHQ/Mint/cmd.version={{ .Version }}
+      - -X github.com/SpiceLabsHQ/Mint/cmd.commit={{ .Commit }}
+      - -X github.com/SpiceLabsHQ/Mint/cmd.date={{ .Date }}
 
 archives:
   - id: default

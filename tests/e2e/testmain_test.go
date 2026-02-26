@@ -3,7 +3,7 @@ package e2e_test
 import (
 	"testing"
 
-	"github.com/nicholasgasior/mint/internal/bootstrap"
+	"github.com/SpiceLabsHQ/Mint/internal/bootstrap"
 )
 
 // stubTemplateForE2ETests is a minimal bootstrap stub used by e2e tests.

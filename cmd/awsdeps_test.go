@@ -7,8 +7,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/nicholasgasior/mint/internal/cli"
-	"github.com/nicholasgasior/mint/internal/config"
+	"github.com/SpiceLabsHQ/Mint/internal/cli"
+	"github.com/SpiceLabsHQ/Mint/internal/config"
 )
 
 // fakeCmd builds a *cobra.Command with the given Use (name) attached to the

@@ -12,9 +12,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2instanceconnect"
-	mintaws "github.com/nicholasgasior/mint/internal/aws"
-	"github.com/nicholasgasior/mint/internal/cli"
-	"github.com/nicholasgasior/mint/internal/provision"
+	mintaws "github.com/SpiceLabsHQ/Mint/internal/aws"
+	"github.com/SpiceLabsHQ/Mint/internal/cli"
+	"github.com/SpiceLabsHQ/Mint/internal/provision"
 	"github.com/spf13/cobra"
 )
 

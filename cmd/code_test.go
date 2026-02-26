@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
-	"github.com/nicholasgasior/mint/internal/cli"
+	"github.com/SpiceLabsHQ/Mint/internal/cli"
 	"github.com/spf13/cobra"
 )
 

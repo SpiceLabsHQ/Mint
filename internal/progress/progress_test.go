@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nicholasgasior/mint/internal/progress"
+	"github.com/SpiceLabsHQ/Mint/internal/progress"
 )
 
 // ---------------------------------------------------------------------------

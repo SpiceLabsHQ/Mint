@@ -6,7 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/nicholasgasior/mint/internal/cli"
+	"github.com/SpiceLabsHQ/Mint/internal/cli"
 )
 
 // Build-time variables injected via ldflags. Dev defaults used when building
@@ -14,9 +14,9 @@ import (
 //
 // Set at build time with:
 //
-//	go build -ldflags "-X github.com/nicholasgasior/mint/cmd.version=1.0.0
-//	  -X github.com/nicholasgasior/mint/cmd.commit=abc1234
-//	  -X github.com/nicholasgasior/mint/cmd.date=2024-01-15"
+//	go build -ldflags "-X github.com/SpiceLabsHQ/Mint/cmd.version=1.0.0
+//	  -X github.com/SpiceLabsHQ/Mint/cmd.commit=abc1234
+//	  -X github.com/SpiceLabsHQ/Mint/cmd.date=2024-01-15"
 var (
 	version = "dev"
 	commit  = "none"

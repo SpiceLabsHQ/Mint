@@ -5,11 +5,11 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/nicholasgasior/mint/internal/cli"
-	"github.com/nicholasgasior/mint/internal/config"
-	mintaws "github.com/nicholasgasior/mint/internal/aws"
-	"github.com/nicholasgasior/mint/internal/sshconfig"
-	"github.com/nicholasgasior/mint/internal/vm"
+	"github.com/SpiceLabsHQ/Mint/internal/cli"
+	"github.com/SpiceLabsHQ/Mint/internal/config"
+	mintaws "github.com/SpiceLabsHQ/Mint/internal/aws"
+	"github.com/SpiceLabsHQ/Mint/internal/sshconfig"
+	"github.com/SpiceLabsHQ/Mint/internal/vm"
 	"github.com/spf13/cobra"
 )
 

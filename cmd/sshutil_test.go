@@ -11,8 +11,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2instanceconnect"
 
-	mintaws "github.com/nicholasgasior/mint/internal/aws"
-	"github.com/nicholasgasior/mint/internal/sshconfig"
+	mintaws "github.com/SpiceLabsHQ/Mint/internal/aws"
+	"github.com/SpiceLabsHQ/Mint/internal/sshconfig"
 )
 
 // mockSendKeyForRemote implements mintaws.SendSSHPublicKeyAPI for remote runner tests.

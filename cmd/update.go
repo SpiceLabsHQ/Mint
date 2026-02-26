@@ -10,7 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/nicholasgasior/mint/internal/selfupdate"
+	"github.com/SpiceLabsHQ/Mint/internal/selfupdate"
 )
 
 // SelfUpdater abstracts the self-update operations for dependency injection.

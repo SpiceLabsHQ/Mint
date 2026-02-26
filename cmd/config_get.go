@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/nicholasgasior/mint/internal/cli"
-	"github.com/nicholasgasior/mint/internal/config"
+	"github.com/SpiceLabsHQ/Mint/internal/cli"
+	"github.com/SpiceLabsHQ/Mint/internal/config"
 	"github.com/spf13/cobra"
 )
 
