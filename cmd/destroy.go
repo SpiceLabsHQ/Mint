@@ -11,6 +11,7 @@ import (
 
 	mintaws "github.com/nicholasgasior/mint/internal/aws"
 	"github.com/nicholasgasior/mint/internal/cli"
+	"github.com/nicholasgasior/mint/internal/progress"
 	"github.com/nicholasgasior/mint/internal/provision"
 	"github.com/nicholasgasior/mint/internal/vm"
 )
@@ -122,7 +123,12 @@ func runDestroy(cmd *cobra.Command, deps *destroyDeps) error {
 		}
 	}
 
-	// Build Destroyer and run.
+	// Spinner starts AFTER confirmation is obtained.
+	sp := progress.NewCommandSpinner(w, verbose)
+	sp.Start("Terminating VM...")
+
+	// Build Destroyer and run. The destroyer handles: terminate instance,
+	// optionally wait for termination, delete project volumes, release EIP.
 	destroyer := provision.NewDestroyer(
 		deps.describe,
 		deps.terminate,
@@ -133,25 +139,25 @@ func runDestroy(cmd *cobra.Command, deps *destroyDeps) error {
 		deps.releaseAddr,
 	).WithWaitTerminated(deps.waitTerminated)
 
-	if verbose {
-		fmt.Fprintf(w, "Terminating instance %s...\n", found.ID)
+	// Announce the wait phase before the blocking call so the spinner label
+	// reflects the longest-running part of the operation.
+	if deps.waitTerminated != nil {
+		sp.Update("Waiting for termination...")
 	}
 
 	result, err := destroyer.RunWithResult(ctx, deps.owner, vmName, confirmed)
 	if err != nil {
+		sp.Fail(err.Error())
 		return err
 	}
 
-	// Report results.
-	if verbose {
-		fmt.Fprintf(w, "Instance terminated.\n")
-		if result.VolumesDeleted > 0 {
-			fmt.Fprintf(w, "%d project volume(s) deleted.\n", result.VolumesDeleted)
-		}
-		if result.EIPReleased {
-			fmt.Fprintf(w, "Elastic IP released.\n")
-		}
+	// Surface the volume deletion phase after RunWithResult returns so the
+	// non-interactive log captures the cleanup that occurred.
+	if result.VolumesDeleted > 0 {
+		sp.Update(fmt.Sprintf("Deleting volume... (%d deleted)", result.VolumesDeleted))
 	}
+
+	sp.Stop("")
 
 	for _, warn := range result.Warnings {
 		fmt.Fprintf(w, "Warning: %s\n", warn)
