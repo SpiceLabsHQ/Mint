@@ -11,8 +11,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
-	mintaws "github.com/nicholasgasior/mint/internal/aws"
-	"github.com/nicholasgasior/mint/internal/cli"
+	mintaws "github.com/SpiceLabsHQ/Mint/internal/aws"
+	"github.com/SpiceLabsHQ/Mint/internal/cli"
 	"github.com/spf13/cobra"
 )
 
@@ -462,4 +462,67 @@ func TestIsTmuxNoSessionsError(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestSessionsSpinnerWiring confirms that the spinner emits progress messages
+// during session info fetch when --verbose is active.
+// In non-interactive (test) mode the spinner writes plain timestamped lines,
+// so we can assert on their presence in the output buffer.
+func TestSessionsSpinnerWiring(t *testing.T) {
+	t.Run("spinner emits Fetching session info during lookup", func(t *testing.T) {
+		buf := new(bytes.Buffer)
+
+		deps := &sessionsDeps{
+			describe: &mockDescribeForSessions{
+				output: makeRunningInstanceForSessions("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
+			},
+			owner:     "alice",
+			remoteRun: mockRemoteCommandRunner([]byte("main 1 1 1700000000\n"), nil),
+		}
+
+		cmd := newSessionsCommandWithDeps(deps)
+		root := newTestRootForSessions()
+		root.AddCommand(cmd)
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"--verbose", "sessions"})
+
+		if err := root.Execute(); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		output := buf.String()
+		if !strings.Contains(output, "Fetching session info") {
+			t.Errorf("expected spinner message %q in output, got:\n%s", "Fetching session info", output)
+		}
+	})
+
+	t.Run("spinner emits Fetching session info even when VM not found", func(t *testing.T) {
+		buf := new(bytes.Buffer)
+
+		deps := &sessionsDeps{
+			describe: &mockDescribeForSessions{
+				output: &ec2.DescribeInstancesOutput{},
+			},
+			owner:     "alice",
+			remoteRun: mockRemoteCommandRunner(nil, nil),
+		}
+
+		cmd := newSessionsCommandWithDeps(deps)
+		root := newTestRootForSessions()
+		root.AddCommand(cmd)
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"--verbose", "sessions"})
+
+		err := root.Execute()
+		if err == nil {
+			t.Fatal("expected error for missing VM")
+		}
+
+		output := buf.String()
+		if !strings.Contains(output, "Fetching session info") {
+			t.Errorf("expected spinner message %q in output, got:\n%s", "Fetching session info", output)
+		}
+	})
 }

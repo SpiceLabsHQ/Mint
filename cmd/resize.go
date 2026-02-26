@@ -10,9 +10,10 @@ import (
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/spf13/cobra"
 
-	mintaws "github.com/nicholasgasior/mint/internal/aws"
-	"github.com/nicholasgasior/mint/internal/cli"
-	"github.com/nicholasgasior/mint/internal/vm"
+	mintaws "github.com/SpiceLabsHQ/Mint/internal/aws"
+	"github.com/SpiceLabsHQ/Mint/internal/cli"
+	"github.com/SpiceLabsHQ/Mint/internal/progress"
+	"github.com/SpiceLabsHQ/Mint/internal/vm"
 )
 
 // resizeDeps holds the injectable dependencies for the resize command.
@@ -88,7 +89,7 @@ func runResize(cmd *cobra.Command, deps *resizeDeps, newType string) error {
 	}
 
 	w := cmd.OutOrStdout()
-	sp := newCommandSpinner(w, verbose)
+	sp := progress.NewCommandSpinner(w, verbose)
 
 	// Discover VM.
 	sp.Start(fmt.Sprintf("Discovering VM %q for owner %q...", vmName, deps.owner))

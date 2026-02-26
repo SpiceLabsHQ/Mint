@@ -14,11 +14,12 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/crypto/ssh"
 
-	mintaws "github.com/nicholasgasior/mint/internal/aws"
-	"github.com/nicholasgasior/mint/internal/cli"
-	"github.com/nicholasgasior/mint/internal/config"
-	"github.com/nicholasgasior/mint/internal/sshconfig"
-	"github.com/nicholasgasior/mint/internal/vm"
+	mintaws "github.com/SpiceLabsHQ/Mint/internal/aws"
+	"github.com/SpiceLabsHQ/Mint/internal/cli"
+	"github.com/SpiceLabsHQ/Mint/internal/config"
+	"github.com/SpiceLabsHQ/Mint/internal/progress"
+	"github.com/SpiceLabsHQ/Mint/internal/sshconfig"
+	"github.com/SpiceLabsHQ/Mint/internal/vm"
 )
 
 // sshDeps holds the injectable dependencies for the ssh command.
@@ -77,35 +78,46 @@ func runSSH(cmd *cobra.Command, deps *sshDeps, extraArgs []string) error {
 
 	cliCtx := cli.FromCommand(cmd)
 	vmName := "default"
+	verbose := false
 	if cliCtx != nil {
 		vmName = cliCtx.VM
+		verbose = cliCtx.Verbose
 	}
 
+	sp := progress.NewCommandSpinner(cmd.OutOrStdout(), verbose)
+
 	// Discover VM by owner + VM name.
+	sp.Start("Looking up VM...")
 	found, err := vm.FindVM(ctx, deps.describe, deps.owner, vmName)
 	if err != nil {
+		sp.Fail(err.Error())
 		return fmt.Errorf("discovering VM: %w", err)
 	}
 	if found == nil {
+		sp.Stop("")
 		return fmt.Errorf("no VM %q found — run mint up first to create one", vmName)
 	}
 
 	// Verify VM is running.
 	if found.State != string(ec2types.InstanceStateNameRunning) {
+		sp.Stop("")
 		return fmt.Errorf("VM %q (%s) is not running (state: %s) — run mint up to start it",
 			vmName, found.ID, found.State)
 	}
 
 	// Check bootstrap status before attempting any SSH operation (ADR-0001).
 	// The SSH daemon is not listening until bootstrap completes.
+	sp.Update("Checking bootstrap status...")
 	switch found.BootstrapStatus {
 	case "pending":
+		sp.Stop("")
 		return fmt.Errorf(
 			"VM %q bootstrap is not complete (status: pending).\n"+
 				"Run 'mint doctor' for details or 'mint recreate' to rebuild.",
 			vmName,
 		)
 	case "failed":
+		sp.Stop("")
 		return fmt.Errorf(
 			"VM %q bootstrap failed.\nRun 'mint recreate' to rebuild.",
 			vmName,
@@ -114,8 +126,13 @@ func runSSH(cmd *cobra.Command, deps *sshDeps, extraArgs []string) error {
 
 	// Use availability zone from FindVM (already populated via DescribeInstances).
 	if found.AvailabilityZone == "" {
+		sp.Stop("")
 		return fmt.Errorf("VM %q (%s) has no availability zone — this is unexpected, try mint destroy && mint up", vmName, found.ID)
 	}
+
+	// Spinner must be fully stopped before exec — exec replaces the process and
+	// any residual goroutine would leave the terminal in a dirty state.
+	sp.Stop("")
 
 	// Generate ephemeral SSH key pair.
 	pubKey, privKeyPath, cleanup, err := generateEphemeralKeyPair()

@@ -15,16 +15,16 @@ import (
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/spf13/cobra"
 
-	mintaws "github.com/nicholasgasior/mint/internal/aws"
-	"github.com/nicholasgasior/mint/internal/bootstrap"
-	"github.com/nicholasgasior/mint/internal/cli"
-	"github.com/nicholasgasior/mint/internal/config"
-	"github.com/nicholasgasior/mint/internal/progress"
-	"github.com/nicholasgasior/mint/internal/provision"
-	"github.com/nicholasgasior/mint/internal/session"
-	"github.com/nicholasgasior/mint/internal/sshconfig"
-	"github.com/nicholasgasior/mint/internal/tags"
-	"github.com/nicholasgasior/mint/internal/vm"
+	mintaws "github.com/SpiceLabsHQ/Mint/internal/aws"
+	"github.com/SpiceLabsHQ/Mint/internal/bootstrap"
+	"github.com/SpiceLabsHQ/Mint/internal/cli"
+	"github.com/SpiceLabsHQ/Mint/internal/config"
+	"github.com/SpiceLabsHQ/Mint/internal/progress"
+	"github.com/SpiceLabsHQ/Mint/internal/provision"
+	"github.com/SpiceLabsHQ/Mint/internal/session"
+	"github.com/SpiceLabsHQ/Mint/internal/sshconfig"
+	"github.com/SpiceLabsHQ/Mint/internal/tags"
+	"github.com/SpiceLabsHQ/Mint/internal/vm"
 )
 
 // recreateDeps holds the injectable dependencies for the recreate command.
@@ -92,7 +92,7 @@ func newRecreateCommandWithDeps(deps *recreateDeps) *cobra.Command {
 			}
 			cliCtx := cli.FromCommand(cmd)
 			verbose := cliCtx != nil && cliCtx.Verbose
-			sp := newCommandSpinner(cmd.OutOrStdout(), verbose)
+			sp := progress.NewCommandSpinner(cmd.OutOrStdout(), verbose)
 			var pollerWriter io.Writer
 			if verbose {
 				pollerWriter = &spinnerWriter{sp: sp}
@@ -167,7 +167,7 @@ func runRecreate(cmd *cobra.Command, deps *recreateDeps) error {
 
 	force, _ := cmd.Flags().GetBool("force")
 	w := cmd.OutOrStdout()
-	sp := newCommandSpinner(w, verbose)
+	sp := progress.NewCommandSpinner(w, verbose)
 
 	// Discover VM.
 	sp.Start(fmt.Sprintf("Discovering VM %q for owner %q...", vmName, deps.owner))

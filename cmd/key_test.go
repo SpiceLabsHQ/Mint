@@ -11,11 +11,11 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ec2instanceconnect"
-	"github.com/nicholasgasior/mint/internal/cli"
-	"github.com/nicholasgasior/mint/internal/sshconfig"
+	"github.com/SpiceLabsHQ/Mint/internal/cli"
+	"github.com/SpiceLabsHQ/Mint/internal/sshconfig"
 	"github.com/spf13/cobra"
 
-	mintaws "github.com/nicholasgasior/mint/internal/aws"
+	mintaws "github.com/SpiceLabsHQ/Mint/internal/aws"
 )
 
 // testEd25519Key is a valid ed25519 public key for testing.

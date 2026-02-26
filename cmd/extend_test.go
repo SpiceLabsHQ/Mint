@@ -11,10 +11,10 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2instanceconnect"
-	"github.com/nicholasgasior/mint/internal/cli"
+	"github.com/SpiceLabsHQ/Mint/internal/cli"
 	"github.com/spf13/cobra"
 
-	mintaws "github.com/nicholasgasior/mint/internal/aws"
+	mintaws "github.com/SpiceLabsHQ/Mint/internal/aws"
 )
 
 // mockDescribeForExtend implements mintaws.DescribeInstancesAPI for extend tests.
@@ -429,4 +429,78 @@ func TestExtendCommandUseAndShort(t *testing.T) {
 	if cmd.Short == "" {
 		t.Error("Short description should not be empty")
 	}
+}
+
+// TestExtendSpinnerWiring confirms that spinner messages are emitted during
+// VM lookup and session extend phases when --verbose is active.
+// In non-interactive (test) mode the spinner writes plain timestamped lines,
+// so we can assert on their presence in the output buffer.
+func TestExtendSpinnerWiring(t *testing.T) {
+	t.Run("spinner emits Looking up VM during discovery", func(t *testing.T) {
+		buf := new(bytes.Buffer)
+
+		runner, _ := newMockRemoteRunner([]byte("ok"), nil)
+		deps := &extendDeps{
+			describe: &mockDescribeForExtend{
+				output: makeRunningInstanceForExtend("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
+			},
+			sendKey: &mockSendKeyForExtend{
+				output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
+			},
+			remote:      runner,
+			owner:       "alice",
+			idleTimeout: 30,
+		}
+
+		cmd := newExtendCommandWithDeps(deps)
+		root := newTestRootForExtend()
+		root.AddCommand(cmd)
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"--verbose", "extend"})
+
+		if err := root.Execute(); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		output := buf.String()
+		if !strings.Contains(output, "Looking up VM") {
+			t.Errorf("expected spinner message %q in output, got:\n%s", "Looking up VM", output)
+		}
+		if !strings.Contains(output, "Extending session") {
+			t.Errorf("expected spinner message %q in output, got:\n%s", "Extending session", output)
+		}
+	})
+
+	t.Run("spinner emits Looking up VM even when VM not found", func(t *testing.T) {
+		buf := new(bytes.Buffer)
+
+		runner, _ := newMockRemoteRunner(nil, nil)
+		deps := &extendDeps{
+			describe: &mockDescribeForExtend{
+				output: &ec2.DescribeInstancesOutput{},
+			},
+			sendKey:     &mockSendKeyForExtend{},
+			remote:      runner,
+			owner:       "alice",
+			idleTimeout: 30,
+		}
+
+		cmd := newExtendCommandWithDeps(deps)
+		root := newTestRootForExtend()
+		root.AddCommand(cmd)
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"--verbose", "extend"})
+
+		err := root.Execute()
+		if err == nil {
+			t.Fatal("expected error for missing VM")
+		}
+
+		output := buf.String()
+		if !strings.Contains(output, "Looking up VM") {
+			t.Errorf("expected spinner message %q in output, got:\n%s", "Looking up VM", output)
+		}
+	})
 }

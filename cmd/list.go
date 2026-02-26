@@ -11,12 +11,13 @@ import (
 
 	"github.com/spf13/cobra"
 
-	mintaws "github.com/nicholasgasior/mint/internal/aws"
-	"github.com/nicholasgasior/mint/internal/cli"
-	"github.com/nicholasgasior/mint/internal/config"
-	"github.com/nicholasgasior/mint/internal/tags"
-	versioncheck "github.com/nicholasgasior/mint/internal/version"
-	"github.com/nicholasgasior/mint/internal/vm"
+	mintaws "github.com/SpiceLabsHQ/Mint/internal/aws"
+	"github.com/SpiceLabsHQ/Mint/internal/cli"
+	"github.com/SpiceLabsHQ/Mint/internal/config"
+	"github.com/SpiceLabsHQ/Mint/internal/progress"
+	"github.com/SpiceLabsHQ/Mint/internal/tags"
+	versioncheck "github.com/SpiceLabsHQ/Mint/internal/version"
+	"github.com/SpiceLabsHQ/Mint/internal/vm"
 )
 
 // VersionCheckerFunc is a function that checks for an available update.
@@ -117,12 +118,23 @@ func runList(cmd *cobra.Command, deps *listDeps) error {
 		jsonOutput = cliCtx.JSON
 	}
 
+	w := cmd.OutOrStdout()
+
+	// Show a spinner during the AWS discovery call. Suppress in JSON mode so
+	// spinner lines do not corrupt machine-readable output. NewCommandSpinner
+	// with verbose=false routes output to io.Discard, effectively suppressing
+	// all spinner activity; verbose=true routes to the command's writer.
+	sp := progress.NewCommandSpinner(w, !jsonOutput)
+	sp.Start("Discovering VMs...")
+
 	vms, err := vm.ListVMs(ctx, deps.describe, deps.owner)
 	if err != nil {
+		sp.Fail(err.Error())
 		return fmt.Errorf("listing VMs: %w", err)
 	}
 
-	w := cmd.OutOrStdout()
+	// Stop the spinner before printing any output to prevent interleaving.
+	sp.Stop("")
 
 	if jsonOutput {
 		return writeListJSON(w, vms, deps.versionChecker)

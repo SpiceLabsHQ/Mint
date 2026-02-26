@@ -1,4 +1,4 @@
-module github.com/nicholasgasior/mint
+module github.com/SpiceLabsHQ/Mint
 
 go 1.24.0
 

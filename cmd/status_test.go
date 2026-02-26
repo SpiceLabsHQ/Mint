@@ -14,7 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2instanceconnect"
-	mintaws "github.com/nicholasgasior/mint/internal/aws"
+	mintaws "github.com/SpiceLabsHQ/Mint/internal/aws"
 )
 
 func TestStatusCommand(t *testing.T) {
@@ -942,6 +942,84 @@ func TestStatusJSONErrorRoutingHappyPath(t *testing.T) {
 	}
 	if _, hasID := result["id"]; !hasID {
 		t.Errorf("happy path JSON must contain \"id\" key; got: %s", stdout.String())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests: Spinner wiring
+// ---------------------------------------------------------------------------
+
+// TestStatusSpinnerShownInHumanMode verifies that a spinner message is emitted
+// during AWS VM lookup when --json is NOT set. In non-interactive mode the
+// Spinner writes a timestamped line; we verify the message appears in output.
+func TestStatusSpinnerShownInHumanMode(t *testing.T) {
+	recentLaunch := time.Now().Add(-30 * time.Minute)
+	buf := new(bytes.Buffer)
+
+	deps := &statusDeps{
+		describe: &mockDescribeInstances{
+			output: makeInstanceWithTime("i-spin3", "default", "alice", "running", "1.2.3.4", "m6i.xlarge", "complete", recentLaunch),
+		},
+		owner:          "alice",
+		versionChecker: stubVersionChecker(false, nil),
+	}
+
+	cmd := newStatusCommandWithDeps(deps)
+	root := newTestRoot()
+	root.AddCommand(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"status"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := buf.String()
+	// In non-interactive mode the spinner writes "[HH:MM:SS] Checking VM status..."
+	if !strings.Contains(output, "Checking VM status") {
+		t.Errorf("expected spinner message %q in human output, got:\n%s", "Checking VM status", output)
+	}
+	// VM details must also be present — spinner must have stopped before output.
+	if !strings.Contains(output, "i-spin3") {
+		t.Errorf("VM details missing from output:\n%s", output)
+	}
+}
+
+// TestStatusSpinnerSuppressedInJSONMode verifies that no spinner messages appear
+// when --json is set. JSON consumers must receive a clean JSON object.
+func TestStatusSpinnerSuppressedInJSONMode(t *testing.T) {
+	recentLaunch := time.Now().Add(-30 * time.Minute)
+	buf := new(bytes.Buffer)
+
+	deps := &statusDeps{
+		describe: &mockDescribeInstances{
+			output: makeInstanceWithTime("i-spin4", "default", "alice", "running", "1.2.3.4", "m6i.xlarge", "complete", recentLaunch),
+		},
+		owner:          "alice",
+		versionChecker: stubVersionChecker(false, nil),
+	}
+
+	cmd := newStatusCommandWithDeps(deps)
+	root := newTestRoot()
+	root.AddCommand(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"status", "--json"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := buf.String()
+	// Spinner message must NOT appear in JSON mode.
+	if strings.Contains(output, "Checking VM status") {
+		t.Errorf("spinner message must not appear in --json mode, got:\n%s", output)
+	}
+	// Output must be valid JSON.
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &result); err != nil {
+		t.Errorf("JSON output invalid (spinner may have polluted it): %v\nOutput: %s", err, output)
 	}
 }
 

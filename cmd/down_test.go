@@ -10,7 +10,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
-	"github.com/nicholasgasior/mint/internal/cli"
+	"github.com/SpiceLabsHQ/Mint/internal/cli"
 	"github.com/spf13/cobra"
 )
 
@@ -186,7 +186,21 @@ func TestDownCommand(t *testing.T) {
 			vmName:         "default",
 			verbose:        true,
 			wantStopCalled: true,
-			wantOutput:     []string{"Discovering VM", "Stopping instance", "i-abc123"},
+			wantOutput:     []string{"Discovering VM", "Stopping VM", "i-abc123"},
+		},
+		{
+			name: "spinner shows stopping and waiting phases",
+			describe: &mockDescribeInstances{
+				output: makeRunningInstance("i-abc123", "default", "alice"),
+			},
+			stop: &mockStopInstances{
+				output: &ec2.StopInstancesOutput{},
+			},
+			owner:          "alice",
+			vmName:         "default",
+			verbose:        true,
+			wantStopCalled: true,
+			wantOutput:     []string{"Stopping VM", "Waiting for VM to stop"},
 		},
 		{
 			name: "stop sends correct instance ID to non-default vm",

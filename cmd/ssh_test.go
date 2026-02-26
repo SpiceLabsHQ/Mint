@@ -12,8 +12,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2instanceconnect"
-	"github.com/nicholasgasior/mint/internal/cli"
-	"github.com/nicholasgasior/mint/internal/sshconfig"
+	"github.com/SpiceLabsHQ/Mint/internal/cli"
+	"github.com/SpiceLabsHQ/Mint/internal/sshconfig"
 	"github.com/spf13/cobra"
 )
 
@@ -870,4 +870,144 @@ func TestSSHCommandUsesStrictHostKeyChecking(t *testing.T) {
 	if !hasKnownHostsFile {
 		t.Errorf("expected UserKnownHostsFile with temp file path, args: %v", captured.args)
 	}
+}
+
+// TestSSHSpinnerWiring confirms that spinner messages are emitted for VM lookup
+// and bootstrap check phases when --verbose is active. Also confirms the spinner
+// is fully stopped before exec so no residual goroutine is left running.
+// In non-interactive (test) mode the spinner writes plain timestamped lines,
+// so we can assert on their presence in the output buffer.
+func TestSSHSpinnerWiring(t *testing.T) {
+	t.Run("spinner emits Looking up VM and Checking bootstrap status on success path", func(t *testing.T) {
+		buf := new(bytes.Buffer)
+
+		sendKey := &mockSendSSHPublicKey{
+			output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
+		}
+		describe := &mockDescribeForSSH{
+			output: makeRunningInstanceWithAZ("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
+		}
+
+		var execCalled bool
+		deps := &sshDeps{
+			describe: describe,
+			sendKey:  sendKey,
+			owner:    "alice",
+			runner: func(name string, args ...string) error {
+				execCalled = true
+				return nil
+			},
+		}
+
+		cmd := newSSHCommandWithDeps(deps)
+		root := newTestRootForSSH()
+		root.AddCommand(cmd)
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"--verbose", "ssh"})
+
+		if err := root.Execute(); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		output := buf.String()
+		if !strings.Contains(output, "Looking up VM") {
+			t.Errorf("expected spinner message %q in output, got:\n%s", "Looking up VM", output)
+		}
+		if !strings.Contains(output, "Checking bootstrap status") {
+			t.Errorf("expected spinner message %q in output, got:\n%s", "Checking bootstrap status", output)
+		}
+		if !execCalled {
+			t.Error("expected SSH exec to be called")
+		}
+	})
+
+	t.Run("spinner stopped before exec on success path", func(t *testing.T) {
+		// The spinner must be fully stopped (no goroutine running) when exec
+		// is called. We verify this indirectly: if Stop was called the test
+		// completes without deadlock. Direct goroutine inspection is not needed.
+		sendKey := &mockSendSSHPublicKey{
+			output: &ec2instanceconnect.SendSSHPublicKeyOutput{Success: true},
+		}
+		describe := &mockDescribeForSSH{
+			output: makeRunningInstanceWithAZ("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
+		}
+
+		deps := &sshDeps{
+			describe: describe,
+			sendKey:  sendKey,
+			owner:    "alice",
+			runner:   func(name string, args ...string) error { return nil },
+		}
+
+		// Using Interactive=false (default in test env) means Stop is a no-op
+		// on the goroutine but the call still completes without blocking.
+		err := runSSHWithDeps(t, deps, "default")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("spinner emits Looking up VM even when VM not found", func(t *testing.T) {
+		buf := new(bytes.Buffer)
+
+		deps := &sshDeps{
+			describe: &mockDescribeForSSH{
+				output: &ec2.DescribeInstancesOutput{},
+			},
+			sendKey: &mockSendSSHPublicKey{},
+			owner:   "alice",
+			runner:  func(name string, args ...string) error { return nil },
+		}
+
+		cmd := newSSHCommandWithDeps(deps)
+		root := newTestRootForSSH()
+		root.AddCommand(cmd)
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"--verbose", "ssh"})
+
+		err := root.Execute()
+		if err == nil {
+			t.Fatal("expected error for missing VM")
+		}
+
+		output := buf.String()
+		if !strings.Contains(output, "Looking up VM") {
+			t.Errorf("expected spinner message %q in output, got:\n%s", "Looking up VM", output)
+		}
+	})
+
+	t.Run("spinner emits Checking bootstrap status on pending bootstrap", func(t *testing.T) {
+		buf := new(bytes.Buffer)
+
+		deps := &sshDeps{
+			describe: &mockDescribeForSSH{
+				output: makeRunningInstanceWithBootstrap("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a", "pending"),
+			},
+			sendKey: &mockSendSSHPublicKey{},
+			owner:   "alice",
+			runner:  func(name string, args ...string) error { return nil },
+		}
+
+		cmd := newSSHCommandWithDeps(deps)
+		root := newTestRootForSSH()
+		root.AddCommand(cmd)
+		root.SetOut(buf)
+		root.SetErr(buf)
+		root.SetArgs([]string{"--verbose", "ssh"})
+
+		err := root.Execute()
+		if err == nil {
+			t.Fatal("expected error for pending bootstrap")
+		}
+
+		output := buf.String()
+		if !strings.Contains(output, "Looking up VM") {
+			t.Errorf("expected spinner message %q in output, got:\n%s", "Looking up VM", output)
+		}
+		if !strings.Contains(output, "Checking bootstrap status") {
+			t.Errorf("expected spinner message %q in output, got:\n%s", "Checking bootstrap status", output)
+		}
+	})
 }

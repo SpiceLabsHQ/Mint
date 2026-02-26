@@ -3,7 +3,7 @@ package cmd
 import (
 	"testing"
 
-	"github.com/nicholasgasior/mint/internal/bootstrap"
+	"github.com/SpiceLabsHQ/Mint/internal/bootstrap"
 )
 
 // stubTemplateForTests is a minimal bootstrap stub used by cmd-layer tests.

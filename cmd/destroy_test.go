@@ -11,7 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
-	"github.com/nicholasgasior/mint/internal/cli"
+	"github.com/SpiceLabsHQ/Mint/internal/cli"
 	"github.com/spf13/cobra"
 )
 
@@ -207,12 +207,38 @@ func TestDestroyCommand(t *testing.T) {
 			wantErrContain: "no VM",
 		},
 		{
-			name:  "verbose shows progress phases",
-			deps:  newHappyDestroyDeps("alice"),
-			args:  []string{"destroy", "--yes", "--verbose"},
+			name: "verbose shows progress phases",
+			deps: newHappyDestroyDeps("alice"),
+			args: []string{"destroy", "--yes", "--verbose"},
 			wantOutput: []string{
 				"Discovering VM",
-				"Terminating instance",
+				"Terminating VM",
+			},
+		},
+		{
+			name: "spinner shows termination and wait phases with waiter set",
+			deps: func() *destroyDeps {
+				d := newHappyDestroyDeps("alice")
+				d.waitTerminated = &mockDestroyWaitTerminated{}
+				return d
+			}(),
+			args: []string{"destroy", "--yes", "--verbose"},
+			wantOutput: []string{
+				"Terminating VM",
+				"Waiting for termination",
+			},
+		},
+		{
+			name: "spinner shows volume deletion phase when volumes deleted",
+			deps: func() *destroyDeps {
+				d := newHappyDestroyDeps("alice")
+				d.waitTerminated = &mockDestroyWaitTerminated{}
+				return d
+			}(),
+			args: []string{"destroy", "--yes", "--verbose"},
+			wantOutput: []string{
+				"Terminating VM",
+				"Deleting volume",
 			},
 		},
 		{

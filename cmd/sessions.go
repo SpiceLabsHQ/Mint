@@ -12,9 +12,10 @@ import (
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/spf13/cobra"
 
-	mintaws "github.com/nicholasgasior/mint/internal/aws"
-	"github.com/nicholasgasior/mint/internal/cli"
-	"github.com/nicholasgasior/mint/internal/vm"
+	mintaws "github.com/SpiceLabsHQ/Mint/internal/aws"
+	"github.com/SpiceLabsHQ/Mint/internal/cli"
+	"github.com/SpiceLabsHQ/Mint/internal/progress"
+	"github.com/SpiceLabsHQ/Mint/internal/vm"
 )
 
 // sessionsDeps holds the injectable dependencies for the sessions command.
@@ -76,22 +77,31 @@ func runSessions(cmd *cobra.Command, deps *sessionsDeps) error {
 	cliCtx := cli.FromCommand(cmd)
 	vmName := "default"
 	jsonOutput := false
+	verbose := false
 	if cliCtx != nil {
 		vmName = cliCtx.VM
 		jsonOutput = cliCtx.JSON
+		verbose = cliCtx.Verbose
 	}
 
-	// Discover VM by owner + VM name.
+	sp := progress.NewCommandSpinner(cmd.OutOrStdout(), verbose)
+
+	// Discover VM and fetch session info.
+	sp.Start("Fetching session info...")
+
 	found, err := vm.FindVM(ctx, deps.describe, deps.owner, vmName)
 	if err != nil {
+		sp.Fail(err.Error())
 		return fmt.Errorf("discovering VM: %w", err)
 	}
 	if found == nil {
+		sp.Stop("")
 		return fmt.Errorf("no VM %q found — run mint up first to create one", vmName)
 	}
 
 	// Verify VM is running.
 	if found.State != string(ec2types.InstanceStateNameRunning) {
+		sp.Stop("")
 		return fmt.Errorf("VM %q (%s) is not running (state: %s) — run mint up to start it",
 			vmName, found.ID, found.State)
 	}
@@ -114,8 +124,10 @@ func runSessions(cmd *cobra.Command, deps *sessionsDeps) error {
 	)
 	if err != nil {
 		if isTmuxNoSessionsError(err) {
+			sp.Stop("")
 			return writeSessionsOutput(cmd.OutOrStdout(), nil, jsonOutput)
 		}
+		sp.Fail(err.Error())
 		if isSSHConnectionError(err) {
 			return fmt.Errorf(
 				"cannot connect to VM %q (port 41122 refused).\n"+
@@ -126,6 +138,7 @@ func runSessions(cmd *cobra.Command, deps *sessionsDeps) error {
 		return fmt.Errorf("listing tmux sessions: %w", err)
 	}
 
+	sp.Stop("")
 	sessions := parseTmuxSessions(string(output))
 	return writeSessionsOutput(cmd.OutOrStdout(), sessions, jsonOutput)
 }
