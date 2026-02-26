@@ -58,7 +58,6 @@ type recreateDeps struct {
 	resolveAMI          provision.AMIResolver
 	verifyBootstrap     provision.BootstrapVerifier
 	removeHostKey       func(vmName string) error
-	sleepFunc           func(time.Duration)
 }
 
 // WithWaitVolumeAvailable sets the waiter used to poll until the EBS volume

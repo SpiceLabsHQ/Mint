@@ -112,34 +112,6 @@ func (m *mockDescribeAddresses) DescribeAddresses(ctx context.Context, params *e
 	return m.output, m.err
 }
 
-// mockDescribeAddressesSequence returns successive outputs from a queue.
-// The first call returns outputs[0], the second outputs[1], etc.
-// Once the queue is exhausted, the last output is repeated.
-// The tag-filter discovery call (no AllocationIds) uses the fixed tagOutput.
-// Polling calls (with AllocationIds) consume from the pollOutputs queue.
-type mockDescribeAddressesSequence struct {
-	tagOutput   *ec2.DescribeAddressesOutput
-	pollOutputs []*ec2.DescribeAddressesOutput
-	pollIdx     int
-	callCount   int
-}
-
-func (m *mockDescribeAddressesSequence) DescribeAddresses(ctx context.Context, params *ec2.DescribeAddressesInput, optFns ...func(*ec2.Options)) (*ec2.DescribeAddressesOutput, error) {
-	m.callCount++
-	// Tag-filter discovery: no AllocationIds filter.
-	if len(params.AllocationIds) == 0 {
-		return m.tagOutput, nil
-	}
-	// Polling call: consume from the queue.
-	if m.pollIdx >= len(m.pollOutputs) {
-		// Return the last output if queue is exhausted.
-		return m.pollOutputs[len(m.pollOutputs)-1], nil
-	}
-	out := m.pollOutputs[m.pollIdx]
-	m.pollIdx++
-	return out, nil
-}
-
 type mockAssociateAddress struct {
 	output   *ec2.AssociateAddressOutput
 	err      error
