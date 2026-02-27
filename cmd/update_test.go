@@ -291,6 +291,9 @@ func TestUpdateCommand_NetworkFailure(t *testing.T) {
 }
 
 func TestUpdateCommand_DownloadFailure(t *testing.T) {
+	dir := t.TempDir()
+	binaryPath := filepath.Join(dir, "mint")
+
 	mock := &mockUpdater{
 		checkLatestFn: func(ctx context.Context) (*selfupdate.Release, error) {
 			return &selfupdate.Release{TagName: "v2.0.0"}, nil
@@ -302,7 +305,7 @@ func TestUpdateCommand_DownloadFailure(t *testing.T) {
 
 	cmd := newUpdateCommandWithDeps(&updateDeps{
 		updater:    mock,
-		binaryPath: "/usr/local/bin/mint",
+		binaryPath: binaryPath,
 	})
 
 	var buf bytes.Buffer
