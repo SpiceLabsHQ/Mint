@@ -1426,3 +1426,80 @@ func TestErrorIdentityResolverReturnsError(t *testing.T) {
 		t.Errorf("expected sentinel error, got: %v", err)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// SSO re-auth detection in doctor checkCredentials
+// ---------------------------------------------------------------------------
+
+// TestDoctorCheckCredentials_SSOExpiredWithProfile verifies that when the
+// identity resolver returns an SSO token-expiry error and a profile is set on
+// the deps, the doctor output contains the "aws sso login --profile" hint
+// rather than the generic credential message.
+func TestDoctorCheckCredentials_SSOExpiredWithProfile(t *testing.T) {
+	deps := newHappyDoctorDeps(t)
+	ssoErr := fmt.Errorf("token has expired — re-authentication required")
+	deps.identityResolver = &errorIdentityResolver{err: ssoErr}
+	deps.profile = "my-sso-profile"
+
+	result := checkCredentials(context.Background(), deps)
+
+	if result.status != "FAIL" {
+		t.Errorf("expected status FAIL, got %q", result.status)
+	}
+	if !strings.Contains(result.message, "aws sso login --profile my-sso-profile") {
+		t.Errorf("expected SSO login hint with profile in message, got: %q", result.message)
+	}
+}
+
+// TestDoctorCheckCredentials_SSOExpiredNoProfile verifies that when the identity
+// resolver returns an SSO token-expiry error but no profile is set, the doctor
+// output contains the generic credential message (not a blank --profile hint).
+func TestDoctorCheckCredentials_SSOExpiredNoProfile(t *testing.T) {
+	deps := newHappyDoctorDeps(t)
+	ssoErr := fmt.Errorf("token has expired — re-authentication required")
+	deps.identityResolver = &errorIdentityResolver{err: ssoErr}
+	deps.profile = ""
+
+	result := checkCredentials(context.Background(), deps)
+
+	if result.status != "FAIL" {
+		t.Errorf("expected status FAIL, got %q", result.status)
+	}
+	// Without a profile, the generic message must appear.
+	if strings.Contains(result.message, "aws sso login --profile") {
+		t.Errorf("expected generic message without profile hint, got: %q", result.message)
+	}
+	if !strings.Contains(result.message, "aws configure") {
+		t.Errorf("expected generic aws configure hint, got: %q", result.message)
+	}
+}
+
+// TestDoctorCheckCredentials_SSOExpiredE2E runs the full doctor command with an
+// SSO-expired error injected via errorIdentityResolver and a profile set on
+// deps, asserting the CLI output surfaces the sso login hint.
+func TestDoctorCheckCredentials_SSOExpiredE2E(t *testing.T) {
+	deps := newHappyDoctorDeps(t)
+	ssoErr := fmt.Errorf("SSOProviderInvalidToken: session has expired")
+	deps.identityResolver = &errorIdentityResolver{err: ssoErr}
+	deps.profile = "dev-sso"
+
+	buf := new(bytes.Buffer)
+	cmd := newDoctorCommandWithDeps(deps)
+	root := newDoctorTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"doctor"})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error from failed SSO credential check")
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "[FAIL]") {
+		t.Errorf("expected [FAIL] label in output, got: %s", output)
+	}
+	if !strings.Contains(output, "aws sso login --profile dev-sso") {
+		t.Errorf("expected SSO login hint in output, got: %s", output)
+	}
+}

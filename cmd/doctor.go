@@ -40,6 +40,9 @@ type doctorDeps struct {
 	configDir         string
 	sshConfigPath     string
 	owner             string
+	// profile is the effective AWS profile (--profile flag or config aws_profile).
+	// Used by checkCredentials to produce an actionable SSO re-auth message.
+	profile string
 }
 
 // cachedOwnerResolver is a production implementation of identityResolverAPI
@@ -88,6 +91,20 @@ func newDoctorCommandWithDeps(deps *doctorDeps) *cobra.Command {
 
 			configDir := config.DefaultConfigDir()
 
+			// Derive the effective profile (--profile flag > config aws_profile) so
+			// that checkCredentials can produce an actionable SSO re-auth message
+			// even when initAWSClients fails before returning a clients struct.
+			cliCtx := cli.FromCommand(cmd)
+			effectiveProfile := ""
+			if cliCtx != nil {
+				effectiveProfile = cliCtx.Profile
+			}
+			if effectiveProfile == "" {
+				if mintCfg, err := config.Load(configDir); err == nil {
+					effectiveProfile = mintCfg.AWSProfile
+				}
+			}
+
 			// doctor initializes its own AWS clients (commandNeedsAWS returns false
 			// for doctor) so that a credential failure is surfaced as a check result
 			// rather than a fatal startup error. When credentials are unavailable,
@@ -98,6 +115,7 @@ func newDoctorCommandWithDeps(deps *doctorDeps) *cobra.Command {
 					identityResolver: &errorIdentityResolver{err: awsErr},
 					configDir:        configDir,
 					sshConfigPath:    defaultSSHConfigPath(),
+					profile:          effectiveProfile,
 				})
 			}
 			return runDoctor(cmd, &doctorDeps{
@@ -112,6 +130,7 @@ func newDoctorCommandWithDeps(deps *doctorDeps) *cobra.Command {
 				configDir:         configDir,
 				sshConfigPath:     defaultSSHConfigPath(),
 				owner:             clients.owner,
+				profile:           effectiveProfile,
 			})
 		},
 	}
@@ -503,8 +522,8 @@ func checkCredentials(ctx context.Context, deps *doctorDeps) checkResult {
 	owner, err := deps.identityResolver.Resolve(ctx)
 	if err != nil {
 		msg := fmt.Sprintf("could not resolve identity: %v", err)
-		if isCredentialError(err) {
-			msg = `not configured — run "aws configure", set AWS_PROFILE, or use --profile`
+		if isCredentialError(err) || isSSOReAuthError(err) {
+			msg = credentialErrMessage(err, deps.profile)
 		}
 		return checkResult{
 			name:    "AWS credentials",

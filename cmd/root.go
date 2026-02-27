@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/SpiceLabsHQ/Mint/internal/cli"
+	"github.com/SpiceLabsHQ/Mint/internal/config"
 	"github.com/spf13/cobra"
 )
 
@@ -32,8 +33,18 @@ func NewRootCommand() *cobra.Command {
 				clients, err := initAWSClients(ctx)
 				if err != nil {
 					friendlyMsg := fmt.Sprintf("initialize AWS: %v", err)
-					if isCredentialError(err) {
-						friendlyMsg = `AWS credentials unavailable — run "aws configure", set AWS_PROFILE, or use --profile`
+					if isCredentialError(err) || isSSOReAuthError(err) {
+						// Derive the effective profile so credentialErrMessage can
+						// produce a targeted "aws sso login --profile <name>" hint
+						// when the error is an SSO token expiry.
+						// Precedence: --profile flag > config aws_profile.
+						profile := cliCtx.Profile
+						if profile == "" {
+							if mintCfg, cfgErr := config.Load(config.DefaultConfigDir()); cfgErr == nil {
+								profile = mintCfg.AWSProfile
+							}
+						}
+						friendlyMsg = fmt.Sprintf("AWS credentials: %s", credentialErrMessage(err, profile))
 					}
 					// In JSON mode, write structured error to stdout so machine
 					// consumers get valid JSON instead of plaintext on stderr
