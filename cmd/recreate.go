@@ -681,6 +681,7 @@ func launchRecreateInstance(
 		"/dev/xvdf",
 		vmName,
 		strconv.Itoa(idleTimeout),
+		"",
 	)
 	if renderErr != nil {
 		return "", fmt.Errorf("rendering bootstrap stub: %w", renderErr)

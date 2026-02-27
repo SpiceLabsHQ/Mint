@@ -634,6 +634,7 @@ func (p *Provisioner) launchInstance(
 		"/dev/xvdf",
 		vmName,
 		strconv.Itoa(idleTimeout),
+		"",
 	)
 	if err != nil {
 		return "", "", fmt.Errorf("rendering bootstrap stub: %w", err)
