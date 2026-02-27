@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -343,4 +345,132 @@ func TestAWSClients_IdleTimeout(t *testing.T) {
 			t.Errorf("idleTimeout() = %v, want %v", got, want)
 		}
 	})
+}
+
+func TestIsSSOReAuthError(t *testing.T) {
+	tests := []struct {
+		name    string
+		err     error
+		wantSSO bool
+	}{
+		{
+			name:    "nil error returns false",
+			err:     nil,
+			wantSSO: false,
+		},
+		{
+			name:    "token has expired returns true",
+			err:     fmt.Errorf("token has expired"),
+			wantSSO: true,
+		},
+		{
+			name:    "InvalidClientId returns true",
+			err:     fmt.Errorf("operation error SSO OIDC: CreateToken, https response error StatusCode: 400, RequestID: abc, InvalidClientId: ..."),
+			wantSSO: true,
+		},
+		{
+			name:    "failed to refresh cached credentials returns true",
+			err:     fmt.Errorf("failed to refresh cached credentials"),
+			wantSSO: true,
+		},
+		{
+			name:    "SSOProviderInvalidToken returns true",
+			err:     fmt.Errorf("SSOProviderInvalidToken: the SSO session associated with this profile has expired"),
+			wantSSO: true,
+		},
+		{
+			name:    "Error loading SSO Token returns true",
+			err:     fmt.Errorf("Error loading SSO Token: open /home/user/.aws/sso/cache/abc.json: no such file"),
+			wantSSO: true,
+		},
+		{
+			name:    "generic no-creds error returns false",
+			err:     fmt.Errorf("NoCredentialProviders: no valid providers in chain"),
+			wantSSO: false,
+		},
+		{
+			name:    "network timeout error returns false",
+			err:     fmt.Errorf("dial tcp: connection refused"),
+			wantSSO: false,
+		},
+		{
+			name:    "unrelated error returns false",
+			err:     fmt.Errorf("instance not found"),
+			wantSSO: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isSSOReAuthError(tt.err)
+			if got != tt.wantSSO {
+				errStr := "<nil>"
+				if tt.err != nil {
+					errStr = tt.err.Error()
+				}
+				t.Errorf("isSSOReAuthError(%q) = %v, want %v", errStr, got, tt.wantSSO)
+			}
+		})
+	}
+}
+
+func TestCredentialErrMessage(t *testing.T) {
+	const genericMsg = `AWS credentials unavailable — run "aws configure", set AWS_PROFILE, or use --profile`
+
+	tests := []struct {
+		name        string
+		err         error
+		profile     string
+		wantContain string // substring that must appear in result
+		wantExact   string // if non-empty, result must equal this exactly
+	}{
+		{
+			name:        "SSO error with profile returns sso login hint",
+			err:         fmt.Errorf("token has expired"),
+			profile:     "my-dev",
+			wantContain: "aws sso login --profile my-dev",
+		},
+		{
+			name:        "SSO error with profile contains profile name",
+			err:         fmt.Errorf("SSOProviderInvalidToken: session expired"),
+			profile:     "prod",
+			wantContain: "aws sso login --profile prod",
+		},
+		{
+			name:        "SSO error without profile returns generic message",
+			err:         fmt.Errorf("token has expired"),
+			profile:     "",
+			wantExact:   genericMsg,
+		},
+		{
+			name:        "non-SSO error with profile returns generic message",
+			err:         fmt.Errorf("NoCredentialProviders: no valid providers"),
+			profile:     "some-profile",
+			wantExact:   genericMsg,
+		},
+		{
+			name:        "non-SSO error without profile returns generic message",
+			err:         fmt.Errorf("get credentials: no providers"),
+			profile:     "",
+			wantExact:   genericMsg,
+		},
+		{
+			name:        "nil error returns generic message",
+			err:         nil,
+			profile:     "any-profile",
+			wantExact:   genericMsg,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := credentialErrMessage(tt.err, tt.profile)
+			if tt.wantExact != "" && got != tt.wantExact {
+				t.Errorf("credentialErrMessage() = %q, want %q", got, tt.wantExact)
+			}
+			if tt.wantContain != "" && !strings.Contains(got, tt.wantContain) {
+				t.Errorf("credentialErrMessage() = %q, want substring %q", got, tt.wantContain)
+			}
+		})
+	}
 }
