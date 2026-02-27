@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -95,6 +97,17 @@ func runUpdate(cmd *cobra.Command, deps *updateDeps) error {
 
 	fmt.Fprintf(w, "New version available: %s (current: %s)\n", release.TagName, version)
 
+	// Pre-flight: verify we can write to the install directory before
+	// downloading anything. If not, re-exec under sudo (like the installer).
+	installDir := filepath.Dir(deps.binaryPath)
+	if err := checkDirWritable(installDir); err != nil {
+		if errors.Is(err, os.ErrPermission) && os.Getuid() != 0 {
+			fmt.Fprintf(w, "Mint is installed in a protected directory (%s) — re-running with sudo...\n", installDir)
+			return reexecWithSudo(deps.binaryPath)
+		}
+		return fmt.Errorf("install directory not writable: %w", err)
+	}
+
 	// Download the archive.
 	fmt.Fprintln(w, "Downloading archive...")
 	tmpDir, err := os.MkdirTemp("", "mint-update-*")
@@ -136,4 +149,33 @@ func runUpdate(cmd *cobra.Command, deps *updateDeps) error {
 
 	fmt.Fprintf(w, "Updated mint to %s.\n", release.TagName)
 	return nil
+}
+
+// checkDirWritable returns an error (including os.ErrPermission) if dir is
+// not writable by the current process. It does this by attempting to create
+// and immediately remove a temp file in the directory.
+func checkDirWritable(dir string) error {
+	f, err := os.CreateTemp(dir, ".mint-writecheck-*")
+	if err != nil {
+		return err
+	}
+	f.Close()
+	_ = os.Remove(f.Name())
+	return nil
+}
+
+// reexecWithSudo re-runs `mint update` under sudo, wiring stdin/stdout/stderr
+// so the password prompt and update output appear normally in the terminal.
+// Returns an error only if sudo is not found or the sudo process itself fails.
+func reexecWithSudo(binaryPath string) error {
+	sudoPath, err := exec.LookPath("sudo")
+	if err != nil {
+		return fmt.Errorf("cannot write to %s and sudo not found — try: sudo %s update",
+			filepath.Dir(binaryPath), binaryPath)
+	}
+	cmd := exec.Command(sudoPath, binaryPath, "update")
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
 }
