@@ -79,6 +79,42 @@ func isCredentialError(err error) bool {
 	return false
 }
 
+// ssoReAuthKeywords are substrings found in AWS SDK SSO token expiry errors.
+// When any of these appear the user must re-authenticate via `aws sso login`.
+var ssoReAuthKeywords = []string{
+	"token has expired",
+	"InvalidClientId",
+	"failed to refresh cached credentials",
+	"SSOProviderInvalidToken",
+	"Error loading SSO Token",
+}
+
+// isSSOReAuthError reports whether err looks like an SSO token expiry that
+// requires the user to run `aws sso login`. Returns false for nil.
+func isSSOReAuthError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	for _, kw := range ssoReAuthKeywords {
+		if strings.Contains(msg, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+// credentialErrMessage returns an actionable error message for AWS credential
+// failures. When the error is an SSO token expiry and a profile is known, it
+// directs the user to run `aws sso login --profile <profile>`. Otherwise it
+// returns the generic credential setup message.
+func credentialErrMessage(err error, profile string) string {
+	if isSSOReAuthError(err) && profile != "" {
+		return fmt.Sprintf("SSO token expired — run: aws sso login --profile %s", profile)
+	}
+	return `AWS credentials unavailable — run "aws configure", set AWS_PROFILE, or use --profile`
+}
+
 // commandNeedsAWS returns true if the command requires AWS client
 // initialization. Commands that operate locally (version, config, ssh-config,
 // completion, help) return false.
