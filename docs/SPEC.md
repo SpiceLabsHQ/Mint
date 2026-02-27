@@ -189,6 +189,8 @@ A health-check script runs at the end of the bootstrap process to validate that 
 2. **Terminate the instance** — Tags the instance with `mint:bootstrap=failed` (visible in `mint list` output), then destroys the instance and cleans up resources.
 3. **Leave running** — Takes no action, allowing the user to connect via SSH and debug directly.
 
+After all Mint-managed setup and the health check pass, the bootstrap script runs the optional **user bootstrap hook** if present. Users place a personal setup script at `~/.config/mint/user-bootstrap.sh` on their local machine; `mint up` and `mint recreate` base64-encode it and deliver it inline via EC2 user-data (ADR-0024). The user script runs after all Mint tools are installed (Docker, Claude Code, etc.) but before the final `mint:bootstrap=complete` tag is set — a failing user script marks bootstrap as failed. The user-data 16,384-byte limit constrains the user script to approximately 7,500 bytes after base64 encoding.
+
 On subsequent starts (stop/start cycles), a boot-time reconciliation script (systemd unit) compares installed component versions against expected versions, logs warnings to journald, and sets the `mint:health` tag to `healthy` or `drift-detected` accordingly. This tag is queryable from the client via `mint status` and `mint doctor` without requiring SSH. The reconciliation unit does **not** auto-fix — `mint doctor --fix` is the explicit repair path. This avoids the security anti-pattern of unattended package operations on boot.
 
 ## Multiple VMs (advanced)

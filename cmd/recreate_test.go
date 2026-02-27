@@ -2263,4 +2263,53 @@ func TestEIPReassociateImmediateSuccessWhenAlreadyDisassociated(t *testing.T) {
 
 // Ensure provision.BootstrapPollFunc and provision.AMIResolver types are used correctly.
 var _ provision.BootstrapPollFunc = func(ctx context.Context, owner, vmName, instanceID string) error { return nil }
+
+// ---------------------------------------------------------------------------
+// Tests: user-bootstrap.sh injection in recreate
+// ---------------------------------------------------------------------------
+
+// TestRecreateUserBootstrapScriptAbsent verifies that recreate completes
+// successfully when no userBootstrapScript is set on the deps struct.
+func TestRecreateUserBootstrapScriptAbsent(t *testing.T) {
+	deps := newHappyRecreateDeps("alice")
+	deps.userBootstrapScript = nil // explicitly empty
+
+	buf := new(bytes.Buffer)
+	cmd := newRecreateCommandWithDeps(deps)
+	root := newRecreateTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"recreate", "--yes"})
+
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(buf.String(), "Recreate complete") {
+		t.Errorf("expected 'Recreate complete' in output, got:\n%s", buf.String())
+	}
+}
+
+// TestRecreateUserBootstrapScriptPresent verifies that recreate completes
+// successfully when userBootstrapScript is set on the deps struct, and that
+// no size error is returned for a reasonably sized script.
+func TestRecreateUserBootstrapScriptPresent(t *testing.T) {
+	deps := newHappyRecreateDeps("alice")
+	deps.userBootstrapScript = []byte("#!/bin/bash\necho 'user hook for recreate'")
+
+	buf := new(bytes.Buffer)
+	cmd := newRecreateCommandWithDeps(deps)
+	root := newRecreateTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"recreate", "--yes"})
+
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(buf.String(), "Recreate complete") {
+		t.Errorf("expected 'Recreate complete' in output, got:\n%s", buf.String())
+	}
+}
 var _ provision.AMIResolver = func(ctx context.Context, client mintaws.DescribeImagesAPI) (string, error) { return "", nil }

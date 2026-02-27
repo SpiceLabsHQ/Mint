@@ -107,7 +107,7 @@ go mod tidy                       # always run after adding new dependencies
 |----------|---------|
 | `docs/SPEC.md` | Complete specification — the authoritative source |
 | `docs/ROADMAP.md` | Phased implementation plan (Phase 0–4) |
-| `docs/adr/0001-*.md` through `docs/adr/0021-*.md` | Architecture Decision Records — binding constraints |
+| `docs/adr/0001-*.md` through `docs/adr/0024-*.md` | Architecture Decision Records — binding constraints |
 | `docs/command-reference.md` | Complete command documentation with ADR cross-references |
 | `.devcontainer/` | Developer isolated environment (Go 1.24, AWS CLI, isolated `MINT_CONFIG_DIR`) |
 

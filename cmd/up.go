@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -15,6 +17,7 @@ import (
 	mintaws "github.com/SpiceLabsHQ/Mint/internal/aws"
 	"github.com/SpiceLabsHQ/Mint/internal/bootstrap"
 	"github.com/SpiceLabsHQ/Mint/internal/cli"
+	"github.com/SpiceLabsHQ/Mint/internal/config"
 	"github.com/SpiceLabsHQ/Mint/internal/progress"
 	"github.com/SpiceLabsHQ/Mint/internal/provision"
 	"github.com/SpiceLabsHQ/Mint/internal/sshconfig"
@@ -39,18 +42,19 @@ func (sw *spinnerWriter) Write(p []byte) (int, error) {
 
 // upDeps holds the injectable dependencies for the up command.
 type upDeps struct {
-	provisioner         *provision.Provisioner
-	owner               string
-	ownerARN            string
-	bootstrapScript     []byte
-	bootstrapURL        string // GitHub raw URL for bootstrap.sh delivery
-	instanceType        string
-	volumeSize          int32
-	volumeIOPS          int32
-	sshConfigApproved   bool
-	sshConfigPath       string
-	describe            mintaws.DescribeInstancesAPI
-	describeFileSystems mintaws.DescribeFileSystemsAPI
+	provisioner          *provision.Provisioner
+	owner                string
+	ownerARN             string
+	bootstrapScript      []byte
+	bootstrapURL         string // GitHub raw URL for bootstrap.sh delivery
+	userBootstrapScript  []byte // Optional user-bootstrap.sh content read from config dir
+	instanceType         string
+	volumeSize           int32
+	volumeIOPS           int32
+	sshConfigApproved    bool
+	sshConfigPath        string
+	describe             mintaws.DescribeInstancesAPI
+	describeFileSystems  mintaws.DescribeFileSystemsAPI
 }
 
 // newUpCommand creates the production up command.
@@ -105,6 +109,13 @@ func newUpCommandWithDeps(deps *upDeps) *cobra.Command {
 			if flagIOPS, _ := cmd.Flags().GetInt32("volume-iops"); flagIOPS > 0 {
 				volumeIOPS = flagIOPS
 			}
+			// Read user-bootstrap.sh from the config directory if it exists.
+			configDir := config.DefaultConfigDir()
+			var userBootstrapScript []byte
+			userBootstrapPath := filepath.Join(configDir, "user-bootstrap.sh")
+			if data, err := os.ReadFile(userBootstrapPath); err == nil {
+				userBootstrapScript = data
+			}
 			return runUp(cmd, &upDeps{
 				provisioner: provision.NewProvisioner(
 					clients.ec2Client, // DescribeInstancesAPI
@@ -122,16 +133,17 @@ func newUpCommandWithDeps(deps *upDeps) *cobra.Command {
 				).WithWaitRunning(awsec2.NewInstanceRunningWaiter(clients.ec2Client)).
 				WithWaitVolumeAvailable(awsec2.NewVolumeAvailableWaiter(clients.ec2Client)).
 				WithBootstrapPoller(poller),
-				owner:               clients.owner,
-				ownerARN:            clients.ownerARN,
-				bootstrapScript:     GetBootstrapScript(),
-				bootstrapURL:        bootstrap.ScriptURL(version),
-				instanceType:        clients.mintConfig.InstanceType,
-				volumeSize:          int32(clients.mintConfig.VolumeSizeGB),
-				volumeIOPS:          volumeIOPS,
-				sshConfigApproved:   sshApproved,
-				describe:            clients.ec2Client,
-				describeFileSystems: clients.efsClient,
+				owner:                clients.owner,
+				ownerARN:             clients.ownerARN,
+				bootstrapScript:      GetBootstrapScript(),
+				bootstrapURL:         bootstrap.ScriptURL(version),
+				userBootstrapScript:  userBootstrapScript,
+				instanceType:         clients.mintConfig.InstanceType,
+				volumeSize:           int32(clients.mintConfig.VolumeSizeGB),
+				volumeIOPS:           volumeIOPS,
+				sshConfigApproved:    sshApproved,
+				describe:             clients.ec2Client,
+				describeFileSystems:  clients.efsClient,
 			})
 		},
 	}
@@ -184,12 +196,13 @@ func runUp(cmd *cobra.Command, deps *upDeps) error {
 	}
 
 	cfg := provision.ProvisionConfig{
-		InstanceType:    deps.instanceType,
-		VolumeSize:      deps.volumeSize,
-		VolumeIOPS:      deps.volumeIOPS,
-		BootstrapScript: deps.bootstrapScript,
-		BootstrapURL:    deps.bootstrapURL,
-		EFSID:           efsID,
+		InstanceType:        deps.instanceType,
+		VolumeSize:          deps.volumeSize,
+		VolumeIOPS:          deps.volumeIOPS,
+		BootstrapScript:     deps.bootstrapScript,
+		BootstrapURL:        deps.bootstrapURL,
+		EFSID:               efsID,
+		UserBootstrapScript: deps.userBootstrapScript,
 	}
 
 	sp.Update(fmt.Sprintf("Provisioning VM %q...", vmName))
@@ -350,11 +363,12 @@ func efsTagsToMap(efsTags []efstypes.Tag) map[string]string {
 // upWithProvisioner runs up with a pre-built Provisioner (for testing).
 func upWithProvisioner(ctx context.Context, cmd *cobra.Command, cliCtx *cli.CLIContext, deps *upDeps, vmName string) error {
 	cfg := provision.ProvisionConfig{
-		InstanceType:    deps.instanceType,
-		VolumeSize:      deps.volumeSize,
-		VolumeIOPS:      deps.volumeIOPS,
-		BootstrapScript: deps.bootstrapScript,
-		BootstrapURL:    deps.bootstrapURL,
+		InstanceType:        deps.instanceType,
+		VolumeSize:          deps.volumeSize,
+		VolumeIOPS:          deps.volumeIOPS,
+		BootstrapScript:     deps.bootstrapScript,
+		BootstrapURL:        deps.bootstrapURL,
+		UserBootstrapScript: deps.userBootstrapScript,
 	}
 
 	verbose := false
