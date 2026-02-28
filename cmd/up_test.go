@@ -522,17 +522,21 @@ func TestUpCommandBootstrapErrorOutput(t *testing.T) {
 	})
 
 	// Fresh provision bootstrap failure must return a non-nil error (exit 1).
+	// The returned error is a silentExitError (empty message) because the
+	// human-readable output already printed the failure details — we don't
+	// want main.go to print the message a second time.
 	err := upWithProvisioner(ctx, cmd, cliCtx, deps, "default")
 	if err == nil {
 		t.Fatal("upWithProvisioner should return non-nil error when fresh-provision bootstrap fails")
 	}
-	if !strings.Contains(err.Error(), "bootstrap timed out") {
-		t.Errorf("error = %q, should contain 'bootstrap timed out'", err.Error())
+	// The error message must be empty (silentExitError) to prevent double-print.
+	if msg := err.Error(); msg != "" {
+		t.Errorf("error message must be empty (silentExitError) to prevent double-print, got: %q", msg)
 	}
 
 	output := buf.String()
-	if !strings.Contains(output, "Bootstrap error:") {
-		t.Errorf("output should contain 'Bootstrap error:', got:\n%s", output)
+	if !strings.Contains(output, "Bootstrap failed") {
+		t.Errorf("output should contain 'Bootstrap failed', got:\n%s", output)
 	}
 	if !strings.Contains(output, "bootstrap timed out") {
 		t.Errorf("output should contain the error message, got:\n%s", output)
@@ -1390,8 +1394,13 @@ func TestPrintUpHumanAlreadyRunningBootstrapFailed(t *testing.T) {
 	}
 
 	err := printUpHuman(cmd, result, false)
-	if err != nil {
-		t.Fatalf("printUpHuman error: %v", err)
+	// AlreadyRunning + BootstrapError returns silentExitError (non-nil, empty message)
+	// so the command exits non-zero without double-printing.
+	if err == nil {
+		t.Fatal("printUpHuman should return non-nil error (silentExitError) when bootstrap failed")
+	}
+	if msg := err.Error(); msg != "" {
+		t.Errorf("error message must be empty (silentExitError) to prevent double-print, got: %q", msg)
 	}
 
 	output := buf.String()
@@ -1399,8 +1408,8 @@ func TestPrintUpHumanAlreadyRunningBootstrapFailed(t *testing.T) {
 	if strings.Contains(output, "Bootstrap complete") {
 		t.Errorf("output must not say 'Bootstrap complete' when bootstrap failed, got:\n%s", output)
 	}
-	// Should surface the error.
-	if !strings.Contains(output, "bootstrap failed") && !strings.Contains(output, "Bootstrap") {
+	// Should surface the error in the recovery block.
+	if !strings.Contains(output, "Bootstrap failed") {
 		t.Errorf("output should surface bootstrap failure, got:\n%s", output)
 	}
 }
@@ -1426,9 +1435,13 @@ func TestPrintUpHumanRestartedBootstrapFailed(t *testing.T) {
 	}
 
 	err := printUpHuman(cmd, result, false)
-	// printUpHuman returns the BootstrapError for non-zero exit on bootstrap failure.
+	// printUpHuman returns silentExitError for non-zero exit on bootstrap failure.
+	// The recovery hints are printed to the output, not embedded in the error.
 	if err == nil {
 		t.Fatal("printUpHuman should return non-nil error when bootstrap failed on restart")
+	}
+	if msg := err.Error(); msg != "" {
+		t.Errorf("error message must be empty (silentExitError) to prevent double-print, got: %q", msg)
 	}
 
 	output := buf.String()
@@ -1445,6 +1458,8 @@ func TestPrintUpHumanRestartedBootstrapFailed(t *testing.T) {
 func TestPrintUpHumanRestartedBootstrapFailedExitCode(t *testing.T) {
 	// printUpHuman must return a non-nil error when BootstrapError is set
 	// on a restarted VM, so the command exits non-zero.
+	// The error message must be empty (silentExitError) — the recovery block
+	// is printed to the output writer, not embedded in the error.
 	buf := new(bytes.Buffer)
 	cmd := &cobra.Command{}
 	cmd.SetOut(buf)
@@ -1461,8 +1476,14 @@ func TestPrintUpHumanRestartedBootstrapFailedExitCode(t *testing.T) {
 	if err == nil {
 		t.Fatal("printUpHuman should return an error (non-zero exit) when bootstrap failed on restart")
 	}
-	if !strings.Contains(err.Error(), "mint recreate") {
-		t.Errorf("error = %q, should mention 'mint recreate'", err.Error())
+	// Error message is empty (silentExitError) — hints are in the output.
+	if msg := err.Error(); msg != "" {
+		t.Errorf("error message must be empty (silentExitError) to prevent double-print, got: %q", msg)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "mint recreate") {
+		t.Errorf("output should mention 'mint recreate', got:\n%s", output)
 	}
 }
 
@@ -1592,5 +1613,167 @@ func TestUpCommandUserBootstrapScriptReadFromConfigDir(t *testing.T) {
 	// Verify the script content was preserved on deps.
 	if string(deps.userBootstrapScript) != string(scriptContent) {
 		t.Errorf("userBootstrapScript = %q, want %q", deps.userBootstrapScript, scriptContent)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests: Bootstrap failure recovery UX (#189)
+// ---------------------------------------------------------------------------
+
+// TestUpBootstrapFailureNoDuplicateError asserts that when bootstrap fails,
+// the error message is not printed twice. The human-readable output block
+// contains the failure message once, and the returned error from
+// printUpHuman must be a silentExitError (empty message) so main.go does
+// not print it a second time.
+func TestUpBootstrapFailureNoDuplicateError(t *testing.T) {
+	buf := new(bytes.Buffer)
+	cmd := &cobra.Command{}
+	cmd.SetOut(buf)
+
+	cliCtx := &cli.CLIContext{VM: "default"}
+	ctx := cli.WithContext(context.Background(), cliCtx)
+	cmd.SetContext(ctx)
+
+	bootstrapErr := fmt.Errorf("bootstrap failed on instance i-test123 (phase: install-claude)")
+
+	deps := newTestUpDeps()
+	deps.provisioner.WithBootstrapPollFunc(func(ctx context.Context, owner, vmName, instanceID string) error {
+		return bootstrapErr
+	})
+
+	err := upWithProvisioner(ctx, cmd, cliCtx, deps, "default")
+
+	// The error must be non-nil (exit 1).
+	if err == nil {
+		t.Fatal("expected non-nil error when bootstrap fails")
+	}
+
+	// The returned error must have an empty message so main.go doesn't print it again.
+	if msg := err.Error(); msg != "" {
+		t.Errorf("error message must be empty (silentExitError) to prevent double-print, got: %q", msg)
+	}
+
+	output := buf.String()
+	// The failure message must appear exactly once in the output.
+	count := strings.Count(output, "bootstrap failed on instance")
+	if count != 1 {
+		t.Errorf("bootstrap failure message must appear exactly once, got %d occurrences in:\n%s", count, output)
+	}
+}
+
+// TestUpBootstrapFailureShowsSSHHint asserts that the recovery block shows
+// an SSH command using the instance's public IP (from ProvisionResult).
+func TestUpBootstrapFailureShowsSSHHint(t *testing.T) {
+	buf := new(bytes.Buffer)
+	cmd := &cobra.Command{}
+	cmd.SetOut(buf)
+
+	cliCtx := &cli.CLIContext{VM: "default"}
+	ctx := cli.WithContext(context.Background(), cliCtx)
+	cmd.SetContext(ctx)
+
+	deps := newTestUpDeps()
+	deps.provisioner.WithBootstrapPollFunc(func(ctx context.Context, owner, vmName, instanceID string) error {
+		return fmt.Errorf("bootstrap failed on instance i-test123")
+	})
+
+	upWithProvisioner(ctx, cmd, cliCtx, deps, "default") //nolint:errcheck
+
+	output := buf.String()
+	// The provisioner stub returns IP 54.10.20.30 (from newTestProvisioner's AllocateAddress stub).
+	if !strings.Contains(output, "ssh") {
+		t.Errorf("recovery block must show SSH command, got:\n%s", output)
+	}
+	if !strings.Contains(output, "54.10.20.30") {
+		t.Errorf("SSH hint must include the instance public IP 54.10.20.30, got:\n%s", output)
+	}
+	if !strings.Contains(output, "41122") {
+		t.Errorf("SSH hint must include port 41122, got:\n%s", output)
+	}
+}
+
+// TestUpBootstrapFailureShowsLogPath asserts that the recovery block shows
+// the journalctl log path.
+func TestUpBootstrapFailureShowsLogPath(t *testing.T) {
+	buf := new(bytes.Buffer)
+	cmd := &cobra.Command{}
+	cmd.SetOut(buf)
+
+	cliCtx := &cli.CLIContext{VM: "default"}
+	ctx := cli.WithContext(context.Background(), cliCtx)
+	cmd.SetContext(ctx)
+
+	deps := newTestUpDeps()
+	deps.provisioner.WithBootstrapPollFunc(func(ctx context.Context, owner, vmName, instanceID string) error {
+		return fmt.Errorf("bootstrap failed on instance i-test123")
+	})
+
+	upWithProvisioner(ctx, cmd, cliCtx, deps, "default") //nolint:errcheck
+
+	output := buf.String()
+	if !strings.Contains(output, "journalctl") {
+		t.Errorf("recovery block must show journalctl log path, got:\n%s", output)
+	}
+	if !strings.Contains(output, "mint-bootstrap") {
+		t.Errorf("recovery block must mention mint-bootstrap service, got:\n%s", output)
+	}
+}
+
+// TestUpBootstrapFailureShowsRecoveryCommands asserts that the recovery block
+// shows mint recreate and mint destroy as recovery options.
+func TestUpBootstrapFailureShowsRecoveryCommands(t *testing.T) {
+	buf := new(bytes.Buffer)
+	cmd := &cobra.Command{}
+	cmd.SetOut(buf)
+
+	cliCtx := &cli.CLIContext{VM: "default"}
+	ctx := cli.WithContext(context.Background(), cliCtx)
+	cmd.SetContext(ctx)
+
+	deps := newTestUpDeps()
+	deps.provisioner.WithBootstrapPollFunc(func(ctx context.Context, owner, vmName, instanceID string) error {
+		return fmt.Errorf("bootstrap failed on instance i-test123")
+	})
+
+	upWithProvisioner(ctx, cmd, cliCtx, deps, "default") //nolint:errcheck
+
+	output := buf.String()
+	if !strings.Contains(output, "mint recreate") {
+		t.Errorf("recovery block must suggest 'mint recreate', got:\n%s", output)
+	}
+	if !strings.Contains(output, "mint destroy") {
+		t.Errorf("recovery block must suggest 'mint destroy', got:\n%s", output)
+	}
+}
+
+// TestUpBootstrapFailureJSONUnchanged asserts that the JSON output format for
+// bootstrap failure is unchanged — machine-readable consumers are unaffected.
+func TestUpBootstrapFailureJSONUnchanged(t *testing.T) {
+	buf := new(bytes.Buffer)
+	cmd := &cobra.Command{}
+	cmd.SetOut(buf)
+
+	cliCtx := &cli.CLIContext{JSON: true, VM: "default"}
+	ctx := cli.WithContext(context.Background(), cliCtx)
+	cmd.SetContext(ctx)
+
+	deps := newTestUpDeps()
+	deps.provisioner.WithBootstrapPollFunc(func(ctx context.Context, owner, vmName, instanceID string) error {
+		return fmt.Errorf("bootstrap failed on instance i-test123")
+	})
+
+	err := upWithProvisioner(ctx, cmd, cliCtx, deps, "default")
+	if err != nil {
+		t.Fatalf("JSON mode must not return error, got: %v", err)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &result); err != nil {
+		t.Fatalf("output is not valid JSON: %v\nOutput: %s", err, buf.String())
+	}
+
+	// bootstrap_error field must be present with the error message.
+	if result["bootstrap_error"] != "bootstrap failed on instance i-test123" {
+		t.Errorf("bootstrap_error = %v, want %q", result["bootstrap_error"], "bootstrap failed on instance i-test123")
 	}
 }

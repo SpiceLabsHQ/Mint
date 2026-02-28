@@ -83,7 +83,7 @@ func NewBootstrapPoller(
 // reads "complete", the timeout expires, or the context is cancelled.
 //
 // On success (bootstrap=complete), returns nil.
-// On bootstrap=failed, returns an error immediately.
+// On bootstrap=failed, returns an error immediately (phase included when present).
 // On timeout, presents three interactive options to the user.
 // On context cancellation, returns the context error.
 func (bp *BootstrapPoller) Poll(ctx context.Context, owner, vmName, instanceID string) error {
@@ -96,14 +96,14 @@ func (bp *BootstrapPoller) Poll(ctx context.Context, owner, vmName, instanceID s
 	start := time.Now()
 
 	// Check immediately before the first tick.
-	status, err := bp.checkBootstrapStatus(ctx, owner, vmName)
-	if err == nil {
-		switch status {
+	found, err := bp.checkBootstrap(ctx, owner, vmName)
+	if err == nil && found != nil {
+		switch found.BootstrapStatus {
 		case tags.BootstrapComplete:
 			fmt.Fprintln(bp.output, "Bootstrap complete.")
 			return nil
 		case tags.BootstrapFailed:
-			return fmt.Errorf("bootstrap failed on instance %s", instanceID)
+			return bootstrapFailedError(instanceID, bootstrapFailurePhase(found))
 		}
 	}
 
@@ -118,19 +118,19 @@ func (bp *BootstrapPoller) Poll(ctx context.Context, owner, vmName, instanceID s
 			return bp.handleTimeout(ctx, instanceID)
 
 		case <-ticker.C:
-			status, err := bp.checkBootstrapStatus(ctx, owner, vmName)
+			found, err := bp.checkBootstrap(ctx, owner, vmName)
 			if err != nil {
 				// Log the error but keep polling; transient API errors shouldn't abort.
 				fmt.Fprintf(bp.output, "Waiting for bootstrap... %s (check failed: %v)\n", formatElapsed(time.Since(start)), err)
 				continue
 			}
 
-			switch status {
+			switch found.BootstrapStatus {
 			case tags.BootstrapComplete:
 				fmt.Fprintln(bp.output, "Bootstrap complete.")
 				return nil
 			case tags.BootstrapFailed:
-				return fmt.Errorf("bootstrap failed on instance %s", instanceID)
+				return bootstrapFailedError(instanceID, bootstrapFailurePhase(found))
 			default:
 				fmt.Fprintf(bp.output, "Waiting for bootstrap... %s\n", formatElapsed(time.Since(start)))
 			}
@@ -138,16 +138,37 @@ func (bp *BootstrapPoller) Poll(ctx context.Context, owner, vmName, instanceID s
 	}
 }
 
-// checkBootstrapStatus uses FindVM to get the current bootstrap tag value.
-func (bp *BootstrapPoller) checkBootstrapStatus(ctx context.Context, owner, vmName string) (string, error) {
+// checkBootstrap uses FindVM to get the current VM state including all tags.
+// It returns an error when the VM is not found or the describe call fails.
+func (bp *BootstrapPoller) checkBootstrap(ctx context.Context, owner, vmName string) (*vm.VM, error) {
 	found, err := vm.FindVM(ctx, bp.describeInstances, owner, vmName)
 	if err != nil {
-		return "", fmt.Errorf("checking bootstrap status: %w", err)
+		return nil, fmt.Errorf("checking bootstrap status: %w", err)
 	}
 	if found == nil {
-		return "", fmt.Errorf("VM not found for owner %q, vm %q", owner, vmName)
+		return nil, fmt.Errorf("VM not found for owner %q, vm %q", owner, vmName)
 	}
-	return found.BootstrapStatus, nil
+	return found, nil
+}
+
+// bootstrapFailurePhase extracts the mint:bootstrap-failure-phase tag value
+// from a VM. Returns an empty string when the tag is absent (older bootstrap
+// scripts that predate the phase instrumentation).
+func bootstrapFailurePhase(v *vm.VM) string {
+	if v == nil {
+		return ""
+	}
+	return v.Tags[tags.TagBootstrapFailurePhase]
+}
+
+// bootstrapFailedError constructs the error returned when mint:bootstrap=failed
+// is detected. When phase is non-empty it is embedded in the message so the
+// operator knows exactly which phase the script was executing when it failed.
+func bootstrapFailedError(instanceID, phase string) error {
+	if phase != "" {
+		return fmt.Errorf("bootstrap failed on instance %s (phase: %s)", instanceID, phase)
+	}
+	return fmt.Errorf("bootstrap failed on instance %s", instanceID)
 }
 
 // handleTimeout presents the user with three options when bootstrap does not
