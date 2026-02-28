@@ -108,6 +108,37 @@ func fastPollConfig() PollConfig {
 	}
 }
 
+// vmResponseWithPhase builds a DescribeInstances response that includes both
+// a bootstrap status tag and an optional failure-phase tag. Pass an empty
+// string for phase to omit the tag (simulates older bootstrap scripts or
+// successful bootstrap without phase information).
+func vmResponseWithPhase(instanceID, bootstrapStatus, phase string) *ec2.DescribeInstancesOutput {
+	instanceTags := []ec2types.Tag{
+		{Key: aws.String(tags.TagMint), Value: aws.String("true")},
+		{Key: aws.String(tags.TagVM), Value: aws.String("default")},
+		{Key: aws.String(tags.TagOwner), Value: aws.String("alice")},
+		{Key: aws.String(tags.TagBootstrap), Value: aws.String(bootstrapStatus)},
+	}
+	if phase != "" {
+		instanceTags = append(instanceTags, ec2types.Tag{
+			Key:   aws.String(tags.TagBootstrapFailurePhase),
+			Value: aws.String(phase),
+		})
+	}
+	return &ec2.DescribeInstancesOutput{
+		Reservations: []ec2types.Reservation{{
+			Instances: []ec2types.Instance{{
+				InstanceId:   aws.String(instanceID),
+				InstanceType: ec2types.InstanceTypeM6iXlarge,
+				State: &ec2types.InstanceState{
+					Name: ec2types.InstanceStateNameRunning,
+				},
+				Tags: instanceTags,
+			}},
+		}},
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -496,5 +527,122 @@ func TestBootstrapPollerProgressOutput(t *testing.T) {
 	// Output should contain progress messages with timing.
 	if !strings.Contains(output.String(), "Waiting for bootstrap") {
 		t.Errorf("output should contain progress messages, got: %q", output.String())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Bootstrap failure phase tag tests
+// ---------------------------------------------------------------------------
+
+// TestBootstrapFailedWithPhase asserts that when mint:bootstrap=failed and
+// mint:bootstrap-failure-phase is present, Poll returns an error message that
+// includes the phase name.
+func TestBootstrapFailedWithPhase(t *testing.T) {
+	phases := []string{
+		"packages",
+		"docker",
+		"efs-mount",
+		"systemd-units",
+		"drift-check",
+		"user-script",
+	}
+
+	for _, phase := range phases {
+		phase := phase
+		t.Run("phase_"+phase, func(t *testing.T) {
+			descMock := &mockPollDescribeInstances{
+				responses: []describeResponse{
+					{output: vmResponseWithPhase("i-abc123", tags.BootstrapFailed, phase)},
+				},
+			}
+
+			var output bytes.Buffer
+			poller := NewBootstrapPoller(
+				descMock,
+				&mockPollStopInstances{},
+				&mockPollTerminateInstances{},
+				&mockPollCreateTags{},
+				&output,
+				&bytes.Buffer{},
+			)
+			poller.Config = fastPollConfig()
+
+			err := poller.Poll(context.Background(), "alice", "default", "i-abc123")
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !strings.Contains(err.Error(), phase) {
+				t.Errorf("error %q does not contain phase %q", err.Error(), phase)
+			}
+			if !strings.Contains(err.Error(), "i-abc123") {
+				t.Errorf("error %q does not contain instance ID", err.Error())
+			}
+		})
+	}
+}
+
+// TestBootstrapFailedWithoutPhase asserts that when mint:bootstrap=failed but
+// mint:bootstrap-failure-phase is absent (e.g. older bootstrap scripts), Poll
+// still returns a clear error without panicking or producing an empty message.
+func TestBootstrapFailedWithoutPhase(t *testing.T) {
+	descMock := &mockPollDescribeInstances{
+		responses: []describeResponse{
+			// vmResponse does not include the failure-phase tag.
+			{output: vmResponse("i-abc123", tags.BootstrapFailed)},
+		},
+	}
+
+	var output bytes.Buffer
+	poller := NewBootstrapPoller(
+		descMock,
+		&mockPollStopInstances{},
+		&mockPollTerminateInstances{},
+		&mockPollCreateTags{},
+		&output,
+		&bytes.Buffer{},
+	)
+	poller.Config = fastPollConfig()
+
+	err := poller.Poll(context.Background(), "alice", "default", "i-abc123")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	// Must mention the instance and "bootstrap failed"; must not be empty.
+	if !strings.Contains(err.Error(), "bootstrap failed") {
+		t.Errorf("error %q does not contain %q", err.Error(), "bootstrap failed")
+	}
+	if !strings.Contains(err.Error(), "i-abc123") {
+		t.Errorf("error %q does not contain instance ID", err.Error())
+	}
+}
+
+// TestBootstrapFailedPhaseInTickerLoop asserts phase is included in the error
+// when bootstrap=failed is detected during a polling tick (not only on the
+// initial check).
+func TestBootstrapFailedPhaseInTickerLoop(t *testing.T) {
+	descMock := &mockPollDescribeInstances{
+		responses: []describeResponse{
+			{output: vmResponse("i-abc123", tags.BootstrapPending)},
+			{output: vmResponseWithPhase("i-abc123", tags.BootstrapFailed, "efs-mount")},
+		},
+	}
+
+	var output bytes.Buffer
+	poller := NewBootstrapPoller(
+		descMock,
+		&mockPollStopInstances{},
+		&mockPollTerminateInstances{},
+		&mockPollCreateTags{},
+		&output,
+		&bytes.Buffer{},
+	)
+	poller.Config = PollConfig{Interval: 1 * time.Millisecond, Timeout: 50 * time.Millisecond}
+
+	err := poller.Poll(context.Background(), "alice", "default", "i-abc123")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "efs-mount") {
+		t.Errorf("error %q does not contain phase %q", err.Error(), "efs-mount")
 	}
 }

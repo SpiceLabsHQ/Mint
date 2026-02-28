@@ -10,6 +10,8 @@ MINT_IDLE_TIMEOUT="${MINT_IDLE_TIMEOUT:-60}"
 
 # Track whether bootstrap completed successfully (used by EXIT trap).
 _bootstrap_ok=false
+# Track the active bootstrap phase so the EXIT trap can tag it on failure.
+_bootstrap_failure_phase=""
 
 export DEBIAN_FRONTEND=noninteractive
 
@@ -28,6 +30,7 @@ _TRAP_REGION=$(curl -s -H "X-aws-ec2-metadata-token: ${_IMDS_TOKEN}" \
     http://169.254.169.254/latest/meta-data/placement/region 2>/dev/null) || true
 
 # EXIT trap: tag instance mint:bootstrap=complete or failed.
+# On failure, also writes mint:bootstrap-failure-phase when _bootstrap_failure_phase is set.
 _bootstrap_exit() {
     local _tag_value
     if [ "$_bootstrap_ok" = true ]; then
@@ -37,6 +40,15 @@ _bootstrap_exit() {
         log "Bootstrap did NOT complete successfully — tagging mint:bootstrap=failed"
     fi
     if [ -n "${_TRAP_INSTANCE_ID:-}" ] && [ -n "${_TRAP_REGION:-}" ]; then
+        # Write failure-phase tag before the status tag so polling can read it atomically.
+        if [ "$_tag_value" = "failed" ] && [ -n "${_bootstrap_failure_phase:-}" ]; then
+            aws ec2 create-tags \
+                --resources "${_TRAP_INSTANCE_ID}" \
+                --tags "Key=mint:bootstrap-failure-phase,Value=${_bootstrap_failure_phase}" \
+                --region "${_TRAP_REGION}" 2>/dev/null \
+                && log "Tagged instance ${_TRAP_INSTANCE_ID} with mint:bootstrap-failure-phase=${_bootstrap_failure_phase}" \
+                || log "WARNING: Failed to set mint:bootstrap-failure-phase=${_bootstrap_failure_phase} tag"
+        fi
         aws ec2 create-tags \
             --resources "${_TRAP_INSTANCE_ID}" \
             --tags "Key=mint:bootstrap,Value=${_tag_value}" \
@@ -49,8 +61,9 @@ trap '_bootstrap_exit' EXIT
 
 log "Starting bootstrap v${BOOTSTRAP_VERSION}"
 
-# --- System updates ---
+# --- System updates / packages ---
 
+_bootstrap_failure_phase="packages"
 log "Updating system packages"
 apt-get update -qq
 apt-get upgrade -y -qq
@@ -62,6 +75,7 @@ apt-get install -y -qq git
 
 # --- Docker Engine (official apt repository) ---
 
+_bootstrap_failure_phase="docker"
 log "Installing Docker Engine"
 apt-get install -y -qq ca-certificates curl gnupg
 
@@ -177,6 +191,7 @@ systemctl restart ssh
 
 # --- Storage mounts (ADR-0004) ---
 
+_bootstrap_failure_phase="efs-mount"
 log "Setting up storage mounts"
 mkdir -p /mint/user /mint/projects "${MINT_STATE_DIR}"
 
@@ -236,6 +251,7 @@ fi
 
 # --- Boot reconciliation service ---
 
+_bootstrap_failure_phase="systemd-units"
 log "Installing boot reconciliation systemd service"
 
 cat > /etc/systemd/system/mint-reconcile.service << 'RECONCILE_SERVICE'
@@ -455,8 +471,9 @@ systemctl start mint-idle-check.timer
 log "Writing bootstrap version"
 echo "${BOOTSTRAP_VERSION}" > /var/lib/mint/bootstrap-version
 
-# --- Health check ---
+# --- Health check / drift-check ---
 
+_bootstrap_failure_phase="drift-check"
 log "Running health check"
 HEALTH_OK=true
 HEALTH_ERRORS=""
@@ -501,6 +518,7 @@ fi
 # --- User bootstrap hook ---
 
 if [ -n "${MINT_USER_BOOTSTRAP:-}" ]; then
+    _bootstrap_failure_phase="user-script"
     log "Running user bootstrap hook"
     _user_script=$(mktemp)
     trap 'rm -f "$_user_script"; _bootstrap_exit' EXIT
@@ -517,4 +535,5 @@ fi
 
 # Signal the EXIT trap that bootstrap completed successfully.
 _bootstrap_ok=true
+_bootstrap_failure_phase=""
 log "Bootstrap v${BOOTSTRAP_VERSION} finished"
