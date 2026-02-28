@@ -498,6 +498,23 @@ else
     exit 1
 fi
 
+# --- User bootstrap hook ---
+
+if [ -n "${MINT_USER_BOOTSTRAP:-}" ]; then
+    log "Running user bootstrap hook"
+    _user_script=$(mktemp)
+    trap 'rm -f "$_user_script"; _bootstrap_exit' EXIT
+    echo "${MINT_USER_BOOTSTRAP}" | base64 -d > "${_user_script}"
+    chmod +x "${_user_script}"
+    if ! "${_user_script}"; then
+        log "User bootstrap hook exited with non-zero status — marking bootstrap failed"
+        _bootstrap_ok=false
+        exit 1
+    fi
+    rm -f "${_user_script}"
+    log "User bootstrap hook completed"
+fi
+
 # Signal the EXIT trap that bootstrap completed successfully.
 _bootstrap_ok=true
 log "Bootstrap v${BOOTSTRAP_VERSION} finished"

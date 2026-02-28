@@ -28,13 +28,14 @@ const DefaultEIPLimit = 5
 
 // ProvisionConfig holds the user-provided configuration for provisioning.
 type ProvisionConfig struct {
-	InstanceType    string
-	VolumeSize      int32
-	VolumeIOPS      int32  // IOPS for the project gp3 EBS volume (0 defaults to 3000)
-	BootstrapScript []byte
-	BootstrapURL    string // URL to fetch bootstrap.sh at instance startup (from bootstrap.ScriptURL)
-	EFSID           string // EFS filesystem ID for user storage
-	IdleTimeout     int    // Idle timeout in minutes (0 defaults to 60)
+	InstanceType         string
+	VolumeSize           int32
+	VolumeIOPS           int32  // IOPS for the project gp3 EBS volume (0 defaults to 3000)
+	BootstrapScript      []byte
+	BootstrapURL         string // URL to fetch bootstrap.sh at instance startup (from bootstrap.ScriptURL)
+	EFSID                string // EFS filesystem ID for user storage
+	IdleTimeout          int    // Idle timeout in minutes (0 defaults to 60)
+	UserBootstrapScript  []byte // Optional user-bootstrap.sh content; base64-encoded into user-data
 }
 
 // ProvisionResult holds the outcome of a successful provision run.
@@ -627,6 +628,11 @@ func (p *Provisioner) launchInstance(
 		idleTimeout = 60
 	}
 
+	userBootstrapB64 := ""
+	if len(cfg.UserBootstrapScript) > 0 {
+		userBootstrapB64 = base64.StdEncoding.EncodeToString(cfg.UserBootstrapScript)
+	}
+
 	stub, err := bootstrap.RenderStub(
 		bootstrap.ScriptSHA256,
 		cfg.BootstrapURL,
@@ -634,10 +640,18 @@ func (p *Provisioner) launchInstance(
 		"/dev/xvdf",
 		vmName,
 		strconv.Itoa(idleTimeout),
+		userBootstrapB64,
 	)
 	if err != nil {
 		return "", "", fmt.Errorf("rendering bootstrap stub: %w", err)
 	}
+
+	const maxUserDataBytes = 16384
+	if len(stub) > maxUserDataBytes {
+		return "", "", fmt.Errorf("user-bootstrap.sh too large: rendered user-data is %d bytes, max is %d (%d bytes over limit)",
+			len(stub), maxUserDataBytes, len(stub)-maxUserDataBytes)
+	}
+
 	userData := base64.StdEncoding.EncodeToString(stub)
 
 	instanceTags := tags.NewTagBuilder(owner, ownerARN, vmName).
