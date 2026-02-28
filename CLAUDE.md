@@ -90,6 +90,7 @@ go mod tidy                       # always run after adding new dependencies
 
 - Run `go mod tidy` after adding new Go dependencies — Viper's `WriteConfigAs` and AWS SDK imports frequently get incorrect `// indirect` annotations without it
 - Config tests use `MINT_CONFIG_DIR` env var and `t.TempDir()` to avoid writing to real `~/.config/mint/`
+- **Devcontainer config dir**: The devcontainer sets `MINT_CONFIG_DIR=/workspaces/mint/.mint-test`. Any files that `mint` reads from the config dir at runtime (e.g. `user-bootstrap.sh`) must be placed there, not in `~/.config/mint/`, when testing inside the devcontainer.
 - AWS clients use narrow interfaces (e.g., `STSClient`, `DescribeInstanceTypesAPI`) for mock injection in tests
 - Config validation uses a callback pattern (`InstanceTypeValidatorFunc`) to keep the config package decoupled from AWS
 - Bootstrap script hash is embedded at compile time — always run `go generate ./...` before building if `scripts/bootstrap.sh` changes
@@ -107,7 +108,7 @@ go mod tidy                       # always run after adding new dependencies
 |----------|---------|
 | `docs/SPEC.md` | Complete specification — the authoritative source |
 | `docs/ROADMAP.md` | Phased implementation plan (Phase 0–4) |
-| `docs/adr/0001-*.md` through `docs/adr/0021-*.md` | Architecture Decision Records — binding constraints |
+| `docs/adr/0001-*.md` through `docs/adr/0024-*.md` | Architecture Decision Records — binding constraints |
 | `docs/command-reference.md` | Complete command documentation with ADR cross-references |
 | `.devcontainer/` | Developer isolated environment (Go 1.24, AWS CLI, isolated `MINT_CONFIG_DIR`) |
 

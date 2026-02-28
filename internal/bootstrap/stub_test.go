@@ -24,7 +24,7 @@ func TestRenderStubReturnsErrorWhenNotLoaded(t *testing.T) {
 
 	embeddedStub = nil
 
-	_, err := RenderStub("sha", "url", "efs-id", "/dev/xvdf", "default", "60")
+	_, err := RenderStub("sha", "url", "efs-id", "/dev/xvdf", "default", "60", "")
 	if err == nil {
 		t.Fatal("expected error when stub template not loaded, got nil")
 	}
@@ -42,6 +42,7 @@ export MINT_EFS_ID="__MINT_EFS_ID__"
 export MINT_PROJECT_DEV="__MINT_PROJECT_DEV__"
 export MINT_VM_NAME="__MINT_VM_NAME__"
 export MINT_IDLE_TIMEOUT="__MINT_IDLE_TIMEOUT__"
+export MINT_USER_BOOTSTRAP="__MINT_USER_BOOTSTRAP__"
 _URL="__MINT_BOOTSTRAP_URL__"
 _SHA="__MINT_BOOTSTRAP_SHA256__"
 `
@@ -54,6 +55,7 @@ _SHA="__MINT_BOOTSTRAP_SHA256__"
 		"/dev/xvdf",
 		"myvm",
 		"120",
+		"",
 	)
 	if err != nil {
 		t.Fatalf("RenderStub returned unexpected error: %v", err)
@@ -105,24 +107,74 @@ func TestRenderStubNoRemainingPlaceholders(t *testing.T) {
 	original := embeddedStub
 	defer func() { embeddedStub = original }()
 
-	// Use a template containing all six __PLACEHOLDER__ tokens defined in
+	// Use a template containing all seven __PLACEHOLDER__ tokens defined in
 	// scripts/bootstrap-stub.sh to verify none survive substitution.
 	template := `#!/bin/bash
 export MINT_EFS_ID="__MINT_EFS_ID__"
 export MINT_PROJECT_DEV="__MINT_PROJECT_DEV__"
 export MINT_VM_NAME="__MINT_VM_NAME__"
 export MINT_IDLE_TIMEOUT="__MINT_IDLE_TIMEOUT__"
+export MINT_USER_BOOTSTRAP="__MINT_USER_BOOTSTRAP__"
 _URL="__MINT_BOOTSTRAP_URL__"
 _SHA="__MINT_BOOTSTRAP_SHA256__"
 `
 	embeddedStub = []byte(template)
 
-	rendered, err := RenderStub("sha", "url", "efs", "dev", "vm", "60")
+	rendered, err := RenderStub("sha", "url", "efs", "dev", "vm", "60", "")
 	if err != nil {
 		t.Fatalf("RenderStub error: %v", err)
 	}
 
 	if strings.Contains(string(rendered), "__MINT_") {
 		t.Errorf("rendered stub still contains unsubstituted __MINT_ placeholder:\n%s", rendered)
+	}
+}
+
+func TestRenderStubUserBootstrapEmpty(t *testing.T) {
+	original := embeddedStub
+	defer func() { embeddedStub = original }()
+
+	template := `#!/bin/bash
+export MINT_USER_BOOTSTRAP="__MINT_USER_BOOTSTRAP__"
+exec /tmp/bootstrap.sh
+`
+	embeddedStub = []byte(template)
+
+	rendered, err := RenderStub("sha", "url", "efs", "dev", "vm", "60", "")
+	if err != nil {
+		t.Fatalf("RenderStub returned unexpected error: %v", err)
+	}
+
+	result := string(rendered)
+	if strings.Contains(result, "__MINT_USER_BOOTSTRAP__") {
+		t.Error("RenderStub left __MINT_USER_BOOTSTRAP__ placeholder unsubstituted")
+	}
+	if !strings.Contains(result, `MINT_USER_BOOTSTRAP=""`) {
+		t.Errorf("expected MINT_USER_BOOTSTRAP to be empty string, got:\n%s", result)
+	}
+}
+
+func TestRenderStubUserBootstrapNonEmpty(t *testing.T) {
+	original := embeddedStub
+	defer func() { embeddedStub = original }()
+
+	template := `#!/bin/bash
+export MINT_USER_BOOTSTRAP="__MINT_USER_BOOTSTRAP__"
+exec /tmp/bootstrap.sh
+`
+	embeddedStub = []byte(template)
+
+	userScript := "aGVsbG8=" // base64("hello")
+	rendered, err := RenderStub("sha", "url", "efs", "dev", "vm", "60", userScript)
+	if err != nil {
+		t.Fatalf("RenderStub returned unexpected error: %v", err)
+	}
+
+	result := string(rendered)
+	if strings.Contains(result, "__MINT_USER_BOOTSTRAP__") {
+		t.Error("RenderStub left __MINT_USER_BOOTSTRAP__ placeholder unsubstituted")
+	}
+	if !strings.Contains(result, userScript) {
+		t.Errorf("RenderStub missing userBootstrap value %q in result:\n%s", userScript, result)
 	}
 }

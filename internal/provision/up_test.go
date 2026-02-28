@@ -25,6 +25,7 @@ export MINT_EFS_ID="__MINT_EFS_ID__"
 export MINT_PROJECT_DEV="__MINT_PROJECT_DEV__"
 export MINT_VM_NAME="__MINT_VM_NAME__"
 export MINT_IDLE_TIMEOUT="__MINT_IDLE_TIMEOUT__"
+export MINT_USER_BOOTSTRAP="__MINT_USER_BOOTSTRAP__"
 _STUB_URL="__MINT_BOOTSTRAP_URL__"
 _STUB_SHA256="__MINT_BOOTSTRAP_SHA256__"
 exec /tmp/bootstrap.sh
@@ -2233,5 +2234,117 @@ func TestPendingAttachNoneForAlreadyRunningVM(t *testing.T) {
 	}
 	if result.InstanceID != "i-running1" {
 		t.Errorf("InstanceID = %q, want %q", result.InstanceID, "i-running1")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests: UserBootstrapScript pipeline
+// ---------------------------------------------------------------------------
+
+// TestUserBootstrapScriptEmptyPassesEmptyToRenderStub verifies that when no
+// UserBootstrapScript is set, RenderStub receives "" for the 7th argument and
+// the rendered user-data contains no base64 payload for the placeholder.
+func TestUserBootstrapScriptEmptyPassesEmptyToRenderStub(t *testing.T) {
+	m := newUpHappyMocks()
+	p := m.build()
+
+	cfg := defaultConfig()
+	cfg.UserBootstrapScript = nil // explicitly empty
+
+	_, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !m.runInstances.called {
+		t.Fatal("RunInstances was not called")
+	}
+
+	rawUD, decErr := base64.StdEncoding.DecodeString(aws.ToString(m.runInstances.input.UserData))
+	if decErr != nil {
+		t.Fatalf("UserData is not valid base64: %v", decErr)
+	}
+	udStr := string(rawUD)
+
+	// __MINT_USER_BOOTSTRAP__ should be rendered as "" (empty string) —
+	// the placeholder must not appear in the output.
+	if strings.Contains(udStr, "__MINT_USER_BOOTSTRAP__") {
+		t.Errorf("UserData still contains unrendered __MINT_USER_BOOTSTRAP__ placeholder:\n%s", udStr)
+	}
+	// The rendered value should be an empty assignment, not a base64 string.
+	if !strings.Contains(udStr, `MINT_USER_BOOTSTRAP=""`) {
+		t.Errorf("UserData should contain empty MINT_USER_BOOTSTRAP assignment, got:\n%s", udStr)
+	}
+}
+
+// TestUserBootstrapScriptPresentBase64EncodedInUserData verifies that when
+// UserBootstrapScript is set, the base64-encoded content appears in user-data.
+func TestUserBootstrapScriptPresentBase64EncodedInUserData(t *testing.T) {
+	m := newUpHappyMocks()
+	p := m.build()
+
+	scriptContent := []byte("#!/bin/bash\necho 'hello from user bootstrap'")
+	expectedB64 := base64.StdEncoding.EncodeToString(scriptContent)
+
+	cfg := defaultConfig()
+	cfg.UserBootstrapScript = scriptContent
+
+	_, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !m.runInstances.called {
+		t.Fatal("RunInstances was not called")
+	}
+
+	rawUD, decErr := base64.StdEncoding.DecodeString(aws.ToString(m.runInstances.input.UserData))
+	if decErr != nil {
+		t.Fatalf("UserData is not valid base64: %v", decErr)
+	}
+	udStr := string(rawUD)
+
+	if !strings.Contains(udStr, expectedB64) {
+		t.Errorf("UserData does not contain expected base64 for user-bootstrap.sh.\nExpected to find: %s\nIn:\n%s", expectedB64, udStr)
+	}
+}
+
+// TestUserBootstrapScriptTooLargeReturnsError verifies that a UserBootstrapScript
+// that causes the rendered user-data to exceed 16384 bytes returns an error with
+// the exact message format required by the acceptance criteria.
+func TestUserBootstrapScriptTooLargeReturnsError(t *testing.T) {
+	m := newUpHappyMocks()
+	p := m.build()
+
+	// The stub template in tests is ~210 bytes. Adding a large script will push
+	// the rendered user-data over 16384 bytes.
+	largeScript := make([]byte, 16000)
+	for i := range largeScript {
+		largeScript[i] = 'x'
+	}
+
+	cfg := defaultConfig()
+	cfg.UserBootstrapScript = largeScript
+
+	_, err := p.Run(context.Background(), "alice", "arn:aws:iam::123:user/alice", "default", cfg)
+	if err == nil {
+		t.Fatal("expected error for oversized user-bootstrap.sh, got nil")
+	}
+
+	wantSubstr := "user-bootstrap.sh too large"
+	if !strings.Contains(err.Error(), wantSubstr) {
+		t.Errorf("error = %q, want substring %q", err.Error(), wantSubstr)
+	}
+	wantSubstr2 := "max is 16384"
+	if !strings.Contains(err.Error(), wantSubstr2) {
+		t.Errorf("error = %q, want substring %q", err.Error(), wantSubstr2)
+	}
+	wantSubstr3 := "bytes over limit"
+	if !strings.Contains(err.Error(), wantSubstr3) {
+		t.Errorf("error = %q, want substring %q", err.Error(), wantSubstr3)
+	}
+
+	if m.runInstances.called {
+		t.Error("RunInstances should NOT be called when user-data exceeds the size limit")
 	}
 }

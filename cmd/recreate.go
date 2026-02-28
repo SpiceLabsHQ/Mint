@@ -6,6 +6,8 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -51,9 +53,10 @@ type recreateDeps struct {
 	describeAddrs       mintaws.DescribeAddressesAPI
 	associateAddr       mintaws.AssociateAddressAPI
 	disassociateAddr    mintaws.DisassociateAddressAPI
-	bootstrapScript     []byte
-	bootstrapURL        string // GitHub raw URL for bootstrap.sh delivery
-	mintConfig          *config.Config
+	bootstrapScript      []byte
+	bootstrapURL         string // GitHub raw URL for bootstrap.sh delivery
+	userBootstrapScript  []byte // Optional user-bootstrap.sh content read from config dir
+	mintConfig           *config.Config
 	pollBootstrap       provision.BootstrapPollFunc
 	resolveAMI          provision.AMIResolver
 	verifyBootstrap     provision.BootstrapVerifier
@@ -107,36 +110,44 @@ func newRecreateCommandWithDeps(deps *recreateDeps) *cobra.Command {
 				pollerWriter,
 				cmd.InOrStdin(),
 			)
-			hostKeyStore := sshconfig.NewHostKeyStore(config.DefaultConfigDir())
+			configDir := config.DefaultConfigDir()
+			hostKeyStore := sshconfig.NewHostKeyStore(configDir)
+			// Read user-bootstrap.sh from the config directory if it exists.
+			var userBootstrapScript []byte
+			userBootstrapPath := filepath.Join(configDir, "user-bootstrap.sh")
+			if data, err := os.ReadFile(userBootstrapPath); err == nil {
+				userBootstrapScript = data
+			}
 			return runRecreate(cmd, &recreateDeps{
-				describe:            clients.ec2Client,
-				sendKey:             clients.icClient,
-				remoteRun:           defaultRemoteRunner,
-				owner:               clients.owner,
-				ownerARN:            clients.ownerARN,
-				stop:                clients.ec2Client,
-				terminate:           clients.ec2Client,
-				detachVolume:        clients.ec2Client,
-				waitVolumeAvailable: ec2.NewVolumeAvailableWaiter(clients.ec2Client),
-				describeVolumes:     clients.ec2Client,
-				run:                 clients.ec2Client,
-				attachVolume:        clients.ec2Client,
-				createTags:          clients.ec2Client,
-				deleteTags:          clients.ec2Client,
-				describeSubnets:     clients.ec2Client,
-				describeSGs:         clients.ec2Client,
-				describeImages:      clients.ec2Client,
-				waitRunning:         ec2.NewInstanceRunningWaiter(clients.ec2Client),
-				describeFS:          clients.efsClient,
-				describeAddrs:       clients.ec2Client,
-				associateAddr:       clients.ec2Client,
-				disassociateAddr:    clients.ec2Client,
-				bootstrapScript:     GetBootstrapScript(),
-				bootstrapURL:        bootstrap.ScriptURL(version),
-				verifyBootstrap:     bootstrap.Verify,
-				mintConfig:          clients.mintConfig,
-				removeHostKey:       hostKeyStore.RemoveKey,
-				pollBootstrap:       poller.Poll,
+				describe:             clients.ec2Client,
+				sendKey:              clients.icClient,
+				remoteRun:            defaultRemoteRunner,
+				owner:                clients.owner,
+				ownerARN:             clients.ownerARN,
+				stop:                 clients.ec2Client,
+				terminate:            clients.ec2Client,
+				detachVolume:         clients.ec2Client,
+				waitVolumeAvailable:  ec2.NewVolumeAvailableWaiter(clients.ec2Client),
+				describeVolumes:      clients.ec2Client,
+				run:                  clients.ec2Client,
+				attachVolume:         clients.ec2Client,
+				createTags:           clients.ec2Client,
+				deleteTags:           clients.ec2Client,
+				describeSubnets:      clients.ec2Client,
+				describeSGs:          clients.ec2Client,
+				describeImages:       clients.ec2Client,
+				waitRunning:          ec2.NewInstanceRunningWaiter(clients.ec2Client),
+				describeFS:           clients.efsClient,
+				describeAddrs:        clients.ec2Client,
+				associateAddr:        clients.ec2Client,
+				disassociateAddr:     clients.ec2Client,
+				bootstrapScript:      GetBootstrapScript(),
+				bootstrapURL:         bootstrap.ScriptURL(version),
+				userBootstrapScript:  userBootstrapScript,
+				verifyBootstrap:      bootstrap.Verify,
+				mintConfig:           clients.mintConfig,
+				removeHostKey:        hostKeyStore.RemoveKey,
+				pollBootstrap:        poller.Poll,
 			})
 		},
 	}
@@ -673,6 +684,12 @@ func launchRecreateInstance(
 		}
 	}
 
+	// Encode the user bootstrap script if present.
+	userBootstrapB64 := ""
+	if len(deps.userBootstrapScript) > 0 {
+		userBootstrapB64 = base64.StdEncoding.EncodeToString(deps.userBootstrapScript)
+	}
+
 	// Render the bootstrap stub with runtime values.
 	stub, renderErr := bootstrap.RenderStub(
 		bootstrap.ScriptSHA256,
@@ -681,10 +698,18 @@ func launchRecreateInstance(
 		"/dev/xvdf",
 		vmName,
 		strconv.Itoa(idleTimeout),
+		userBootstrapB64,
 	)
 	if renderErr != nil {
 		return "", fmt.Errorf("rendering bootstrap stub: %w", renderErr)
 	}
+
+	const maxUserDataBytes = 16384
+	if len(stub) > maxUserDataBytes {
+		return "", fmt.Errorf("user-bootstrap.sh too large: rendered user-data is %d bytes, max is %d (%d bytes over limit)",
+			len(stub), maxUserDataBytes, len(stub)-maxUserDataBytes)
+	}
+
 	userData := base64.StdEncoding.EncodeToString(stub)
 
 	// Build instance tags.

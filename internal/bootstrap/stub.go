@@ -38,13 +38,15 @@ func GetStub() []byte {
 // is safe to store as plain bash without unintended shell evaluation.
 //
 // Parameters:
-//   - sha256:      expected SHA256 hex digest of bootstrap.sh (from ScriptSHA256)
-//   - url:         GitHub raw URL to fetch bootstrap.sh (from ScriptURL)
-//   - efsID:       EFS file system ID to mount
-//   - projectDev:  project EBS device path
-//   - vmName:      VM name tag
-//   - idleTimeout: idle timeout in minutes
-func RenderStub(sha256, url, efsID, projectDev, vmName, idleTimeout string) ([]byte, error) {
+//   - sha256:         expected SHA256 hex digest of bootstrap.sh (from ScriptSHA256)
+//   - url:            GitHub raw URL to fetch bootstrap.sh (from ScriptURL)
+//   - efsID:          EFS file system ID to mount
+//   - projectDev:     project EBS device path
+//   - vmName:         VM name tag
+//   - idleTimeout:    idle timeout in minutes
+//   - userBootstrap:  base64-encoded user bootstrap script to run after provisioning;
+//                     pass "" to skip the user hook (placeholder substituted with empty string)
+func RenderStub(sha256, url, efsID, projectDev, vmName, idleTimeout, userBootstrap string) ([]byte, error) {
 	if len(embeddedStub) == 0 {
 		return nil, fmt.Errorf("bootstrap stub template not loaded; call bootstrap.SetStub before RenderStub")
 	}
@@ -56,6 +58,7 @@ func RenderStub(sha256, url, efsID, projectDev, vmName, idleTimeout string) ([]b
 	rendered = strings.ReplaceAll(rendered, "__MINT_PROJECT_DEV__", projectDev)
 	rendered = strings.ReplaceAll(rendered, "__MINT_VM_NAME__", vmName)
 	rendered = strings.ReplaceAll(rendered, "__MINT_IDLE_TIMEOUT__", idleTimeout)
+	rendered = strings.ReplaceAll(rendered, "__MINT_USER_BOOTSTRAP__", userBootstrap)
 
 	return []byte(rendered), nil
 }
