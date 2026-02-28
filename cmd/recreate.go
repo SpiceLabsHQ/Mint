@@ -95,7 +95,7 @@ func newRecreateCommandWithDeps(deps *recreateDeps) *cobra.Command {
 			}
 			cliCtx := cli.FromCommand(cmd)
 			verbose := cliCtx != nil && cliCtx.Verbose
-			sp := progress.NewCommandSpinner(cmd.OutOrStdout(), verbose)
+			sp := progress.NewCommandSpinner(cmd.OutOrStdout(), false)
 			var pollerWriter io.Writer
 			if verbose {
 				pollerWriter = &spinnerWriter{sp: sp}
@@ -168,17 +168,15 @@ func runRecreate(cmd *cobra.Command, deps *recreateDeps) error {
 
 	cliCtx := cli.FromCommand(cmd)
 	vmName := "default"
-	verbose := false
 	yes := false
 	if cliCtx != nil {
 		vmName = cliCtx.VM
-		verbose = cliCtx.Verbose
 		yes = cliCtx.Yes
 	}
 
 	force, _ := cmd.Flags().GetBool("force")
 	w := cmd.OutOrStdout()
-	sp := progress.NewCommandSpinner(w, verbose)
+	sp := progress.NewCommandSpinner(w, false)
 
 	// Discover VM.
 	sp.Start(fmt.Sprintf("Discovering VM %q for owner %q...", vmName, deps.owner))

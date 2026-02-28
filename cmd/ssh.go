@@ -78,13 +78,11 @@ func runSSH(cmd *cobra.Command, deps *sshDeps, extraArgs []string) error {
 
 	cliCtx := cli.FromCommand(cmd)
 	vmName := "default"
-	verbose := false
 	if cliCtx != nil {
 		vmName = cliCtx.VM
-		verbose = cliCtx.Verbose
 	}
 
-	sp := progress.NewCommandSpinner(cmd.OutOrStdout(), verbose)
+	sp := progress.NewCommandSpinner(cmd.OutOrStdout(), false)
 
 	// Discover VM by owner + VM name.
 	sp.Start("Looking up VM...")

@@ -81,7 +81,7 @@ func newUpCommandWithDeps(deps *upDeps) *cobra.Command {
 			}
 			cliCtx := cli.FromCommand(cmd)
 			verbose := cliCtx != nil && cliCtx.Verbose
-			sp := progress.NewCommandSpinner(cmd.OutOrStdout(), verbose)
+			sp := progress.NewCommandSpinner(cmd.OutOrStdout(), false)
 			// When --verbose is active, route poller output through the spinner's
 			// mutex-protected Update method to prevent concurrent writes to the
 			// same fd from the spinner goroutine and the poller.
@@ -185,7 +185,7 @@ func runUp(cmd *cobra.Command, deps *upDeps) error {
 		}
 	}
 
-	sp := progress.NewCommandSpinner(cmd.OutOrStdout(), verbose)
+	sp := progress.NewCommandSpinner(cmd.OutOrStdout(), jsonOutput)
 	sp.Start(fmt.Sprintf("Provisioning VM %q for owner %q...", vmName, deps.owner))
 
 	// Discover admin EFS filesystem (same pattern as mint init).
