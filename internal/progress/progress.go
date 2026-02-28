@@ -24,13 +24,14 @@ import (
 )
 
 // NewCommandSpinner creates a Spinner for command progress output.
-// When verbose is false, the spinner writes to io.Discard so no progress is
-// shown and Interactive is forced to false. When verbose is true, the spinner
-// writes to w (or os.Stdout when w is nil) and TTY detection sets Interactive
+// When quiet is false (the default non-JSON path), the spinner writes to w
+// (or os.Stdout when w is nil) and TTY detection sets Interactive
 // automatically; in non-interactive environments (CI, tests) the spinner emits
-// plain timestamped lines.
-func NewCommandSpinner(w io.Writer, verbose bool) *Spinner {
-	if !verbose {
+// plain timestamped lines. When quiet is true (JSON / machine-readable path),
+// the spinner writes to io.Discard so no progress is shown and Interactive is
+// forced to false.
+func NewCommandSpinner(w io.Writer, quiet bool) *Spinner {
+	if quiet {
 		sp := New(io.Discard)
 		sp.Interactive = false
 		return sp

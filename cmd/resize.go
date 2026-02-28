@@ -82,14 +82,12 @@ func runResize(cmd *cobra.Command, deps *resizeDeps, newType string) error {
 
 	cliCtx := cli.FromCommand(cmd)
 	vmName := "default"
-	verbose := false
 	if cliCtx != nil {
 		vmName = cliCtx.VM
-		verbose = cliCtx.Verbose
 	}
 
 	w := cmd.OutOrStdout()
-	sp := progress.NewCommandSpinner(w, verbose)
+	sp := progress.NewCommandSpinner(w, false)
 
 	// Discover VM.
 	sp.Start(fmt.Sprintf("Discovering VM %q for owner %q...", vmName, deps.owner))

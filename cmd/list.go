@@ -122,9 +122,9 @@ func runList(cmd *cobra.Command, deps *listDeps) error {
 
 	// Show a spinner during the AWS discovery call. Suppress in JSON mode so
 	// spinner lines do not corrupt machine-readable output. NewCommandSpinner
-	// with verbose=false routes output to io.Discard, effectively suppressing
-	// all spinner activity; verbose=true routes to the command's writer.
-	sp := progress.NewCommandSpinner(w, !jsonOutput)
+	// with quiet=true routes output to io.Discard (JSON path); quiet=false
+	// routes to the command's writer (human-readable path).
+	sp := progress.NewCommandSpinner(w, jsonOutput)
 	sp.Start("Discovering VMs...")
 
 	vms, err := vm.ListVMs(ctx, deps.describe, deps.owner)

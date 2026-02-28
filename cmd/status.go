@@ -100,7 +100,7 @@ func runStatus(cmd *cobra.Command, deps *statusDeps) error {
 
 	// Show a spinner during the AWS VM lookup. Suppress in JSON mode so
 	// spinner lines do not corrupt machine-readable output.
-	sp := progress.NewCommandSpinner(w, !jsonOutput)
+	sp := progress.NewCommandSpinner(w, jsonOutput)
 	sp.Start("Checking VM status...")
 
 	found, err := vm.FindVM(ctx, deps.describe, deps.owner, vmName)
