@@ -51,8 +51,8 @@ jobs:
       - name: Generate
         run: go generate ./...
 
-      - name: Delete existing release if present
-        run: gh release delete ${{ github.ref_name }} --yes 2>/dev/null || true
+      - name: Convert pre-existing release to draft if present
+        run: gh release edit ${{ github.ref_name }} --draft 2>/dev/null || true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
