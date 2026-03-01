@@ -92,7 +92,7 @@ func runDown(cmd *cobra.Command, deps *downDeps) error {
 	}
 
 	// Spinner starts after VM discovery and state check.
-	sp := progress.NewCommandSpinner(w, verbose)
+	sp := progress.NewCommandSpinner(w, false)
 	sp.Start("Stopping VM...")
 
 	_, err = deps.stop.StopInstances(ctx, &ec2.StopInstancesInput{

@@ -124,7 +124,7 @@ func runDestroy(cmd *cobra.Command, deps *destroyDeps) error {
 	}
 
 	// Spinner starts AFTER confirmation is obtained.
-	sp := progress.NewCommandSpinner(w, verbose)
+	sp := progress.NewCommandSpinner(w, false)
 	sp.Start("Terminating VM...")
 
 	// Build Destroyer and run. The destroyer handles: terminate instance,

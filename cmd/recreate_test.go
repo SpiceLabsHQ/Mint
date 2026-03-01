@@ -1160,8 +1160,26 @@ func TestRecreateLifecycleBootstrapPollError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error from bootstrap poll, got nil")
 	}
-	if !strings.Contains(err.Error(), "bootstrap timed out") {
-		t.Errorf("error %q does not contain 'bootstrap timed out'", err.Error())
+	// The returned error must have an empty message (silentExitError) because
+	// the recovery block was already printed to stdout — we don't want
+	// main.go to double-print the error on stderr.
+	if msg := err.Error(); msg != "" {
+		t.Errorf("error message must be empty (silentExitError) to prevent double-print, got: %q", msg)
+	}
+
+	output := buf.String()
+	// The failure message and recovery hints must appear in the output.
+	if !strings.Contains(output, "Bootstrap failed") {
+		t.Errorf("output must contain 'Bootstrap failed', got:\n%s", output)
+	}
+	if !strings.Contains(output, "bootstrap timed out") {
+		t.Errorf("output must contain the error message, got:\n%s", output)
+	}
+	if !strings.Contains(output, "mint recreate") {
+		t.Errorf("output must suggest 'mint recreate', got:\n%s", output)
+	}
+	if !strings.Contains(output, "mint destroy") {
+		t.Errorf("output must suggest 'mint destroy', got:\n%s", output)
 	}
 }
 

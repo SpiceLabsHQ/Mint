@@ -77,14 +77,12 @@ func runSessions(cmd *cobra.Command, deps *sessionsDeps) error {
 	cliCtx := cli.FromCommand(cmd)
 	vmName := "default"
 	jsonOutput := false
-	verbose := false
 	if cliCtx != nil {
 		vmName = cliCtx.VM
 		jsonOutput = cliCtx.JSON
-		verbose = cliCtx.Verbose
 	}
 
-	sp := progress.NewCommandSpinner(cmd.OutOrStdout(), verbose)
+	sp := progress.NewCommandSpinner(cmd.OutOrStdout(), jsonOutput)
 
 	// Discover VM and fetch session info.
 	sp.Start("Fetching session info...")

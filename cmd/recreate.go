@@ -95,7 +95,7 @@ func newRecreateCommandWithDeps(deps *recreateDeps) *cobra.Command {
 			}
 			cliCtx := cli.FromCommand(cmd)
 			verbose := cliCtx != nil && cliCtx.Verbose
-			sp := progress.NewCommandSpinner(cmd.OutOrStdout(), verbose)
+			sp := progress.NewCommandSpinner(cmd.OutOrStdout(), false)
 			var pollerWriter io.Writer
 			if verbose {
 				pollerWriter = &spinnerWriter{sp: sp}
@@ -168,17 +168,15 @@ func runRecreate(cmd *cobra.Command, deps *recreateDeps) error {
 
 	cliCtx := cli.FromCommand(cmd)
 	vmName := "default"
-	verbose := false
 	yes := false
 	if cliCtx != nil {
 		vmName = cliCtx.VM
-		verbose = cliCtx.Verbose
 		yes = cliCtx.Yes
 	}
 
 	force, _ := cmd.Flags().GetBool("force")
 	w := cmd.OutOrStdout()
-	sp := progress.NewCommandSpinner(w, verbose)
+	sp := progress.NewCommandSpinner(w, false)
 
 	// Discover VM.
 	sp.Start(fmt.Sprintf("Discovering VM %q for owner %q...", vmName, deps.owner))
@@ -306,12 +304,15 @@ func executeRecreateLifecycle(
 		return fmt.Errorf("attaching project volume %s to %s: %w", volumeID, newInstanceID, err)
 	}
 
-	if err := stepReassociateEIP(ctx, deps, vmName, newInstanceID, sp, w); err != nil {
+	newInstancePublicIP, err := stepReassociateEIP(ctx, deps, vmName, newInstanceID, sp, w)
+	if err != nil {
 		return fmt.Errorf("reassociating Elastic IP: %w", err)
 	}
 
-	if err := stepBootstrapPoll(ctx, deps, vmName, newInstanceID, sp); err != nil {
-		return fmt.Errorf("bootstrap polling: %w", err)
+	if bootstrapErr := stepBootstrapPoll(ctx, deps, vmName, newInstanceID, sp); bootstrapErr != nil {
+		sp.Stop("")
+		printBootstrapFailureHint(w, bootstrapErr, newInstancePublicIP)
+		return silentExitError{}
 	}
 
 	// Clear cached TOFU host key so the next connection triggers fresh
@@ -478,13 +479,14 @@ func stepAttachVolume(
 }
 
 // stepReassociateEIP reassociates the Elastic IP with the new instance (Step 8/9).
+// Returns the public IP address of the Elastic IP (empty string if none found).
 func stepReassociateEIP(
 	ctx context.Context,
 	deps *recreateDeps,
 	vmName, newInstanceID string,
 	sp *progress.Spinner,
 	w io.Writer,
-) error {
+) (publicIP string, err error) {
 	sp.Update("Step 8/9: Reassociating Elastic IP...")
 
 	return reassociateElasticIP(ctx, deps, vmName, newInstanceID, sp, w)
@@ -537,6 +539,9 @@ func findProjectVolume(ctx context.Context, deps *recreateDeps, vmName string) (
 // fail (the VM still has an auto-assigned public IP). If association fails,
 // it returns an error.
 //
+// Returns the public IP of the Elastic IP (empty string when no EIP is found
+// or when describeAddrs is nil). This is used for the bootstrap failure hint.
+//
 // If the EIP has a stale AssociationId from the terminated instance's ENI,
 // DisassociateAddress is called explicitly before AssociateAddress. This
 // avoids the InvalidNetworkInterfaceID.NotFound race condition that occurs
@@ -547,10 +552,10 @@ func reassociateElasticIP(
 	vmName, newInstanceID string,
 	sp *progress.Spinner,
 	w io.Writer,
-) error {
+) (publicIP string, err error) {
 	if deps.describeAddrs == nil {
 		sp.Update("  Warning: no Elastic IP client configured, skipping EIP reassociation")
-		return nil
+		return "", nil
 	}
 
 	filters := append(
@@ -565,22 +570,23 @@ func reassociateElasticIP(
 		Filters: filters,
 	})
 	if err != nil {
-		return fmt.Errorf("discovering Elastic IP: %w", err)
+		return "", fmt.Errorf("discovering Elastic IP: %w", err)
 	}
 
 	if len(out.Addresses) == 0 {
 		sp.Update(fmt.Sprintf("  Warning: no Elastic IP found for VM %q — using auto-assigned public IP", vmName))
-		return nil
+		return "", nil
 	}
 
 	addr := out.Addresses[0]
 	allocID := aws.ToString(addr.AllocationId)
+	eipPublicIP := aws.ToString(addr.PublicIp)
 
 	sp.Update(fmt.Sprintf("  Found Elastic IP %s (%s), reassociating with %s",
-		aws.ToString(addr.PublicIp), allocID, newInstanceID))
+		eipPublicIP, allocID, newInstanceID))
 
 	if deps.associateAddr == nil {
-		return fmt.Errorf("no AssociateAddress client configured")
+		return "", fmt.Errorf("no AssociateAddress client configured")
 	}
 
 	// If the EIP still carries a stale AssociationId from the terminated
@@ -590,13 +596,13 @@ func reassociateElasticIP(
 	if aws.ToString(addr.AssociationId) != "" {
 		sp.Update(fmt.Sprintf("  Disassociating stale EIP association %s...", aws.ToString(addr.AssociationId)))
 		if deps.disassociateAddr == nil {
-			return fmt.Errorf("no DisassociateAddress client configured")
+			return "", fmt.Errorf("no DisassociateAddress client configured")
 		}
 		_, disassocErr := deps.disassociateAddr.DisassociateAddress(ctx, &ec2.DisassociateAddressInput{
 			AssociationId: addr.AssociationId,
 		})
 		if disassocErr != nil {
-			return fmt.Errorf("disassociating EIP: %w", disassocErr)
+			return "", fmt.Errorf("disassociating EIP: %w", disassocErr)
 		}
 	}
 
@@ -605,12 +611,12 @@ func reassociateElasticIP(
 		InstanceId:   aws.String(newInstanceID),
 	})
 	if err != nil {
-		return fmt.Errorf("associating EIP %s with instance %s: %w", allocID, newInstanceID, err)
+		return "", fmt.Errorf("associating EIP %s with instance %s: %w", allocID, newInstanceID, err)
 	}
 
 	sp.Update("  Elastic IP reassociated successfully")
 
-	return nil
+	return eipPublicIP, nil
 }
 
 // launchRecreateInstance launches a new EC2 instance in the specified AZ,
