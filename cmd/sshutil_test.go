@@ -499,8 +499,11 @@ func TestVerifyHostKeyMismatchErrorFormat(t *testing.T) {
 	}
 
 	// Assert the remediation hint is present.
-	if !strings.Contains(msg, "mint destroy && mint up") {
-		t.Errorf("error missing remediation hint 'mint destroy && mint up', got:\n%s", msg)
+	if !strings.Contains(msg, "mint recreate") {
+		t.Errorf("error missing remediation hint 'mint recreate', got:\n%s", msg)
+	}
+	if !strings.Contains(msg, "known_hosts") {
+		t.Errorf("error missing known_hosts reference, got:\n%s", msg)
 	}
 
 	// The inner runner must not have been called.
@@ -552,8 +555,11 @@ func TestVerifyHostKeyMismatchErrorFormatViaRun(t *testing.T) {
 	if !strings.Contains(msg, "Current fingerprint: "+currentFP) {
 		t.Errorf("error missing 'Current fingerprint: %s', got:\n%s", currentFP, msg)
 	}
-	if !strings.Contains(msg, "mint destroy && mint up") {
-		t.Errorf("error missing remediation hint, got:\n%s", msg)
+	if !strings.Contains(msg, "mint recreate") {
+		t.Errorf("error missing 'mint recreate' remediation hint, got:\n%s", msg)
+	}
+	if !strings.Contains(msg, "known_hosts") {
+		t.Errorf("error missing known_hosts reference, got:\n%s", msg)
 	}
 }
 

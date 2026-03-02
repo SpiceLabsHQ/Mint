@@ -381,3 +381,87 @@ func TestDestroyCommandWaiterErrorPropagates(t *testing.T) {
 		t.Errorf("error %q does not contain expected message", err.Error())
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Tests: removeHostKey wiring in destroy command
+// ---------------------------------------------------------------------------
+
+// TestDestroyCommandRemovesHostKey verifies that removeHostKey is called with
+// the VM name after a successful destroy.
+func TestDestroyCommandRemovesHostKey(t *testing.T) {
+	var removedVM string
+	deps := newHappyDestroyDeps("alice")
+	deps.removeHostKey = func(vmName string) error {
+		removedVM = vmName
+		return nil
+	}
+
+	buf := new(bytes.Buffer)
+	cmd := newDestroyCommandWithDeps(deps)
+	root := newDestroyTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"destroy", "--yes"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if removedVM != "default" {
+		t.Errorf("removeHostKey called with %q, want %q", removedVM, "default")
+	}
+}
+
+// TestDestroyCommandRemoveHostKeyNotCalledOnFailure verifies that removeHostKey
+// is not called when the destroy itself fails.
+func TestDestroyCommandRemoveHostKeyNotCalledOnFailure(t *testing.T) {
+	called := false
+	deps := newHappyDestroyDeps("alice")
+	deps.terminate = &mockDestroyTerminateInstances{
+		err: fmt.Errorf("terminate failed"),
+	}
+	deps.removeHostKey = func(vmName string) error {
+		called = true
+		return nil
+	}
+
+	buf := new(bytes.Buffer)
+	cmd := newDestroyCommandWithDeps(deps)
+	root := newDestroyTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"destroy", "--yes"})
+
+	if err := root.Execute(); err == nil {
+		t.Fatal("expected error, got nil")
+	}
+
+	if called {
+		t.Error("removeHostKey should not be called when destroy fails")
+	}
+}
+
+// TestDestroyCommandRemoveHostKeyErrorIsNonFatal verifies that a failure in
+// removeHostKey surfaces as a warning but does not cause the command to fail.
+func TestDestroyCommandRemoveHostKeyErrorIsNonFatal(t *testing.T) {
+	deps := newHappyDestroyDeps("alice")
+	deps.removeHostKey = func(vmName string) error {
+		return fmt.Errorf("permission denied")
+	}
+
+	buf := new(bytes.Buffer)
+	cmd := newDestroyCommandWithDeps(deps)
+	root := newDestroyTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"destroy", "--yes"})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("removeHostKey error should be non-fatal, got: %v", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "Warning") || !strings.Contains(output, "permission denied") {
+		t.Errorf("expected warning about host key removal failure in output, got: %s", output)
+	}
+}

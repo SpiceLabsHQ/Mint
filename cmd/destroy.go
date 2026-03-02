@@ -11,8 +11,10 @@ import (
 
 	mintaws "github.com/SpiceLabsHQ/Mint/internal/aws"
 	"github.com/SpiceLabsHQ/Mint/internal/cli"
+	"github.com/SpiceLabsHQ/Mint/internal/config"
 	"github.com/SpiceLabsHQ/Mint/internal/progress"
 	"github.com/SpiceLabsHQ/Mint/internal/provision"
+	"github.com/SpiceLabsHQ/Mint/internal/sshconfig"
 	"github.com/SpiceLabsHQ/Mint/internal/vm"
 )
 
@@ -26,6 +28,7 @@ type destroyDeps struct {
 	deleteVolume    mintaws.DeleteVolumeAPI
 	describeAddrs   mintaws.DescribeAddressesAPI
 	releaseAddr     mintaws.ReleaseAddressAPI
+	removeHostKey   func(vmName string) error
 	owner           string
 }
 
@@ -53,6 +56,8 @@ func newDestroyCommandWithDeps(deps *destroyDeps) *cobra.Command {
 			if clients == nil {
 				return fmt.Errorf("AWS clients not configured")
 			}
+			configDir := config.DefaultConfigDir()
+			hostKeyStore := sshconfig.NewHostKeyStore(configDir)
 			return runDestroy(cmd, &destroyDeps{
 				describe:        clients.ec2Client,
 				terminate:       clients.ec2Client,
@@ -62,6 +67,7 @@ func newDestroyCommandWithDeps(deps *destroyDeps) *cobra.Command {
 				deleteVolume:    clients.ec2Client,
 				describeAddrs:   clients.ec2Client,
 				releaseAddr:     clients.ec2Client,
+				removeHostKey:   hostKeyStore.RemoveKey,
 				owner:           clients.owner,
 			})
 		},
@@ -161,6 +167,14 @@ func runDestroy(cmd *cobra.Command, deps *destroyDeps) error {
 
 	for _, warn := range result.Warnings {
 		fmt.Fprintf(w, "Warning: %s\n", warn)
+	}
+
+	// Clear the stored host key fingerprint so that 'mint up' after this
+	// destroy doesn't hit a TOFU mismatch on the new VM's fresh host key.
+	if deps.removeHostKey != nil {
+		if err := deps.removeHostKey(vmName); err != nil {
+			fmt.Fprintf(w, "Warning: could not clear stored host key fingerprint: %v\n", err)
+		}
 	}
 
 	fmt.Fprintf(w, "VM %q (%s) destroyed.\n", vmName, result.InstanceID)

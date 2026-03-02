@@ -266,8 +266,10 @@ func (t *TOFURemoteRunner) verifyHostKey(host string, port int) error {
 				"  Stored fingerprint: %s\n"+
 				"  Current fingerprint: %s\n\n"+
 				"This could indicate a man-in-the-middle attack, or the VM was rebuilt.\n"+
-				"If this is expected (VM was rebuilt), run: mint destroy && mint up",
-			t.vmName, existing, fingerprint,
+				"If the VM was rebuilt, run 'mint recreate' to rebuild with automatic key rotation.\n"+
+				"To accept the new key for a VM that is already running, delete the %q entry\n"+
+				"from ~/.config/mint/known_hosts",
+			t.vmName, existing, fingerprint, t.vmName,
 		)
 	}
 
