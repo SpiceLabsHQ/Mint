@@ -112,6 +112,49 @@ go mod tidy                       # always run after adding new dependencies
 | `docs/command-reference.md` | Complete command documentation with ADR cross-references |
 | `.devcontainer/` | Developer isolated environment (Go 1.24, AWS CLI, isolated `MINT_CONFIG_DIR`) |
 
+## Troubleshooting: SSH Access to a Mint VM
+
+When a VM is running but `mint ssh` isn't available (e.g. bootstrap failed, devcontainer context, no mint binary), use EC2 Instance Connect directly:
+
+1. **List available AWS profiles**
+   ```bash
+   aws configure list-profiles
+   ```
+
+2. **Get the instance's AZ** (instance ID is shown in bootstrap failure messages and `mint list` output)
+   ```bash
+   aws --profile <profile> --region <region> ec2 describe-instances \
+     --instance-ids <instance-id> \
+     --query 'Reservations[0].Instances[0].Placement.AvailabilityZone' \
+     --output text
+   ```
+
+3. **Generate a temporary key pair**
+   ```bash
+   ssh-keygen -t ed25519 -f /tmp/mint-tmp-key -N ""
+   ```
+
+4. **Push the public key** (valid for 60 seconds)
+   ```bash
+   aws --profile <profile> --region <region> ec2-instance-connect send-ssh-public-key \
+     --instance-id <instance-id> \
+     --instance-os-user ubuntu \
+     --availability-zone <az> \
+     --ssh-public-key file:///tmp/mint-tmp-key.pub
+   ```
+
+5. **SSH in immediately**
+   ```bash
+   ssh -i /tmp/mint-tmp-key -p 41122 ubuntu@<public-ip>
+   ```
+
+6. **Check bootstrap logs**
+   ```bash
+   sudo journalctl -u cloud-final --no-pager | grep mint-bootstrap
+   ```
+
+The Mint SSH port is **41122** (ADR-0016). The OS user is always `ubuntu`. The profile to use is typically `PowerUserAccess-<account-id>` — run `aws configure list-profiles` to confirm.
+
 ## Quality Gates
 
 The following commands are used during automated quality gates:
