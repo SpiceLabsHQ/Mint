@@ -361,9 +361,11 @@ func buildCloneCommand(gitURL, projectPath, branch string) []string {
 	return cmd
 }
 
-// expandGitHubShorthand converts "owner/repo" shorthand to a full GitHub HTTPS
-// URL. Inputs that already look like a URL (contain "://" or "@") are returned
-// unchanged.
+// expandGitHubShorthand converts "owner/repo" shorthand to a full GitHub SSH
+// URL (git@github.com:owner/repo.git). SSH URLs work with agent forwarding so
+// that private repositories are accessible without any credential configuration
+// on the VM. Inputs that already look like a URL (contain "://" or "@") are
+// returned unchanged.
 func expandGitHubShorthand(gitURL string) string {
 	if strings.Contains(gitURL, "://") || strings.Contains(gitURL, "@") {
 		return gitURL
@@ -371,7 +373,11 @@ func expandGitHubShorthand(gitURL string) string {
 	// owner/repo or owner/repo.git — no slashes beyond one separator allowed.
 	parts := strings.Split(gitURL, "/")
 	if len(parts) == 2 && parts[0] != "" && parts[1] != "" {
-		return "https://github.com/" + gitURL
+		repo := parts[1]
+		if !strings.HasSuffix(repo, ".git") {
+			repo += ".git"
+		}
+		return "git@github.com:" + parts[0] + "/" + repo
 	}
 	return gitURL
 }

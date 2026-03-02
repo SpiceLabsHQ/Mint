@@ -114,8 +114,8 @@ func TestExpandGitHubShorthand(t *testing.T) {
 		input string
 		want  string
 	}{
-		{"SpiceLabsHQ/bqe-lumen", "https://github.com/SpiceLabsHQ/bqe-lumen"},
-		{"org/repo.git", "https://github.com/org/repo.git"},
+		{"SpiceLabsHQ/bqe-lumen", "git@github.com:SpiceLabsHQ/bqe-lumen.git"},
+		{"org/repo.git", "git@github.com:org/repo.git"},
 		{"https://github.com/org/repo", "https://github.com/org/repo"},
 		{"git@github.com:org/repo.git", "git@github.com:org/repo.git"},
 		{"not-a-url", "not-a-url"},
