@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -167,6 +168,9 @@ func runProjectAdd(cmd *cobra.Command, deps *projectAddDeps, gitURL string) erro
 		vmName = cliCtx.VM
 	}
 
+	// Expand GitHub shorthand "owner/repo" → full HTTPS URL.
+	gitURL = expandGitHubShorthand(gitURL)
+
 	// Derive project name from URL or --name flag.
 	projectName, err := extractProjectName(gitURL)
 	if err != nil {
@@ -267,10 +271,12 @@ func runProjectAdd(cmd *cobra.Command, deps *projectAddDeps, gitURL string) erro
 	if !dirExists {
 		fmt.Fprintf(w, "Cloning %s...\n", gitURL)
 		cloneCmd := buildCloneCommand(gitURL, projectPath, branch)
+		var cloneStderr bytes.Buffer
 		_, err = streaming(ctx, deps.sendKey, found.ID, found.AvailabilityZone,
-			found.PublicIP, defaultSSHPort, defaultSSHUser, cloneCmd, os.Stderr)
+			found.PublicIP, defaultSSHPort, defaultSSHUser, cloneCmd,
+			io.MultiWriter(os.Stderr, &cloneStderr))
 		if err != nil {
-			return fmt.Errorf("cloning repository: %w", err)
+			return classifyCloneError(gitURL, err, cloneStderr.String())
 		}
 	} else if containerID == "" {
 		fmt.Fprintf(w, "Found existing clone for %q, resuming from devcontainer build.\n", projectName)
@@ -353,6 +359,59 @@ func buildCloneCommand(gitURL, projectPath, branch string) []string {
 	}
 	cmd = append(cmd, gitURL, projectPath)
 	return cmd
+}
+
+// expandGitHubShorthand converts "owner/repo" shorthand to a full GitHub HTTPS
+// URL. Inputs that already look like a URL (contain "://" or "@") are returned
+// unchanged.
+func expandGitHubShorthand(gitURL string) string {
+	if strings.Contains(gitURL, "://") || strings.Contains(gitURL, "@") {
+		return gitURL
+	}
+	// owner/repo or owner/repo.git — no slashes beyond one separator allowed.
+	parts := strings.Split(gitURL, "/")
+	if len(parts) == 2 && parts[0] != "" && parts[1] != "" {
+		return "https://github.com/" + gitURL
+	}
+	return gitURL
+}
+
+// classifyCloneError inspects git clone stderr and returns an actionable error.
+// Since git's raw output is already streamed to the user's terminal, this
+// function focuses on providing a concise follow-up hint rather than repeating
+// the raw error.
+func classifyCloneError(gitURL string, err error, stderr string) error {
+	isSSHURL := strings.Contains(gitURL, "git@") || strings.HasPrefix(gitURL, "ssh://")
+
+	// Auth failures: SSH key rejected, HTTPS credentials not available.
+	if strings.Contains(stderr, "Permission denied") ||
+		strings.Contains(stderr, "Authentication failed") ||
+		strings.Contains(stderr, "could not read Username") ||
+		strings.Contains(stderr, "Invalid username or password") {
+		if isSSHURL {
+			return fmt.Errorf("cloning repository: authentication failed\n\n" +
+				"  The VM could not authenticate with the git server.\n" +
+				"  • Ensure your local SSH agent has the right key loaded: ssh-add -l\n" +
+				"  • SSH agent forwarding is enabled automatically when SSH_AUTH_SOCK is set\n" +
+				"  • Or add a deploy key to the repository: mint key add <public-key-path>")
+		}
+		return fmt.Errorf("cloning repository: authentication failed\n\n" +
+			"  The VM could not authenticate with the git server.\n" +
+			"  • Use an SSH URL to leverage agent forwarding: git@github.com:org/repo.git\n" +
+			"  • Or include a token in the HTTPS URL: https://<token>@github.com/org/repo\n" +
+			"  • Or add a deploy key to the repository: mint key add <public-key-path>")
+	}
+
+	// Repository not found — GitHub returns this for both missing and inaccessible repos.
+	if strings.Contains(stderr, "Repository not found") ||
+		strings.Contains(stderr, "repository not found") ||
+		strings.Contains(stderr, "does not exist") {
+		return fmt.Errorf("cloning repository: repository not found\n\n" +
+			"  Check that %q is correct and that you have access.\n" +
+			"  For private repos, authentication is required — see above.", gitURL)
+	}
+
+	return fmt.Errorf("cloning repository: %w", err)
 }
 
 // extractProjectName derives a project name from a git URL.
@@ -522,7 +581,7 @@ func parseProjectsAndContainers(lsOutput, dockerOutput string) []projectInfo {
 	var projectNames []string
 	for _, line := range strings.Split(lsOutput, "\n") {
 		name := strings.TrimSpace(line)
-		if name != "" {
+		if name != "" && name != "lost+found" {
 			projectNames = append(projectNames, name)
 		}
 	}
@@ -603,7 +662,7 @@ func writeProjectListJSON(w io.Writer, projects []projectInfo) error {
 // writeProjectListHuman outputs projects as a human-readable table.
 func writeProjectListHuman(w io.Writer, projects []projectInfo) {
 	if len(projects) == 0 {
-		fmt.Fprintln(w, "No projects found")
+		fmt.Fprintln(w, "No projects yet — run mint project add <git-url> to clone one.")
 		return
 	}
 

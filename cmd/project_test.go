@@ -109,6 +109,82 @@ func TestExtractProjectName(t *testing.T) {
 	}
 }
 
+func TestExpandGitHubShorthand(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"SpiceLabsHQ/bqe-lumen", "https://github.com/SpiceLabsHQ/bqe-lumen"},
+		{"org/repo.git", "https://github.com/org/repo.git"},
+		{"https://github.com/org/repo", "https://github.com/org/repo"},
+		{"git@github.com:org/repo.git", "git@github.com:org/repo.git"},
+		{"not-a-url", "not-a-url"},
+		{"too/many/parts", "too/many/parts"},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := expandGitHubShorthand(tt.input)
+			if got != tt.want {
+				t.Errorf("expandGitHubShorthand(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestClassifyCloneError(t *testing.T) {
+	sentinel := fmt.Errorf("exit status 128")
+
+	tests := []struct {
+		name       string
+		gitURL     string
+		stderr     string
+		wantSubstr string
+	}{
+		{
+			name:       "SSH auth failure hints at agent",
+			gitURL:     "git@github.com:org/private.git",
+			stderr:     "git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.",
+			wantSubstr: "ssh-add -l",
+		},
+		{
+			name:       "HTTPS auth failure hints at SSH URL",
+			gitURL:     "https://github.com/org/private",
+			stderr:     "fatal: could not read Username for 'https://github.com': No such device or address",
+			wantSubstr: "git@github.com:org/repo.git",
+		},
+		{
+			name:       "HTTPS auth failure hints at token",
+			gitURL:     "https://github.com/org/private",
+			stderr:     "fatal: Authentication failed for 'https://github.com/org/private'",
+			wantSubstr: "<token>@github.com",
+		},
+		{
+			name:       "repository not found",
+			gitURL:     "git@github.com:org/typo.git",
+			stderr:     "ERROR: Repository not found.\nfatal: Could not read from remote repository.",
+			wantSubstr: "repository not found",
+		},
+		{
+			name:       "unrecognized error falls back to wrapped error",
+			gitURL:     "https://github.com/org/repo",
+			stderr:     "fatal: some unexpected git error",
+			wantSubstr: "exit status 128",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := classifyCloneError(tt.gitURL, sentinel, tt.stderr)
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !strings.Contains(err.Error(), tt.wantSubstr) {
+				t.Errorf("classifyCloneError error = %q, want substring %q", err.Error(), tt.wantSubstr)
+			}
+		})
+	}
+}
+
 // --- Mock infrastructure for project tests ---
 
 // mockDescribeForProject implements mintaws.DescribeInstancesAPI for project tests.
@@ -993,7 +1069,7 @@ func TestProjectListCommand(t *testing.T) {
 				errors: []error{nil, nil},
 			},
 			owner:      "alice",
-			wantOutput: []string{"No projects found"},
+			wantOutput: []string{"No projects yet — run mint project add <git-url> to clone one."},
 		},
 		{
 			name: "no projects json returns empty array",
@@ -1239,6 +1315,23 @@ func TestParseProjectsAndContainers(t *testing.T) {
 		{
 			name:          "whitespace-only ls output",
 			lsOutput:      "  \n  \n",
+			dockerOutput:  "",
+			expectedCount: 0,
+		},
+		{
+			name:          "lost+found filtered out",
+			lsOutput:      "lost+found\nmyproject\n",
+			dockerOutput:  "",
+			expectedCount: 1,
+			check: func(t *testing.T, projects []projectInfo) {
+				if projects[0].Name != "myproject" {
+					t.Errorf("name = %q, want myproject", projects[0].Name)
+				}
+			},
+		},
+		{
+			name:          "only lost+found",
+			lsOutput:      "lost+found\n",
 			dockerOutput:  "",
 			expectedCount: 0,
 		},
