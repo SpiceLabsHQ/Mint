@@ -65,6 +65,10 @@ func TestSSHConfigCommand_WritesBlock(t *testing.T) {
 		}
 	}
 
+	// Must contain TOFU-compatible host key checking.
+	if !strings.Contains(content, "StrictHostKeyChecking accept-new") {
+		t.Errorf("missing StrictHostKeyChecking accept-new, got:\n%s", content)
+	}
 	// Must NOT contain old insecure settings.
 	if strings.Contains(content, "StrictHostKeyChecking no") {
 		t.Errorf("should not contain StrictHostKeyChecking no, got:\n%s", content)

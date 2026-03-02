@@ -39,30 +39,47 @@ func computeChecksum(innerContent string) string {
 // aws ec2-instance-connect send-ssh-public-key, and uses nc to establish
 // the TCP tunnel. The IdentityFile points to the same ephemeral key so
 // the SSH client authenticates with it.
-func GenerateBlock(vmName, hostname, user string, port int, instanceID, az string) string {
+//
+// When profile or region are non-empty, the corresponding --profile / --region
+// flags are added to the aws CLI invocation inside the ProxyCommand so that
+// the shelled-out aws command uses the same credentials as the Go SDK.
+func GenerateBlock(vmName, hostname, user string, port int, instanceID, az, profile, region string) string {
 	keyPath := fmt.Sprintf("~/.config/mint/ssh_key_%s", vmName)
+
+	// Build optional --profile / --region flags for the aws CLI command.
+	var awsFlags string
+	if profile != "" {
+		awsFlags += " --profile " + profile
+	}
+	if region != "" {
+		awsFlags += " --region " + region
+	}
 
 	// ProxyCommand uses mktemp -d for a unique temp dir per invocation,
 	// generates the ephemeral key there, then atomically updates the fixed
 	// IdentityFile symlink via ln -sf. A trap cleans up the temp dir on exit.
 	// This eliminates key persistence and concurrent connection race conditions.
+	//
+	// aws stdout (JSON response) is suppressed; stderr is left open so that
+	// credential or region errors surface in SSH/VS Code logs for debugging.
 	proxyCmd := fmt.Sprintf(
 		"sh -c 'TMPD=$(mktemp -d); "+
 			"trap \"rm -rf $TMPD\" EXIT; "+
 			"ssh-keygen -t ed25519 -f $TMPD/key -N \"\" -q 2>/dev/null; "+
 			"ln -sf $TMPD/key %s; "+
-			"aws ec2-instance-connect send-ssh-public-key "+
+			"aws%s ec2-instance-connect send-ssh-public-key "+
 			"--instance-id %s "+
 			"--instance-os-user %s "+
 			"--ssh-public-key file://$TMPD/key.pub "+
 			"--availability-zone %s "+
-			"--no-cli-pager >/dev/null 2>&1 && nc %%h %%p'",
-		keyPath, instanceID, user, az)
+			"--no-cli-pager >/dev/null && nc %%h %%p'",
+		keyPath, awsFlags, instanceID, user, az)
 
 	inner := fmt.Sprintf("Host mint-%s\n"+
 		"    HostName %s\n"+
 		"    User %s\n"+
 		"    Port %d\n"+
+		"    StrictHostKeyChecking accept-new\n"+
 		"    IdentityFile %s\n"+
 		"    IdentitiesOnly yes\n"+
 		"    ProxyCommand %s\n",

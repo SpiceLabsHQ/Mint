@@ -8,7 +8,7 @@ import (
 )
 
 func TestGenerateBlock(t *testing.T) {
-	block := GenerateBlock("myvm", "1.2.3.4", "ubuntu", 41122, "i-abc123", "us-east-1a")
+	block := GenerateBlock("myvm", "1.2.3.4", "ubuntu", 41122, "i-abc123", "us-east-1a", "", "")
 
 	// Must contain begin/end markers with VM name.
 	if !strings.Contains(block, "# mint:begin myvm") {
@@ -40,9 +40,12 @@ func TestGenerateBlock(t *testing.T) {
 		t.Errorf("missing checksum line, got:\n%s", block)
 	}
 
-	// Must NOT contain the old insecure host key settings.
+	// Must contain TOFU-compatible host key checking (accept-new, not insecure "no").
+	if !strings.Contains(block, "StrictHostKeyChecking accept-new") {
+		t.Errorf("missing StrictHostKeyChecking accept-new, got:\n%s", block)
+	}
 	if strings.Contains(block, "StrictHostKeyChecking no") {
-		t.Errorf("should not contain StrictHostKeyChecking no (finding 6 handles TOFU), got:\n%s", block)
+		t.Errorf("should not contain StrictHostKeyChecking no, got:\n%s", block)
 	}
 	if strings.Contains(block, "UserKnownHostsFile /dev/null") {
 		t.Errorf("should not contain UserKnownHostsFile /dev/null, got:\n%s", block)
@@ -50,7 +53,7 @@ func TestGenerateBlock(t *testing.T) {
 }
 
 func TestGenerateBlockProxyCommand(t *testing.T) {
-	block := GenerateBlock("myvm", "1.2.3.4", "ubuntu", 41122, "i-abc123", "us-east-1a")
+	block := GenerateBlock("myvm", "1.2.3.4", "ubuntu", 41122, "i-abc123", "us-east-1a", "", "")
 
 	// Must contain ProxyCommand with EC2 Instance Connect key push and nc tunnel.
 	if !strings.Contains(block, "ProxyCommand") {
@@ -84,7 +87,7 @@ func TestGenerateBlockProxyCommand(t *testing.T) {
 }
 
 func TestGenerateBlockProxyCommandUsesMktemp(t *testing.T) {
-	block := GenerateBlock("myvm", "1.2.3.4", "ubuntu", 41122, "i-abc123", "us-east-1a")
+	block := GenerateBlock("myvm", "1.2.3.4", "ubuntu", 41122, "i-abc123", "us-east-1a", "", "")
 
 	// ProxyCommand must use mktemp -d for unique temp dir per invocation
 	// to avoid concurrent connection race conditions.
@@ -94,7 +97,7 @@ func TestGenerateBlockProxyCommandUsesMktemp(t *testing.T) {
 }
 
 func TestGenerateBlockProxyCommandHasTrapCleanup(t *testing.T) {
-	block := GenerateBlock("myvm", "1.2.3.4", "ubuntu", 41122, "i-abc123", "us-east-1a")
+	block := GenerateBlock("myvm", "1.2.3.4", "ubuntu", 41122, "i-abc123", "us-east-1a", "", "")
 
 	// ProxyCommand must include a trap for cleanup to prevent key persistence.
 	if !strings.Contains(block, "trap") {
@@ -103,7 +106,7 @@ func TestGenerateBlockProxyCommandHasTrapCleanup(t *testing.T) {
 }
 
 func TestGenerateBlockProxyCommandUsesAtomicSymlink(t *testing.T) {
-	block := GenerateBlock("myvm", "1.2.3.4", "ubuntu", 41122, "i-abc123", "us-east-1a")
+	block := GenerateBlock("myvm", "1.2.3.4", "ubuntu", 41122, "i-abc123", "us-east-1a", "", "")
 
 	// ProxyCommand must use ln -sf for atomic symlink update to the fixed
 	// IdentityFile path, preventing concurrent connection corruption.
@@ -113,7 +116,7 @@ func TestGenerateBlockProxyCommandUsesAtomicSymlink(t *testing.T) {
 }
 
 func TestGenerateBlockProxyCommandNoFixedKeyInKeygen(t *testing.T) {
-	block := GenerateBlock("myvm", "1.2.3.4", "ubuntu", 41122, "i-abc123", "us-east-1a")
+	block := GenerateBlock("myvm", "1.2.3.4", "ubuntu", 41122, "i-abc123", "us-east-1a", "", "")
 
 	// ssh-keygen must NOT write directly to the fixed key path.
 	// It should write to the mktemp directory instead.
@@ -123,7 +126,7 @@ func TestGenerateBlockProxyCommandNoFixedKeyInKeygen(t *testing.T) {
 }
 
 func TestGenerateBlockIdentityFile(t *testing.T) {
-	block := GenerateBlock("myvm", "1.2.3.4", "ubuntu", 41122, "i-abc123", "us-east-1a")
+	block := GenerateBlock("myvm", "1.2.3.4", "ubuntu", 41122, "i-abc123", "us-east-1a", "", "")
 
 	// Must contain IdentityFile pointing to mint-managed key.
 	if !strings.Contains(block, "IdentityFile") {
@@ -142,7 +145,7 @@ func TestGenerateBlockIdentityFile(t *testing.T) {
 }
 
 func TestGenerateBlockProxyCommandUser(t *testing.T) {
-	block := GenerateBlock("myvm", "1.2.3.4", "ubuntu", 41122, "i-abc123", "us-east-1a")
+	block := GenerateBlock("myvm", "1.2.3.4", "ubuntu", 41122, "i-abc123", "us-east-1a", "", "")
 
 	// ProxyCommand should pass the OS user to send-ssh-public-key.
 	if !strings.Contains(block, "--instance-os-user ubuntu") {
@@ -151,23 +154,23 @@ func TestGenerateBlockProxyCommandUser(t *testing.T) {
 }
 
 func TestGenerateBlockChecksumIsStable(t *testing.T) {
-	b1 := GenerateBlock("vm1", "10.0.0.1", "ubuntu", 41122, "i-111", "us-east-1a")
-	b2 := GenerateBlock("vm1", "10.0.0.1", "ubuntu", 41122, "i-111", "us-east-1a")
+	b1 := GenerateBlock("vm1", "10.0.0.1", "ubuntu", 41122, "i-111", "us-east-1a", "", "")
+	b2 := GenerateBlock("vm1", "10.0.0.1", "ubuntu", 41122, "i-111", "us-east-1a", "", "")
 	if b1 != b2 {
 		t.Error("same inputs should produce identical blocks")
 	}
 }
 
 func TestGenerateBlockChecksumDiffers(t *testing.T) {
-	b1 := GenerateBlock("vm1", "10.0.0.1", "ubuntu", 41122, "i-111", "us-east-1a")
-	b2 := GenerateBlock("vm2", "10.0.0.2", "ubuntu", 41122, "i-222", "us-west-2b")
+	b1 := GenerateBlock("vm1", "10.0.0.1", "ubuntu", 41122, "i-111", "us-east-1a", "", "")
+	b2 := GenerateBlock("vm2", "10.0.0.2", "ubuntu", 41122, "i-222", "us-west-2b", "", "")
 	if b1 == b2 {
 		t.Error("different inputs should produce different blocks")
 	}
 }
 
 func TestReadManagedBlock_Present(t *testing.T) {
-	block := GenerateBlock("testvm", "1.2.3.4", "ubuntu", 41122, "i-abc123", "us-east-1a")
+	block := GenerateBlock("testvm", "1.2.3.4", "ubuntu", 41122, "i-abc123", "us-east-1a", "", "")
 	content := "# other stuff\n" + block + "\n# more stuff\n"
 
 	got, ok := ReadManagedBlock(content, "testvm")
@@ -188,7 +191,7 @@ func TestReadManagedBlock_Absent(t *testing.T) {
 }
 
 func TestReadManagedBlock_DifferentVM(t *testing.T) {
-	block := GenerateBlock("vm-a", "1.2.3.4", "ubuntu", 41122, "i-abc123", "us-east-1a")
+	block := GenerateBlock("vm-a", "1.2.3.4", "ubuntu", 41122, "i-abc123", "us-east-1a", "", "")
 	content := block
 
 	_, ok := ReadManagedBlock(content, "vm-b")
@@ -198,14 +201,14 @@ func TestReadManagedBlock_DifferentVM(t *testing.T) {
 }
 
 func TestHasHandEdits_NoEdits(t *testing.T) {
-	block := GenerateBlock("testvm", "1.2.3.4", "ubuntu", 41122, "i-abc123", "us-east-1a")
+	block := GenerateBlock("testvm", "1.2.3.4", "ubuntu", 41122, "i-abc123", "us-east-1a", "", "")
 	if HasHandEdits(block, "testvm") {
 		t.Error("freshly generated block should not report hand edits")
 	}
 }
 
 func TestHasHandEdits_WithEdits(t *testing.T) {
-	block := GenerateBlock("testvm", "1.2.3.4", "ubuntu", 41122, "i-abc123", "us-east-1a")
+	block := GenerateBlock("testvm", "1.2.3.4", "ubuntu", 41122, "i-abc123", "us-east-1a", "", "")
 	// Tamper with the block content between markers.
 	tampered := strings.Replace(block, "User ubuntu", "User root", 1)
 	if !HasHandEdits(tampered, "testvm") {
@@ -224,7 +227,7 @@ func TestWriteManagedBlock_NewFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".ssh", "config")
 
-	block := GenerateBlock("testvm", "1.2.3.4", "ubuntu", 41122, "i-abc123", "us-east-1a")
+	block := GenerateBlock("testvm", "1.2.3.4", "ubuntu", 41122, "i-abc123", "us-east-1a", "", "")
 	if err := WriteManagedBlock(path, "testvm", block); err != nil {
 		t.Fatalf("write to new file: %v", err)
 	}
@@ -253,7 +256,7 @@ func TestWriteManagedBlock_ExistingFileWithoutBlock(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	block := GenerateBlock("testvm", "1.2.3.4", "ubuntu", 41122, "i-abc123", "us-east-1a")
+	block := GenerateBlock("testvm", "1.2.3.4", "ubuntu", 41122, "i-abc123", "us-east-1a", "", "")
 	if err := WriteManagedBlock(path, "testvm", block); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -276,13 +279,13 @@ func TestWriteManagedBlock_ReplacesExistingBlock(t *testing.T) {
 	path := filepath.Join(dir, "config")
 
 	// Write initial block.
-	block1 := GenerateBlock("testvm", "1.2.3.4", "ubuntu", 41122, "i-abc123", "us-east-1a")
+	block1 := GenerateBlock("testvm", "1.2.3.4", "ubuntu", 41122, "i-abc123", "us-east-1a", "", "")
 	if err := WriteManagedBlock(path, "testvm", block1); err != nil {
 		t.Fatalf("first write: %v", err)
 	}
 
 	// Replace with updated block.
-	block2 := GenerateBlock("testvm", "5.6.7.8", "ubuntu", 41122, "i-def456", "us-west-2b")
+	block2 := GenerateBlock("testvm", "5.6.7.8", "ubuntu", 41122, "i-def456", "us-west-2b", "", "")
 	if err := WriteManagedBlock(path, "testvm", block2); err != nil {
 		t.Fatalf("second write: %v", err)
 	}
@@ -308,8 +311,8 @@ func TestWriteManagedBlock_MultipleVMs(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config")
 
-	block1 := GenerateBlock("vm-a", "1.1.1.1", "ubuntu", 41122, "i-aaa", "us-east-1a")
-	block2 := GenerateBlock("vm-b", "2.2.2.2", "ubuntu", 41122, "i-bbb", "us-west-2b")
+	block1 := GenerateBlock("vm-a", "1.1.1.1", "ubuntu", 41122, "i-aaa", "us-east-1a", "", "")
+	block2 := GenerateBlock("vm-b", "2.2.2.2", "ubuntu", 41122, "i-bbb", "us-west-2b", "", "")
 
 	if err := WriteManagedBlock(path, "vm-a", block1); err != nil {
 		t.Fatalf("write vm-a: %v", err)
@@ -334,7 +337,7 @@ func TestRemoveManagedBlock(t *testing.T) {
 	path := filepath.Join(dir, "config")
 
 	existing := "Host example\n    HostName example.com\n"
-	block := GenerateBlock("testvm", "1.2.3.4", "ubuntu", 41122, "i-abc123", "us-east-1a")
+	block := GenerateBlock("testvm", "1.2.3.4", "ubuntu", 41122, "i-abc123", "us-east-1a", "", "")
 	if err := os.WriteFile(path, []byte(existing+"\n"+block+"\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
@@ -386,5 +389,56 @@ func TestRemoveManagedBlock_FileNotExist(t *testing.T) {
 	}
 	if found {
 		t.Error("expected found=false when file does not exist")
+	}
+}
+
+func TestGenerateBlockWithProfile(t *testing.T) {
+	block := GenerateBlock("myvm", "1.2.3.4", "ubuntu", 41122, "i-abc123", "us-east-1a", "my-sso-profile", "")
+
+	if !strings.Contains(block, "--profile my-sso-profile") {
+		t.Errorf("ProxyCommand missing --profile flag, got:\n%s", block)
+	}
+}
+
+func TestGenerateBlockWithRegion(t *testing.T) {
+	block := GenerateBlock("myvm", "1.2.3.4", "ubuntu", 41122, "i-abc123", "us-east-1a", "", "eu-west-1")
+
+	if !strings.Contains(block, "--region eu-west-1") {
+		t.Errorf("ProxyCommand missing --region flag, got:\n%s", block)
+	}
+}
+
+func TestGenerateBlockWithProfileAndRegion(t *testing.T) {
+	block := GenerateBlock("myvm", "1.2.3.4", "ubuntu", 41122, "i-abc123", "us-east-1a", "work", "ap-southeast-1")
+
+	if !strings.Contains(block, "--profile work") {
+		t.Errorf("ProxyCommand missing --profile flag, got:\n%s", block)
+	}
+	if !strings.Contains(block, "--region ap-southeast-1") {
+		t.Errorf("ProxyCommand missing --region flag, got:\n%s", block)
+	}
+}
+
+func TestGenerateBlockNoProfileRegionWhenEmpty(t *testing.T) {
+	block := GenerateBlock("myvm", "1.2.3.4", "ubuntu", 41122, "i-abc123", "us-east-1a", "", "")
+
+	if strings.Contains(block, "--profile") {
+		t.Errorf("ProxyCommand should not contain --profile when empty, got:\n%s", block)
+	}
+	if strings.Contains(block, "--region") {
+		t.Errorf("ProxyCommand should not contain --region when empty, got:\n%s", block)
+	}
+}
+
+func TestGenerateBlockStderrNotSuppressed(t *testing.T) {
+	block := GenerateBlock("myvm", "1.2.3.4", "ubuntu", 41122, "i-abc123", "us-east-1a", "", "")
+
+	// aws CLI stdout is suppressed but stderr must NOT be suppressed.
+	// The old pattern was ">/dev/null 2>&1"; the new pattern is ">/dev/null".
+	if strings.Contains(block, "2>&1") {
+		t.Errorf("aws CLI stderr should not be suppressed (no 2>&1), got:\n%s", block)
+	}
+	if !strings.Contains(block, ">/dev/null") {
+		t.Errorf("aws CLI stdout should still be suppressed via >/dev/null, got:\n%s", block)
 	}
 }

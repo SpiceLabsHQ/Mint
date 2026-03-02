@@ -53,6 +53,8 @@ type upDeps struct {
 	volumeIOPS           int32
 	sshConfigApproved    bool
 	sshConfigPath        string
+	profile              string // AWS profile for SSH config ProxyCommand
+	region               string // AWS region for SSH config ProxyCommand
 	describe             mintaws.DescribeInstancesAPI
 	describeFileSystems  mintaws.DescribeFileSystemsAPI
 }
@@ -116,6 +118,14 @@ func newUpCommandWithDeps(deps *upDeps) *cobra.Command {
 			if data, err := os.ReadFile(userBootstrapPath); err == nil {
 				userBootstrapScript = data
 			}
+			// Determine effective profile: --profile flag > config aws_profile.
+			effectiveProfile := ""
+			if cliCtx != nil {
+				effectiveProfile = cliCtx.Profile
+			}
+			if effectiveProfile == "" {
+				effectiveProfile = clients.mintConfig.AWSProfile
+			}
 			return runUp(cmd, &upDeps{
 				provisioner: provision.NewProvisioner(
 					clients.ec2Client, // DescribeInstancesAPI
@@ -142,6 +152,9 @@ func newUpCommandWithDeps(deps *upDeps) *cobra.Command {
 				volumeSize:           int32(clients.mintConfig.VolumeSizeGB),
 				volumeIOPS:           volumeIOPS,
 				sshConfigApproved:    sshApproved,
+				sshConfigPath:        "",
+				profile:              effectiveProfile,
+				region:               clients.region,
 				describe:             clients.ec2Client,
 				describeFileSystems:  clients.efsClient,
 			})
@@ -327,7 +340,7 @@ func writeSSHConfigAfterUp(ctx context.Context, cmd *cobra.Command, deps *upDeps
 		configPath = defaultSSHConfigPath()
 	}
 
-	block := sshconfig.GenerateBlock(vmName, result.PublicIP, defaultSSHUser, defaultSSHPort, result.InstanceID, az)
+	block := sshconfig.GenerateBlock(vmName, result.PublicIP, defaultSSHUser, defaultSSHPort, result.InstanceID, az, deps.profile, deps.region)
 	if err := sshconfig.WriteManagedBlock(configPath, vmName, block); err != nil {
 		fmt.Fprintf(w, "Warning: could not update ssh config: %v\n", err)
 	}
