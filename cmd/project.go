@@ -167,6 +167,9 @@ func runProjectAdd(cmd *cobra.Command, deps *projectAddDeps, gitURL string) erro
 		vmName = cliCtx.VM
 	}
 
+	// Expand GitHub shorthand "owner/repo" → full HTTPS URL.
+	gitURL = expandGitHubShorthand(gitURL)
+
 	// Derive project name from URL or --name flag.
 	projectName, err := extractProjectName(gitURL)
 	if err != nil {
@@ -353,6 +356,21 @@ func buildCloneCommand(gitURL, projectPath, branch string) []string {
 	}
 	cmd = append(cmd, gitURL, projectPath)
 	return cmd
+}
+
+// expandGitHubShorthand converts "owner/repo" shorthand to a full GitHub HTTPS
+// URL. Inputs that already look like a URL (contain "://" or "@") are returned
+// unchanged.
+func expandGitHubShorthand(gitURL string) string {
+	if strings.Contains(gitURL, "://") || strings.Contains(gitURL, "@") {
+		return gitURL
+	}
+	// owner/repo or owner/repo.git — no slashes beyond one separator allowed.
+	parts := strings.Split(gitURL, "/")
+	if len(parts) == 2 && parts[0] != "" && parts[1] != "" {
+		return "https://github.com/" + gitURL
+	}
+	return gitURL
 }
 
 // extractProjectName derives a project name from a git URL.

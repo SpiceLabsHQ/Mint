@@ -109,6 +109,29 @@ func TestExtractProjectName(t *testing.T) {
 	}
 }
 
+func TestExpandGitHubShorthand(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"SpiceLabsHQ/bqe-lumen", "https://github.com/SpiceLabsHQ/bqe-lumen"},
+		{"org/repo.git", "https://github.com/org/repo.git"},
+		{"https://github.com/org/repo", "https://github.com/org/repo"},
+		{"git@github.com:org/repo.git", "git@github.com:org/repo.git"},
+		{"not-a-url", "not-a-url"},
+		{"too/many/parts", "too/many/parts"},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := expandGitHubShorthand(tt.input)
+			if got != tt.want {
+				t.Errorf("expandGitHubShorthand(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 // --- Mock infrastructure for project tests ---
 
 // mockDescribeForProject implements mintaws.DescribeInstancesAPI for project tests.
