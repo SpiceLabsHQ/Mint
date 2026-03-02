@@ -132,6 +132,59 @@ func TestExpandGitHubShorthand(t *testing.T) {
 	}
 }
 
+func TestClassifyCloneError(t *testing.T) {
+	sentinel := fmt.Errorf("exit status 128")
+
+	tests := []struct {
+		name       string
+		gitURL     string
+		stderr     string
+		wantSubstr string
+	}{
+		{
+			name:       "SSH auth failure hints at agent",
+			gitURL:     "git@github.com:org/private.git",
+			stderr:     "git@github.com: Permission denied (publickey).\nfatal: Could not read from remote repository.",
+			wantSubstr: "ssh-add -l",
+		},
+		{
+			name:       "HTTPS auth failure hints at SSH URL",
+			gitURL:     "https://github.com/org/private",
+			stderr:     "fatal: could not read Username for 'https://github.com': No such device or address",
+			wantSubstr: "git@github.com:org/repo.git",
+		},
+		{
+			name:       "HTTPS auth failure hints at token",
+			gitURL:     "https://github.com/org/private",
+			stderr:     "fatal: Authentication failed for 'https://github.com/org/private'",
+			wantSubstr: "<token>@github.com",
+		},
+		{
+			name:       "repository not found",
+			gitURL:     "git@github.com:org/typo.git",
+			stderr:     "ERROR: Repository not found.\nfatal: Could not read from remote repository.",
+			wantSubstr: "repository not found",
+		},
+		{
+			name:       "unrecognized error falls back to wrapped error",
+			gitURL:     "https://github.com/org/repo",
+			stderr:     "fatal: some unexpected git error",
+			wantSubstr: "exit status 128",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := classifyCloneError(tt.gitURL, sentinel, tt.stderr)
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !strings.Contains(err.Error(), tt.wantSubstr) {
+				t.Errorf("classifyCloneError error = %q, want substring %q", err.Error(), tt.wantSubstr)
+			}
+		})
+	}
+}
+
 // --- Mock infrastructure for project tests ---
 
 // mockDescribeForProject implements mintaws.DescribeInstancesAPI for project tests.

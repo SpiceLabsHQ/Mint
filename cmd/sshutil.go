@@ -166,8 +166,14 @@ func defaultStreamingRemoteRunner(
 		"-o", "UserKnownHostsFile=/dev/null",
 		"-o", "BatchMode=yes",
 		"-o", "ConnectTimeout=10",
-		fmt.Sprintf("%s@%s", user, host),
 	}
+	// Forward the local SSH agent when available so that git operations on the
+	// VM can authenticate using the caller's keys (e.g. for private repos via
+	// SSH git URLs). Agent forwarding is a no-op when SSH_AUTH_SOCK is unset.
+	if os.Getenv("SSH_AUTH_SOCK") != "" {
+		sshArgs = append(sshArgs, "-o", "ForwardAgent=yes")
+	}
+	sshArgs = append(sshArgs, fmt.Sprintf("%s@%s", user, host))
 	sshArgs = append(sshArgs, command...)
 
 	cmd := exec.CommandContext(ctx, "ssh", sshArgs...)
