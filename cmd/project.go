@@ -522,7 +522,7 @@ func parseProjectsAndContainers(lsOutput, dockerOutput string) []projectInfo {
 	var projectNames []string
 	for _, line := range strings.Split(lsOutput, "\n") {
 		name := strings.TrimSpace(line)
-		if name != "" {
+		if name != "" && name != "lost+found" {
 			projectNames = append(projectNames, name)
 		}
 	}

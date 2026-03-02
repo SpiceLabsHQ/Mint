@@ -1242,6 +1242,23 @@ func TestParseProjectsAndContainers(t *testing.T) {
 			dockerOutput:  "",
 			expectedCount: 0,
 		},
+		{
+			name:          "lost+found filtered out",
+			lsOutput:      "lost+found\nmyproject\n",
+			dockerOutput:  "",
+			expectedCount: 1,
+			check: func(t *testing.T, projects []projectInfo) {
+				if projects[0].Name != "myproject" {
+					t.Errorf("name = %q, want myproject", projects[0].Name)
+				}
+			},
+		},
+		{
+			name:          "only lost+found",
+			lsOutput:      "lost+found\n",
+			dockerOutput:  "",
+			expectedCount: 0,
+		},
 	}
 
 	for _, tt := range tests {
