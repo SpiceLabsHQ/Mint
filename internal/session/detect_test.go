@@ -489,6 +489,115 @@ func TestActiveSessions_Summary(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Tests — Unix epoch timestamp parsing in detectExtend (#198)
+// ---------------------------------------------------------------------------
+
+func TestDetectActiveSessions_ExtendEpochActive(t *testing.T) {
+	// Override nowFunc so we have deterministic time control.
+	fixedNow := time.Date(2025, 2, 20, 0, 0, 0, 0, time.UTC)
+	origNow := nowFunc
+	nowFunc = func() time.Time { return fixedNow }
+	defer func() { nowFunc = origNow }()
+
+	mock := newMockExecutor()
+
+	mock.set("tmux list-clients -F #{client_name} #{session_name}",
+		nil, fmt.Errorf("no sessions"))
+	mock.set("who", []byte(""), nil)
+	mock.set("docker ps -q", nil, fmt.Errorf("docker: command not found"))
+
+	// Unix epoch integer 2 hours in the future from fixedNow.
+	futureEpoch := fixedNow.Add(2 * time.Hour).Unix()
+	mock.set("cat "+ExtendTimestampPath,
+		[]byte(fmt.Sprintf("%d\n", futureEpoch)), nil)
+
+	result, err := DetectActiveSessions(context.Background(), mock.run)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !result.HasActivity() {
+		t.Fatal("expected HasActivity() to be true when epoch extend is active")
+	}
+	if result.ExtendedUntil == nil {
+		t.Fatal("expected ExtendedUntil to be non-nil for future epoch timestamp")
+	}
+	if result.ExtendedUntil.Unix() != futureEpoch {
+		t.Errorf("ExtendedUntil.Unix() = %d, want %d", result.ExtendedUntil.Unix(), futureEpoch)
+	}
+}
+
+func TestDetectActiveSessions_ExtendEpochExpired(t *testing.T) {
+	// Override nowFunc so we have deterministic time control.
+	fixedNow := time.Date(2025, 2, 20, 0, 0, 0, 0, time.UTC)
+	origNow := nowFunc
+	nowFunc = func() time.Time { return fixedNow }
+	defer func() { nowFunc = origNow }()
+
+	mock := newMockExecutor()
+
+	mock.set("tmux list-clients -F #{client_name} #{session_name}",
+		nil, fmt.Errorf("no sessions"))
+	mock.set("who", []byte(""), nil)
+	mock.set("docker ps -q", nil, fmt.Errorf("docker: command not found"))
+
+	// Unix epoch integer 1 hour in the past from fixedNow.
+	pastEpoch := fixedNow.Add(-1 * time.Hour).Unix()
+	mock.set("cat "+ExtendTimestampPath,
+		[]byte(fmt.Sprintf("%d\n", pastEpoch)), nil)
+
+	result, err := DetectActiveSessions(context.Background(), mock.run)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if result.ExtendedUntil != nil {
+		t.Error("expected ExtendedUntil to be nil for expired epoch timestamp")
+	}
+	if result.HasActivity() {
+		t.Error("expected no activity for expired epoch extend")
+	}
+}
+
+func TestDetectActiveSessions_ExtendEpochAndRFC3339BothWork(t *testing.T) {
+	// Verify that RFC3339 format still works alongside the new epoch support.
+	fixedNow := time.Date(2025, 2, 20, 0, 0, 0, 0, time.UTC)
+	origNow := nowFunc
+	nowFunc = func() time.Time { return fixedNow }
+	defer func() { nowFunc = origNow }()
+
+	formats := []struct {
+		name      string
+		timestamp string
+	}{
+		{"epoch", fmt.Sprintf("%d", fixedNow.Add(2*time.Hour).Unix())},
+		{"rfc3339", fixedNow.Add(2 * time.Hour).Format(time.RFC3339)},
+	}
+
+	for _, f := range formats {
+		t.Run(f.name, func(t *testing.T) {
+			mock := newMockExecutor()
+
+			mock.set("tmux list-clients -F #{client_name} #{session_name}",
+				nil, fmt.Errorf("no sessions"))
+			mock.set("who", []byte(""), nil)
+			mock.set("docker ps -q", nil, fmt.Errorf("docker: command not found"))
+			mock.set("cat "+ExtendTimestampPath,
+				[]byte(f.timestamp+"\n"), nil)
+
+			result, err := DetectActiveSessions(context.Background(), mock.run)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if result.ExtendedUntil == nil {
+				t.Fatalf("expected ExtendedUntil to be non-nil for %s format", f.name)
+			}
+		})
+	}
+}
+
 func TestDetectActiveSessions_ClaudeCaseSensitive(t *testing.T) {
 	// ADR-0018 specifies case-sensitive matching for "claude".
 	mock := newMockExecutor()
