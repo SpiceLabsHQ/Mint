@@ -302,6 +302,20 @@ log() { logger -t mint-reconcile "$*"; }
 
 log "Starting boot reconciliation"
 
+# Fix #197: Clear stale idle state from previous boot cycle.
+# /var/lib/mint/idle-since lives on root EBS which persists across stop/start.
+# A stale timestamp causes the first idle check to compute elapsed time from
+# the pre-stop epoch, which can immediately exceed the timeout and trigger
+# shutdown minutes after resume.
+rm -f /var/lib/mint/idle-since
+log "Cleared stale idle-since timestamp"
+
+# Write a 15-minute grace period so the VM has time after boot before idle
+# checks can trigger shutdown. This gives the user time to establish an SSH
+# session or start work.
+date -d '+15 minutes' +%s > /var/lib/mint/idle-extended-until
+log "Set 15-minute boot grace period for idle detection"
+
 if grep -q '/home/ubuntu' /etc/fstab && ! mountpoint -q /home/ubuntu 2>/dev/null; then
     log "EFS not mounted at /home/ubuntu — mounting from fstab"
     mount /home/ubuntu || log "WARNING: Failed to mount /home/ubuntu"
@@ -364,6 +378,11 @@ systemctl enable mint-reconcile.service
 
 log "Installing idle detection systemd timer and service"
 
+# Persist the idle timeout to an environment file so the systemd service
+# picks up the provisioned value on every invocation, surviving reboots.
+log "Writing idle timeout to /etc/default/mint-idle"
+echo "MINT_IDLE_TIMEOUT=${MINT_IDLE_TIMEOUT}" > /etc/default/mint-idle
+
 cat > /etc/systemd/system/mint-idle-check.service << 'IDLE_SERVICE'
 [Unit]
 Description=Mint idle detection check
@@ -371,6 +390,7 @@ After=network.target docker.service
 
 [Service]
 Type=oneshot
+EnvironmentFile=-/etc/default/mint-idle
 ExecStart=/usr/local/bin/mint-idle-check
 IDLE_SERVICE
 
