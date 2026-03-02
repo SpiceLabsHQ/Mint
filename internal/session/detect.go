@@ -6,6 +6,7 @@ package session
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -178,6 +179,10 @@ func detectClaude(ctx context.Context, exec RemoteExecutor, result *ActiveSessio
 }
 
 // detectExtend checks for a manual extend timestamp on the VM.
+// The timestamp file may contain either a Unix epoch integer (written by
+// `mint extend` via shell: `echo $(($(date +%s) + SECONDS))`) or an
+// RFC3339 string. We try epoch first since that is the current write
+// format, then fall back to RFC3339 for backwards compatibility.
 func detectExtend(ctx context.Context, exec RemoteExecutor, result *ActiveSessions) {
 	output, err := exec(ctx, []string{"cat", ExtendTimestampPath})
 	if err != nil {
@@ -190,15 +195,31 @@ func detectExtend(ctx context.Context, exec RemoteExecutor, result *ActiveSessio
 		return
 	}
 
-	ts, parseErr := time.Parse(time.RFC3339, tsStr)
-	if parseErr != nil {
-		// Invalid timestamp format -- treat as no extend.
+	ts, ok := parseExtendTimestamp(tsStr)
+	if !ok {
 		return
 	}
 
 	if nowFunc().Before(ts) {
 		result.ExtendedUntil = &ts
 	}
+}
+
+// parseExtendTimestamp attempts to parse a timestamp string as a Unix epoch
+// integer first, then falls back to RFC3339. Returns the parsed time and
+// true on success, or zero time and false if neither format matches.
+func parseExtendTimestamp(s string) (time.Time, bool) {
+	// Try Unix epoch integer first (current write format from cmd/extend.go).
+	if epoch, err := strconv.ParseInt(s, 10, 64); err == nil {
+		return time.Unix(epoch, 0), true
+	}
+
+	// Fall back to RFC3339 for backwards compatibility.
+	if ts, err := time.Parse(time.RFC3339, s); err == nil {
+		return ts, true
+	}
+
+	return time.Time{}, false
 }
 
 // isTmuxNoSessionsError returns true if the error indicates tmux has no
