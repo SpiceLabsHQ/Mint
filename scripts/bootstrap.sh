@@ -189,6 +189,15 @@ systemctl disable --now ssh.socket
 systemctl enable ssh
 systemctl restart ssh
 
+# --- SSH known hosts for common Git providers ---
+
+log "Pre-populating SSH known hosts for common Git providers"
+mkdir -p /root/.ssh /home/ubuntu/.ssh
+ssh-keyscan -H github.com gitlab.com bitbucket.org >> /root/.ssh/known_hosts 2>/dev/null
+cp /root/.ssh/known_hosts /home/ubuntu/.ssh/known_hosts
+chown ubuntu:ubuntu /home/ubuntu/.ssh/known_hosts
+chmod 600 /root/.ssh/known_hosts /home/ubuntu/.ssh/known_hosts
+
 # --- Storage mounts (ADR-0004) ---
 
 _bootstrap_failure_phase="efs-mount"
