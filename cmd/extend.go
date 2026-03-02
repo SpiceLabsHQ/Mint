@@ -141,9 +141,11 @@ func runExtend(cmd *cobra.Command, deps *extendDeps, args []string) error {
 	}
 
 	// Build the remote command to write the future timestamp.
+	// Pass as a single string so SSH forwards it to the remote shell intact.
+	// Using ["bash", "-c", "..."] as separate args causes SSH to concatenate
+	// them, and bash -c only takes the first word after -c as the command.
 	seconds := minutes * 60
 	remoteCmd := []string{
-		"bash", "-c",
 		fmt.Sprintf("echo $(($(date +%%s) + %d)) | sudo tee /var/lib/mint/idle-extended-until", seconds),
 	}
 
