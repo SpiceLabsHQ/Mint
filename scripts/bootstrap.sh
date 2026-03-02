@@ -191,6 +191,7 @@ systemctl restart ssh
 
 # --- SSH known hosts for common Git providers ---
 
+_bootstrap_failure_phase="ssh-known-hosts"
 log "Pre-populating SSH known hosts for common Git providers"
 mkdir -p /root/.ssh /home/ubuntu/.ssh
 ssh-keyscan -H github.com gitlab.com bitbucket.org >> /root/.ssh/known_hosts 2>/dev/null
@@ -200,9 +201,10 @@ chmod 600 /root/.ssh/known_hosts /home/ubuntu/.ssh/known_hosts
 
 # Rewrite SSH git URLs to HTTPS for root so that tools like claude plugin install
 # can clone public repos without requiring a GitHub SSH key on the instance.
-git config --global url."https://github.com/".insteadOf "git@github.com:"
-git config --global url."https://gitlab.com/".insteadOf "git@gitlab.com:"
-git config --global url."https://bitbucket.org/".insteadOf "git@bitbucket.org:"
+# HOME may be unset in EC2 user-data; target /root/.gitconfig directly.
+HOME=/root git config --global url."https://github.com/".insteadOf "git@github.com:"
+HOME=/root git config --global url."https://gitlab.com/".insteadOf "git@gitlab.com:"
+HOME=/root git config --global url."https://bitbucket.org/".insteadOf "git@bitbucket.org:"
 
 # --- Storage mounts (ADR-0004) ---
 
