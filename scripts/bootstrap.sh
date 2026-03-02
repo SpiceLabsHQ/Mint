@@ -550,7 +550,7 @@ if [ -n "${MINT_USER_BOOTSTRAP:-}" ]; then
     _user_script=$(mktemp)
     trap 'rm -f "$_user_script"; _bootstrap_exit' EXIT
     echo "${MINT_USER_BOOTSTRAP}" | base64 -d > "${_user_script}"
-    chmod +x "${_user_script}"
+    chmod 755 "${_user_script}"
     # Run as ubuntu so tools like claude write to /home/ubuntu (EFS-persisted).
     # sudo -H sets HOME to ubuntu's home directory from /etc/passwd.
     if ! sudo -u ubuntu -H bash "${_user_script}"; then
