@@ -36,7 +36,7 @@ These are non-negotiable constraints from the ADRs. Do not deviate without updat
 - **EC2 Instance Connect** (ADR-0007): Ephemeral SSH keys, no key management. `mint key add` escape hatch for clients that can't use Instance Connect.
 - **Single VM, multiple projects** (ADR-0002): One VM hosts multiple projects. Advanced users can run multiple VMs via `--vm`.
 - **tmux on host** (ADR-0003): Not inside containers. Survives container rebuilds and iOS app suspension.
-- **Three-tier storage** (ADR-0004): Root EBS (200GB, ephemeral), User EFS (mounted at `/mint/user`, persistent), Project EBS (50GB default, VM-scoped).
+- **Three-tier storage** (ADR-0004): Root EBS (200GB, ephemeral), User EFS (mounted directly at `/home/ubuntu`, persistent — entire home dir), Project EBS (50GB default, VM-scoped, mounted at `/mint/projects`; `~/projects` symlinks there).
 - **Default VPC** (ADR-0010): No custom networking, no bastion, no NAT gateway.
 - **Non-standard ports, open inbound** (ADR-0016): SSH on non-standard high port, mosh on 60000-61000. Open to all IPs; security via key-only auth, not network restriction.
 - **Permission before modifying user files** (ADR-0015): Mint prompts before writing files outside `~/.config/mint/`. Approval remembered in config.

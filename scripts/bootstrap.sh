@@ -14,6 +14,9 @@ _bootstrap_ok=false
 _bootstrap_failure_phase=""
 
 export DEBIAN_FRONTEND=noninteractive
+# HOME may be unset in EC2 user-data; export it so all child processes
+# (git, claude, user-bootstrap script) can find /root/.gitconfig.
+export HOME=/root
 
 # --- Logging ---
 
@@ -201,41 +204,46 @@ chmod 600 /root/.ssh/known_hosts /home/ubuntu/.ssh/known_hosts
 
 # Rewrite SSH git URLs to HTTPS for root so that tools like claude plugin install
 # can clone public repos without requiring a GitHub SSH key on the instance.
-# HOME may be unset in EC2 user-data; target /root/.gitconfig directly.
-HOME=/root git config --global url."https://github.com/".insteadOf "git@github.com:"
-HOME=/root git config --global url."https://gitlab.com/".insteadOf "git@gitlab.com:"
-HOME=/root git config --global url."https://bitbucket.org/".insteadOf "git@bitbucket.org:"
+git config --global url."https://github.com/".insteadOf "git@github.com:"
+git config --global url."https://gitlab.com/".insteadOf "git@gitlab.com:"
+git config --global url."https://bitbucket.org/".insteadOf "git@bitbucket.org:"
 
 # --- Storage mounts (ADR-0004) ---
 
 _bootstrap_failure_phase="efs-mount"
 log "Setting up storage mounts"
-mkdir -p /mint/user /mint/projects "${MINT_STATE_DIR}"
+mkdir -p /mint/projects "${MINT_STATE_DIR}"
 
-# Mount EFS at /mint/user
+# Mount EFS directly at /home/ubuntu so the entire home directory is persistent.
 if [ -n "${MINT_EFS_ID:-}" ]; then
-    log "Mounting EFS ${MINT_EFS_ID} at /mint/user"
+    log "Mounting EFS ${MINT_EFS_ID} at /home/ubuntu"
 
     # Mount EFS via native NFSv4 (VPC security groups provide access control).
     apt-get install -y -qq nfs-common
     EFS_ENDPOINT="${MINT_EFS_ID}.efs.${_TRAP_REGION}.amazonaws.com"
-    mount -t nfs4 -o nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport "${EFS_ENDPOINT}:/" /mint/user
+    mount -t nfs4 -o nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport "${EFS_ENDPOINT}:/" /home/ubuntu
     # Write fstab entry for EFS
-    if ! grep -q '/mint/user' /etc/fstab; then
-        echo "${EFS_ENDPOINT}:/ /mint/user nfs4 nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport,_netdev 0 0" >> /etc/fstab
+    if ! grep -q '/home/ubuntu' /etc/fstab; then
+        echo "${EFS_ENDPOINT}:/ /home/ubuntu nfs4 nfsvers=4.1,rsize=1048576,wsize=1048576,hard,timeo=600,retrans=2,noresvport,_netdev 0 0" >> /etc/fstab
     fi
-    chown ubuntu:ubuntu /mint/user
+    chown ubuntu:ubuntu /home/ubuntu
 
-    # --- EFS symlinks (persistent home directories) ---
-    log "Creating EFS-backed home directory symlinks"
-    mkdir -p /mint/user/.ssh /mint/user/.config /mint/user/projects
-    chown -R ubuntu:ubuntu /mint/user/.ssh /mint/user/.config /mint/user/projects
-    chmod 700 /mint/user/.ssh
+    # First-boot: populate shell skeleton if not already present on EFS.
+    for _f in .bashrc .profile .bash_logout; do
+        [ -f "/home/ubuntu/${_f}" ] || cp -n "/etc/skel/${_f}" /home/ubuntu/ 2>/dev/null || true
+    done
 
-    ln -sfn /mint/user/.ssh /home/ubuntu/.ssh
-    ln -sfn /mint/user/.config /home/ubuntu/.config
-    ln -sfn /mint/user/projects /home/ubuntu/projects
-    chown -h ubuntu:ubuntu /home/ubuntu/.ssh /home/ubuntu/.config /home/ubuntu/projects
+    # Ensure ~/.ssh exists with correct permissions.
+    mkdir -p /home/ubuntu/.ssh
+    chmod 700 /home/ubuntu/.ssh
+    chown -R ubuntu:ubuntu /home/ubuntu/.ssh
+
+    # Symlink ~/projects → project EBS. The symlink itself persists on EFS so
+    # it survives mint recreate without any reconciliation step.
+    if [ ! -e /home/ubuntu/projects ]; then
+        ln -sfn /mint/projects /home/ubuntu/projects
+        chown -h ubuntu:ubuntu /home/ubuntu/projects
+    fi
 fi
 
 # Format and mount project EBS at /mint/projects
@@ -288,15 +296,15 @@ RECONCILE_SERVICE
 
 cat > /usr/local/bin/mint-reconcile << 'RECONCILE_SCRIPT'
 #!/bin/bash
-# Mint boot reconciliation — remounts storage and restores symlinks.
+# Mint boot reconciliation — remounts storage if fstab mounts failed at boot.
 set -euo pipefail
 log() { logger -t mint-reconcile "$*"; }
 
 log "Starting boot reconciliation"
 
-if grep -q '/mint/user' /etc/fstab && ! mountpoint -q /mint/user 2>/dev/null; then
-    log "EFS not mounted at /mint/user — mounting from fstab"
-    mount /mint/user || log "WARNING: Failed to mount /mint/user"
+if grep -q '/home/ubuntu' /etc/fstab && ! mountpoint -q /home/ubuntu 2>/dev/null; then
+    log "EFS not mounted at /home/ubuntu — mounting from fstab"
+    mount /home/ubuntu || log "WARNING: Failed to mount /home/ubuntu"
 fi
 
 if grep -q '/mint/projects' /etc/fstab && ! mountpoint -q /mint/projects 2>/dev/null; then
@@ -304,15 +312,17 @@ if grep -q '/mint/projects' /etc/fstab && ! mountpoint -q /mint/projects 2>/dev/
     mount /mint/projects || log "WARNING: Failed to mount /mint/projects"
 fi
 
-if mountpoint -q /mint/user 2>/dev/null; then
-    mkdir -p /mint/user/.ssh /mint/user/.config /mint/user/projects
-    chown -R ubuntu:ubuntu /mint/user/.ssh /mint/user/.config /mint/user/projects
-    chmod 700 /mint/user/.ssh
-    ln -sfn /mint/user/.ssh /home/ubuntu/.ssh
-    ln -sfn /mint/user/.config /home/ubuntu/.config
-    ln -sfn /mint/user/projects /home/ubuntu/projects
-    chown -h ubuntu:ubuntu /home/ubuntu/.ssh /home/ubuntu/.config /home/ubuntu/projects
-    log "EFS symlinks restored"
+if mountpoint -q /home/ubuntu 2>/dev/null; then
+    # Ensure ~/.ssh has correct permissions (EFS may have lost them after recreate).
+    mkdir -p /home/ubuntu/.ssh
+    chmod 700 /home/ubuntu/.ssh
+    chown -R ubuntu:ubuntu /home/ubuntu/.ssh
+    # Ensure ~/projects symlink to project EBS exists.
+    if [ ! -e /home/ubuntu/projects ]; then
+        ln -sfn /mint/projects /home/ubuntu/projects
+        chown -h ubuntu:ubuntu /home/ubuntu/projects
+    fi
+    log "EFS home directory verified"
 fi
 
 DRIFT_ISSUES=()
@@ -536,12 +546,14 @@ fi
 
 if [ -n "${MINT_USER_BOOTSTRAP:-}" ]; then
     _bootstrap_failure_phase="user-script"
-    log "Running user bootstrap hook"
+    log "Running user bootstrap hook as ubuntu"
     _user_script=$(mktemp)
     trap 'rm -f "$_user_script"; _bootstrap_exit' EXIT
     echo "${MINT_USER_BOOTSTRAP}" | base64 -d > "${_user_script}"
     chmod +x "${_user_script}"
-    if ! "${_user_script}"; then
+    # Run as ubuntu so tools like claude write to /home/ubuntu (EFS-persisted).
+    # sudo -H sets HOME to ubuntu's home directory from /etc/passwd.
+    if ! sudo -u ubuntu -H bash "${_user_script}"; then
         log "User bootstrap hook exited with non-zero status — marking bootstrap failed"
         _bootstrap_ok=false
         exit 1
