@@ -196,17 +196,11 @@ systemctl restart ssh
 
 _bootstrap_failure_phase="ssh-known-hosts"
 log "Pre-populating SSH known hosts for common Git providers"
-mkdir -p /root/.ssh /home/ubuntu/.ssh
-ssh-keyscan -H github.com gitlab.com bitbucket.org >> /root/.ssh/known_hosts 2>/dev/null
-cp /root/.ssh/known_hosts /home/ubuntu/.ssh/known_hosts
-chown ubuntu:ubuntu /home/ubuntu/.ssh/known_hosts
-chmod 600 /root/.ssh/known_hosts /home/ubuntu/.ssh/known_hosts
-
-# Rewrite SSH git URLs to HTTPS for root so that tools like claude plugin install
-# can clone public repos without requiring a GitHub SSH key on the instance.
-git config --global url."https://github.com/".insteadOf "git@github.com:"
-git config --global url."https://gitlab.com/".insteadOf "git@gitlab.com:"
-git config --global url."https://bitbucket.org/".insteadOf "git@bitbucket.org:"
+mkdir -p /root/.ssh
+_known_hosts=$(ssh-keyscan -H github.com gitlab.com bitbucket.org 2>/dev/null)
+echo "${_known_hosts}" >> /root/.ssh/known_hosts
+chmod 600 /root/.ssh/known_hosts
+# Ubuntu's known_hosts is populated after EFS mounts (see below).
 
 # --- Storage mounts (ADR-0004) ---
 
@@ -237,6 +231,12 @@ if [ -n "${MINT_EFS_ID:-}" ]; then
     mkdir -p /home/ubuntu/.ssh
     chmod 700 /home/ubuntu/.ssh
     chown -R ubuntu:ubuntu /home/ubuntu/.ssh
+
+    # Append Git provider fingerprints to ubuntu's known_hosts.
+    # Use append (not overwrite) to preserve any existing entries on EFS.
+    echo "${_known_hosts}" >> /home/ubuntu/.ssh/known_hosts
+    chown ubuntu:ubuntu /home/ubuntu/.ssh/known_hosts
+    chmod 600 /home/ubuntu/.ssh/known_hosts
 
     # Symlink ~/projects → project EBS. The symlink itself persists on EFS so
     # it survives mint recreate without any reconciliation step.
@@ -553,7 +553,19 @@ if [ -n "${MINT_USER_BOOTSTRAP:-}" ]; then
     chmod 755 "${_user_script}"
     # Run as ubuntu so tools like claude write to /home/ubuntu (EFS-persisted).
     # sudo -H sets HOME to ubuntu's home directory from /etc/passwd.
-    if ! sudo -u ubuntu -H bash "${_user_script}"; then
+    # GIT_CONFIG_COUNT injects SSH→HTTPS URL rewrites for this execution only,
+    # so git clones of public repos work without an SSH key during bootstrap
+    # without permanently altering ubuntu's ~/.gitconfig.
+    if ! sudo -u ubuntu -H \
+        env \
+        GIT_CONFIG_COUNT=3 \
+        GIT_CONFIG_KEY_0="url.https://github.com/.insteadOf" \
+        GIT_CONFIG_VALUE_0="git@github.com:" \
+        GIT_CONFIG_KEY_1="url.https://gitlab.com/.insteadOf" \
+        GIT_CONFIG_VALUE_1="git@gitlab.com:" \
+        GIT_CONFIG_KEY_2="url.https://bitbucket.org/.insteadOf" \
+        GIT_CONFIG_VALUE_2="git@bitbucket.org:" \
+        bash "${_user_script}"; then
         log "User bootstrap hook exited with non-zero status — marking bootstrap failed"
         _bootstrap_ok=false
         exit 1
