@@ -39,7 +39,7 @@ const (
 	// TagBootstrapFailurePhase records the bootstrap phase that was active when
 	// the script exited with a failure. Written by the EXIT trap in bootstrap.sh
 	// immediately before mint:bootstrap=failed. Absent on successful bootstraps.
-	// Phase values: packages, docker, efs-mount, systemd-units, drift-check, user-script.
+	// Phase values: packages, docker, ssh-known-hosts, efs-mount, systemd-units, drift-check, user-script.
 	TagBootstrapFailurePhase = "mint:bootstrap-failure-phase"
 
 	// TagHealth tracks the health status of the resource.
