@@ -17,6 +17,8 @@ import (
 type codeDeps struct {
 	describe           mintaws.DescribeInstancesAPI
 	owner              string
+	profile            string // AWS profile for ProxyCommand aws CLI
+	region             string // AWS region for ProxyCommand aws CLI
 	runner             CommandRunner
 	sshConfigPath      string
 	sshConfigApproved  bool
@@ -48,9 +50,20 @@ func newCodeCommandWithDeps(deps *codeDeps) *cobra.Command {
 			if clients.mintConfig != nil {
 				sshApproved = clients.mintConfig.SSHConfigApproved
 			}
+			// Determine effective profile: --profile flag > config aws_profile.
+			cliCtx := cli.FromCommand(cmd)
+			profile := ""
+			if cliCtx != nil {
+				profile = cliCtx.Profile
+			}
+			if profile == "" && clients.mintConfig != nil {
+				profile = clients.mintConfig.AWSProfile
+			}
 			return runCode(cmd, &codeDeps{
 				describe:          clients.ec2Client,
 				owner:             clients.owner,
+				profile:           profile,
+				region:            clients.region,
 				sshConfigApproved: sshApproved,
 			})
 		},
@@ -109,7 +122,7 @@ func runCode(cmd *cobra.Command, deps *codeDeps) error {
 		sshConfigPath = defaultSSHConfigPath()
 	}
 
-	block := sshconfig.GenerateBlock(vmName, found.PublicIP, defaultSSHUser, defaultSSHPort, found.ID, found.AvailabilityZone)
+	block := sshconfig.GenerateBlock(vmName, found.PublicIP, defaultSSHUser, defaultSSHPort, found.ID, found.AvailabilityZone, deps.profile, deps.region)
 	if err := sshconfig.WriteManagedBlock(sshConfigPath, vmName, block); err != nil {
 		return fmt.Errorf("write ssh config: %w", err)
 	}

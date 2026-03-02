@@ -179,8 +179,19 @@ func runSSHConfig(cmd *cobra.Command, deps *sshConfigDeps) error {
 		}
 	}
 
+	// Determine effective profile and region for the aws CLI in ProxyCommand.
+	profile := ""
+	region := ""
+	if cliCtx != nil {
+		profile = cliCtx.Profile
+	}
+	if profile == "" {
+		profile = cfg.AWSProfile
+	}
+	region = cfg.Region
+
 	// Generate and write the managed block.
-	block := sshconfig.GenerateBlock(vmName, hostname, defaultSSHUser, defaultSSHPort, instanceID, az)
+	block := sshconfig.GenerateBlock(vmName, hostname, defaultSSHUser, defaultSSHPort, instanceID, az, profile, region)
 	if err := sshconfig.WriteManagedBlock(sshConfigPath, vmName, block); err != nil {
 		return fmt.Errorf("write ssh config: %w", err)
 	}

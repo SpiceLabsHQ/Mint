@@ -174,7 +174,7 @@ func writeSSHConfigWithBlock(t *testing.T, sshDir, vmName string) {
 	if err := os.MkdirAll(sshDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	block := sshconfig.GenerateBlock(vmName, "1.2.3.4", "ec2-user", 2222, "i-abc123", "us-west-2a")
+	block := sshconfig.GenerateBlock(vmName, "1.2.3.4", "ec2-user", 2222, "i-abc123", "us-west-2a", "", "")
 	if err := os.WriteFile(filepath.Join(sshDir, "config"), []byte(block), 0o600); err != nil {
 		t.Fatal(err)
 	}
