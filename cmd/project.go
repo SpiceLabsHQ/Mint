@@ -603,7 +603,7 @@ func writeProjectListJSON(w io.Writer, projects []projectInfo) error {
 // writeProjectListHuman outputs projects as a human-readable table.
 func writeProjectListHuman(w io.Writer, projects []projectInfo) {
 	if len(projects) == 0 {
-		fmt.Fprintln(w, "No projects found")
+		fmt.Fprintln(w, "No projects yet — run mint project add <git-url> to clone one.")
 		return
 	}
 

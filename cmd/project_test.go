@@ -993,7 +993,7 @@ func TestProjectListCommand(t *testing.T) {
 				errors: []error{nil, nil},
 			},
 			owner:      "alice",
-			wantOutput: []string{"No projects found"},
+			wantOutput: []string{"No projects yet — run mint project add <git-url> to clone one."},
 		},
 		{
 			name: "no projects json returns empty array",
