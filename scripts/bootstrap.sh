@@ -198,6 +198,12 @@ cp /root/.ssh/known_hosts /home/ubuntu/.ssh/known_hosts
 chown ubuntu:ubuntu /home/ubuntu/.ssh/known_hosts
 chmod 600 /root/.ssh/known_hosts /home/ubuntu/.ssh/known_hosts
 
+# Rewrite SSH git URLs to HTTPS for root so that tools like claude plugin install
+# can clone public repos without requiring a GitHub SSH key on the instance.
+git config --global url."https://github.com/".insteadOf "git@github.com:"
+git config --global url."https://gitlab.com/".insteadOf "git@gitlab.com:"
+git config --global url."https://bitbucket.org/".insteadOf "git@bitbucket.org:"
+
 # --- Storage mounts (ADR-0004) ---
 
 _bootstrap_failure_phase="efs-mount"
