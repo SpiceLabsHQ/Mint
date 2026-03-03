@@ -122,10 +122,11 @@ func newProjectAddCommand() *cobra.Command {
 func newProjectAddCommandWithDeps(deps *projectAddDeps) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "add <git-url>",
-		Short: "Clone a repo, build its devcontainer, and create a tmux session",
-		Long: "Clone a git repository to /mint/projects/<name> on the VM, " +
-			"run devcontainer up to build the development container, " +
-			"and create a tmux session for the project.",
+		Short: "Clone a repo and optionally build its devcontainer",
+		Long: "Clone a git repository to /mint/projects/<name> on the VM. " +
+			"If the repo contains a .devcontainer/ directory or .devcontainer.json file, " +
+			"runs devcontainer up to build the development container. " +
+			"Projects without devcontainer config are cloned only.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if deps != nil {
@@ -155,7 +156,7 @@ func newProjectAddCommandWithDeps(deps *projectAddDeps) *cobra.Command {
 }
 
 // runProjectAdd executes the project add logic: discover VM, clone repo,
-// build devcontainer, create tmux session.
+// detect devcontainer config, and optionally build the devcontainer.
 func runProjectAdd(cmd *cobra.Command, deps *projectAddDeps, gitURL string) error {
 	ctx := cmd.Context()
 	if ctx == nil {
@@ -218,7 +219,7 @@ func runProjectAdd(cmd *cobra.Command, deps *projectAddDeps, gitURL string) erro
 	// host key verification (ADR-0019).
 	dirExists := false
 	containerID := ""
-	tmuxExists := false
+	hasDevcontainer := false
 
 	// Check 1: Does the project directory exist?
 	dirCheckCmd := []string{"test", "-d", projectPath}
@@ -232,29 +233,30 @@ func runProjectAdd(cmd *cobra.Command, deps *projectAddDeps, gitURL string) erro
 	} else {
 		dirExists = true
 
-		// Check 2: Is a container running for this project?
-		containerCheckCmd := []string{
-			"docker", "ps", "-q",
-			"--filter", fmt.Sprintf("label=devcontainer.local_folder=%s", projectPath),
-		}
-		containerOutput, containerErr := remote(ctx, deps.sendKey, found.ID, found.AvailabilityZone,
-			found.PublicIP, defaultSSHPort, defaultSSHUser, containerCheckCmd)
-		if containerErr == nil {
-			containerID = strings.TrimSpace(string(containerOutput))
-		}
+		// Check 2: Does the project have devcontainer config?
+		_, devcontainerErr := remote(ctx, deps.sendKey, found.ID, found.AvailabilityZone,
+			found.PublicIP, defaultSSHPort, defaultSSHUser, buildDevcontainerCheckCommand(projectPath))
+		hasDevcontainer = devcontainerErr == nil
 
-		if containerID != "" {
-			// Check 3: Does a tmux session already exist?
-			tmuxCheckCmd := []string{"tmux", "has-session", "-t", projectName}
-			_, tmuxErr := remote(ctx, deps.sendKey, found.ID, found.AvailabilityZone,
-				found.PublicIP, defaultSSHPort, defaultSSHUser, tmuxCheckCmd)
-			tmuxExists = tmuxErr == nil
+		if hasDevcontainer {
+			// Check 3: Is a container running for this project?
+			containerCheckCmd := []string{
+				"docker", "ps", "-q",
+				"--filter", fmt.Sprintf("label=devcontainer.local_folder=%s", projectPath),
+			}
+			containerOutput, containerErr := remote(ctx, deps.sendKey, found.ID, found.AvailabilityZone,
+				found.PublicIP, defaultSSHPort, defaultSSHUser, containerCheckCmd)
+			if containerErr == nil {
+				containerID = strings.TrimSpace(string(containerOutput))
+			}
 		}
 	}
 
-	// If everything exists, nothing to do.
-	if dirExists && containerID != "" && tmuxExists {
-		fmt.Fprintf(w, "Project %q is already fully set up.\n", projectName)
+	// Already set up detection:
+	// - Non-devcontainer project: dir exists → done.
+	// - Devcontainer project: dir exists + container running → done.
+	if dirExists && (!hasDevcontainer || containerID != "") {
+		fmt.Fprintf(w, "Project %q is already set up.\n", projectName)
 		return nil
 	}
 
@@ -278,52 +280,42 @@ func runProjectAdd(cmd *cobra.Command, deps *projectAddDeps, gitURL string) erro
 		if err != nil {
 			return classifyCloneError(gitURL, err, cloneStderr.String())
 		}
-	} else if containerID == "" {
+
+		// After cloning, check if devcontainer config exists.
+		_, devcontainerErr := remote(ctx, deps.sendKey, found.ID, found.AvailabilityZone,
+			found.PublicIP, defaultSSHPort, defaultSSHUser, buildDevcontainerCheckCommand(projectPath))
+		hasDevcontainer = devcontainerErr == nil
+	} else if hasDevcontainer && containerID == "" {
 		fmt.Fprintf(w, "Found existing clone for %q, resuming from devcontainer build.\n", projectName)
 	}
 
-	// Build step: skip if container is already running.
-	if containerID == "" {
-		fmt.Fprintf(w, "Building devcontainer...\n")
-		buildCmd := []string{"devcontainer", "up", "--workspace-folder", projectPath}
-		_, err = streaming(ctx, deps.sendKey, found.ID, found.AvailabilityZone,
-			found.PublicIP, defaultSSHPort, defaultSSHUser, buildCmd, os.Stderr)
-		if err != nil {
-			return fmt.Errorf("building devcontainer: %w", err)
-		}
-
-		// Discover the container ID after build.
-		dockerPsCmd := []string{
-			"docker", "ps", "-q",
-			"--filter", fmt.Sprintf("label=devcontainer.local_folder=%s", projectPath),
-		}
-		containerOutput, containerErr := remote(ctx, deps.sendKey, found.ID, found.AvailabilityZone,
-			found.PublicIP, defaultSSHPort, defaultSSHUser, dockerPsCmd)
-		if containerErr == nil {
-			containerID = strings.TrimSpace(string(containerOutput))
-		}
-	} else {
-		fmt.Fprintf(w, "Found running container for %q, resuming from session creation.\n", projectName)
+	// If no devcontainer config, we are done after cloning.
+	if !hasDevcontainer {
+		fmt.Fprintf(w, "No devcontainer config detected, skipping container build.\n")
+		fmt.Fprintf(w, "\nProject %q ready at %s\n", projectName, projectPath)
+		return nil
 	}
 
-	// Tmux step: create session.
-	fmt.Fprintf(w, "Creating tmux session...\n")
-	var tmuxCmd []string
-	if containerID == "" {
-		fmt.Fprintf(w, "Warning: Container not found after build. Creating tmux session without docker exec.\n")
-		tmuxCmd = []string{"tmux", "new-session", "-d", "-s", projectName}
-	} else {
-		tmuxCmd = []string{"tmux", "new-session", "-d", "-s", projectName,
-			"docker", "exec", "-it", containerID, "/bin/bash"}
-	}
-	_, err = remote(ctx, deps.sendKey, found.ID, found.AvailabilityZone,
-		found.PublicIP, defaultSSHPort, defaultSSHUser, tmuxCmd)
+	// Build step: run devcontainer up.
+	fmt.Fprintf(w, "Building devcontainer...\n")
+	buildCmd := []string{"devcontainer", "up", "--workspace-folder", projectPath}
+	_, err = streaming(ctx, deps.sendKey, found.ID, found.AvailabilityZone,
+		found.PublicIP, defaultSSHPort, defaultSSHUser, buildCmd, os.Stderr)
 	if err != nil {
-		return fmt.Errorf("creating tmux session: %w", err)
+		return fmt.Errorf("building devcontainer: %w", err)
 	}
 
 	fmt.Fprintf(w, "\nProject %q ready at %s\n", projectName, projectPath)
 	return nil
+}
+
+// buildDevcontainerCheckCommand constructs the remote command that tests for
+// the presence of a .devcontainer/ directory or .devcontainer.json file.
+func buildDevcontainerCheckCommand(projectPath string) []string {
+	return []string{
+		"sh", "-c",
+		fmt.Sprintf("test -d %s/.devcontainer -o -f %s/.devcontainer.json", projectPath, projectPath),
+	}
 }
 
 // buildCloneCommand constructs the git clone command arguments.
