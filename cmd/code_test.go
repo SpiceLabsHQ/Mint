@@ -13,6 +13,7 @@ import (
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	mintaws "github.com/SpiceLabsHQ/Mint/internal/aws"
 	"github.com/SpiceLabsHQ/Mint/internal/cli"
+	"github.com/SpiceLabsHQ/Mint/internal/hint"
 	"github.com/spf13/cobra"
 )
 
@@ -36,6 +37,8 @@ func mockRemoteRunnerForCode(stdout string, err error) (RemoteCommandRunner, *[]
 }
 
 func TestCodeCommand(t *testing.T) {
+	hint.IsTTY = false // Ensure non-TTY mode for consistent test assertions.
+
 	tests := []struct {
 		name              string
 		describe          *mockDescribeForSSH
@@ -396,6 +399,8 @@ func TestCodeCommand(t *testing.T) {
 }
 
 func TestCodeCommandTooManyArgs(t *testing.T) {
+	hint.IsTTY = false // Ensure non-TTY mode for consistent test assertions.
+
 	configDir := t.TempDir()
 	t.Setenv("MINT_CONFIG_DIR", configDir)
 
@@ -434,6 +439,8 @@ func TestCodeCommandTooManyArgs(t *testing.T) {
 }
 
 func TestCodeCommandSkipsSSHConfigWhenNotApproved(t *testing.T) {
+	hint.IsTTY = false // Ensure non-TTY mode for consistent test assertions.
+
 	sshConfigDir := t.TempDir()
 	configDir := t.TempDir()
 	t.Setenv("MINT_CONFIG_DIR", configDir)
@@ -497,6 +504,8 @@ func TestCodeCommandSkipsSSHConfigWhenNotApproved(t *testing.T) {
 }
 
 func TestCodeCommandWritesSSHConfigWhenApproved(t *testing.T) {
+	hint.IsTTY = false // Ensure non-TTY mode for consistent test assertions.
+
 	sshConfigDir := t.TempDir()
 	configDir := t.TempDir()
 	t.Setenv("MINT_CONFIG_DIR", configDir)
@@ -682,6 +691,8 @@ func newCodeTestRoot() *cobra.Command {
 }
 
 func TestCodeMultiVMAutoResolution(t *testing.T) {
+	hint.IsTTY = false // Ensure non-TTY mode for consistent test assertions.
+
 	t.Run("single VM skips scanning and uses FindVM fast path", func(t *testing.T) {
 		// When only one VM exists, the code should use the existing FindVM path
 		// without calling ListVMs or SSH probing.

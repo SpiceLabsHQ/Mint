@@ -9,6 +9,7 @@ import (
 	mintaws "github.com/SpiceLabsHQ/Mint/internal/aws"
 	"github.com/SpiceLabsHQ/Mint/internal/cli"
 	"github.com/SpiceLabsHQ/Mint/internal/config"
+	"github.com/SpiceLabsHQ/Mint/internal/hint"
 	"github.com/spf13/cobra"
 )
 
@@ -71,7 +72,10 @@ func newConfigSetCommand() *cobra.Command {
 				// it with a single friendly message so the user knows exactly
 				// what to do.
 				if key == "instance_type" && isCredentialError(err) {
-					return fmt.Errorf(`cannot validate instance type: AWS credentials unavailable — run "aws configure", set AWS_PROFILE, use --profile, or persist a profile with "mint config set aws_profile <profile>"`)
+					return fmt.Errorf("cannot validate instance type: AWS credentials unavailable \u2014 configure credentials first\n%s\n%s\n%s",
+						hint.Suggest("Configure credentials", "aws configure"),
+						hint.Suggest("Use a named profile", "mint config set aws_profile <profile>"),
+						hint.Suggest("Or pass one-time", "--profile <name>"))
 				}
 				return err
 			}

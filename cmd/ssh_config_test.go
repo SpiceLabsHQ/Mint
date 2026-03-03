@@ -486,8 +486,8 @@ func TestSSHConfigCommand_AutoDiscover_NoVM(t *testing.T) {
 	if !strings.Contains(errMsg, "mint up") {
 		t.Errorf("error should mention 'mint up', got: %s", errMsg)
 	}
-	if !strings.Contains(errMsg, "No running VM") {
-		t.Errorf("error should mention 'No running VM', got: %s", errMsg)
+	if !strings.Contains(errMsg, "no running VM") {
+		t.Errorf("error should mention 'no running VM', got: %s", errMsg)
 	}
 }
 

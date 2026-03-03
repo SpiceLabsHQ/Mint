@@ -18,6 +18,7 @@ import (
 	mintaws "github.com/SpiceLabsHQ/Mint/internal/aws"
 	"github.com/SpiceLabsHQ/Mint/internal/cli"
 	"github.com/SpiceLabsHQ/Mint/internal/config"
+	"github.com/SpiceLabsHQ/Mint/internal/hint"
 	"github.com/SpiceLabsHQ/Mint/internal/sshconfig"
 	"github.com/SpiceLabsHQ/Mint/internal/vm"
 )
@@ -195,13 +196,13 @@ func runProjectAdd(cmd *cobra.Command, deps *projectAddDeps, gitURL string) erro
 		return fmt.Errorf("discovering VM: %w", err)
 	}
 	if found == nil {
-		return fmt.Errorf("no VM %q found — run mint up first to create one", vmName)
+		return fmt.Errorf("no VM %q found — run %s first to create one", vmName, hint.Cmd("mint up"))
 	}
 
 	// Verify VM is running.
 	if found.State != string(ec2types.InstanceStateNameRunning) {
-		return fmt.Errorf("VM %q (%s) is not running (state: %s) — run mint up to start it",
-			vmName, found.ID, found.State)
+		return fmt.Errorf("VM %q (%s) is not running (state: %s) — run %s to start it",
+			vmName, found.ID, found.State, hint.Cmd("mint up"))
 	}
 
 	// Build a TOFU-verified remote runner for write commands (ADR-0019).
@@ -387,17 +388,21 @@ func classifyCloneError(gitURL string, err error, stderr string) error {
 		strings.Contains(stderr, "could not read Username") ||
 		strings.Contains(stderr, "Invalid username or password") {
 		if isSSHURL {
-			return fmt.Errorf("cloning repository: authentication failed\n\n" +
-				"  The VM could not authenticate with the git server.\n" +
-				"  • Ensure your local SSH agent has the right key loaded: ssh-add -l\n" +
-				"  • SSH agent forwarding is enabled automatically when SSH_AUTH_SOCK is set\n" +
-				"  • Or add a deploy key to the repository: mint key add <public-key-path>")
+			return fmt.Errorf("cloning repository: authentication failed\n\n"+
+				"  The VM could not authenticate with the git server.\n"+
+				"  • Ensure your local SSH agent has the right key loaded: %s\n"+
+				"  • SSH agent forwarding is enabled automatically when SSH_AUTH_SOCK is set\n"+
+				"  • Or add a deploy key to the repository: %s",
+				hint.Cmd("ssh-add -l"), hint.Cmd("mint key add <public-key-path>"))
 		}
-		return fmt.Errorf("cloning repository: authentication failed\n\n" +
-			"  The VM could not authenticate with the git server.\n" +
-			"  • Use an SSH URL to leverage agent forwarding: git@github.com:org/repo.git\n" +
-			"  • Or include a token in the HTTPS URL: https://<token>@github.com/org/repo\n" +
-			"  • Or add a deploy key to the repository: mint key add <public-key-path>")
+		return fmt.Errorf("cloning repository: authentication failed\n\n"+
+			"  The VM could not authenticate with the git server.\n"+
+			"  • Use an SSH URL to leverage agent forwarding: %s\n"+
+			"  • Or include a token in the HTTPS URL: %s\n"+
+			"  • Or add a deploy key to the repository: %s",
+			hint.Cmd("git@github.com:org/repo.git"),
+			hint.Cmd("https://<token>@github.com/org/repo"),
+			hint.Cmd("mint key add <public-key-path>"))
 	}
 
 	// Repository not found — GitHub returns this for both missing and inaccessible repos.
@@ -532,13 +537,13 @@ func runProjectList(cmd *cobra.Command, deps *projectListDeps) error {
 		return fmt.Errorf("discovering VM: %w", err)
 	}
 	if found == nil {
-		return fmt.Errorf("no VM %q found — run mint up first to create one", vmName)
+		return fmt.Errorf("no VM %q found — run %s first to create one", vmName, hint.Cmd("mint up"))
 	}
 
 	// Verify VM is running.
 	if found.State != string(ec2types.InstanceStateNameRunning) {
-		return fmt.Errorf("VM %q (%s) is not running (state: %s) — run mint up to start it",
-			vmName, found.ID, found.State)
+		return fmt.Errorf("VM %q (%s) is not running (state: %s) — run %s to start it",
+			vmName, found.ID, found.State, hint.Cmd("mint up"))
 	}
 
 	// List project directories.
@@ -660,7 +665,7 @@ func writeProjectListJSON(w io.Writer, projects []projectInfo) error {
 // writeProjectListHuman outputs projects as a human-readable table.
 func writeProjectListHuman(w io.Writer, projects []projectInfo) {
 	if len(projects) == 0 {
-		fmt.Fprintln(w, "No projects yet — run mint project add <git-url> to clone one.")
+		fmt.Fprintf(w, "No projects yet — run %s to clone one.\n", hint.Cmd("mint project add <git-url>"))
 		return
 	}
 
@@ -738,13 +743,13 @@ func runProjectRebuild(cmd *cobra.Command, deps *projectRebuildDeps, projectName
 		return fmt.Errorf("discovering VM: %w", err)
 	}
 	if found == nil {
-		return fmt.Errorf("no VM %q found — run mint up first to create one", vmName)
+		return fmt.Errorf("no VM %q found — run %s first to create one", vmName, hint.Cmd("mint up"))
 	}
 
 	// Verify VM is running.
 	if found.State != string(ec2types.InstanceStateNameRunning) {
-		return fmt.Errorf("VM %q (%s) is not running (state: %s) — run mint up to start it",
-			vmName, found.ID, found.State)
+		return fmt.Errorf("VM %q (%s) is not running (state: %s) — run %s to start it",
+			vmName, found.ID, found.State, hint.Cmd("mint up"))
 	}
 
 	// Build a TOFU-verified remote runner for write commands (ADR-0019).
@@ -768,7 +773,7 @@ func runProjectRebuild(cmd *cobra.Command, deps *projectRebuildDeps, projectName
 		if isTOFUError(err) {
 			return err
 		}
-		return fmt.Errorf("project %q not found — run mint project list to see available projects", projectName)
+		return fmt.Errorf("project %q not found — run %s to see available projects", projectName, hint.Cmd("mint project list"))
 	}
 
 	// Step 2: Confirmation prompt (unless --yes).

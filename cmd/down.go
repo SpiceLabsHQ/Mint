@@ -10,6 +10,7 @@ import (
 
 	mintaws "github.com/SpiceLabsHQ/Mint/internal/aws"
 	"github.com/SpiceLabsHQ/Mint/internal/cli"
+	"github.com/SpiceLabsHQ/Mint/internal/hint"
 	"github.com/SpiceLabsHQ/Mint/internal/progress"
 	"github.com/SpiceLabsHQ/Mint/internal/vm"
 )
@@ -81,7 +82,7 @@ func runDown(cmd *cobra.Command, deps *downDeps) error {
 	}
 
 	if found == nil {
-		return fmt.Errorf("no VM %q found — run mint up first to create one", vmName)
+		return fmt.Errorf("no VM %q found — run %s first to create one", vmName, hint.Cmd("mint up"))
 	}
 
 	// Handle already-stopped VM

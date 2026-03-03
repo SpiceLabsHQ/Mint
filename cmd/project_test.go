@@ -15,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2instanceconnect"
 	mintaws "github.com/SpiceLabsHQ/Mint/internal/aws"
 	"github.com/SpiceLabsHQ/Mint/internal/cli"
+	"github.com/SpiceLabsHQ/Mint/internal/hint"
 	"github.com/SpiceLabsHQ/Mint/internal/sshconfig"
 	"github.com/spf13/cobra"
 )
@@ -343,6 +344,8 @@ func newTestRootForProject() *cobra.Command {
 // --- Command tests ---
 
 func TestProjectAddCommand(t *testing.T) {
+	hint.IsTTY = false // Ensure non-TTY mode for consistent test assertions.
+
 	tests := []struct {
 		name                string
 		describe            *mockDescribeForProject
@@ -1030,6 +1033,8 @@ func TestProjectParentCommandHasNoRun(t *testing.T) {
 // --- Project list tests ---
 
 func TestProjectListCommand(t *testing.T) {
+	hint.IsTTY = false // Ensure non-TTY mode for consistent test assertions.
+
 	tests := []struct {
 		name           string
 		describe       *mockDescribeForProject
@@ -1096,7 +1101,7 @@ func TestProjectListCommand(t *testing.T) {
 				errors: []error{nil, nil},
 			},
 			owner:      "alice",
-			wantOutput: []string{"No projects yet — run mint project add <git-url> to clone one."},
+			wantOutput: []string{"No projects yet — run `mint project add <git-url>` to clone one."},
 		},
 		{
 			name: "no projects json returns empty array",
@@ -1597,6 +1602,8 @@ func TestProjectRebuildTOFUHostKeyMismatch(t *testing.T) {
 }
 
 func TestProjectRebuildCommand(t *testing.T) {
+	hint.IsTTY = false // Ensure non-TTY mode for consistent test assertions.
+
 	tests := []struct {
 		name               string
 		describe           *mockDescribeForProject

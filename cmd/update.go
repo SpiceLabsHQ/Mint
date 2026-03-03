@@ -12,6 +12,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/SpiceLabsHQ/Mint/internal/hint"
 	"github.com/SpiceLabsHQ/Mint/internal/selfupdate"
 )
 
@@ -170,8 +171,8 @@ func checkDirWritable(dir string) error {
 func reexecWithSudo(binaryPath string) error {
 	sudoPath, err := exec.LookPath("sudo")
 	if err != nil {
-		return fmt.Errorf("cannot write to %s and sudo not found — try: sudo %s update",
-			filepath.Dir(binaryPath), binaryPath)
+		return fmt.Errorf("cannot write to %s and sudo not found \u2014 try %s",
+			filepath.Dir(binaryPath), hint.Cmd(fmt.Sprintf("sudo %s update", binaryPath)))
 	}
 	cmd := exec.Command(sudoPath, binaryPath, "update")
 	cmd.Stdin = os.Stdin

@@ -9,6 +9,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ec2instanceconnect"
+	"github.com/SpiceLabsHQ/Mint/internal/hint"
 	"github.com/SpiceLabsHQ/Mint/internal/sshconfig"
 )
 
@@ -290,6 +291,8 @@ func TestMoshCommandEmptyAvailabilityZone(t *testing.T) {
 }
 
 func TestMoshRequiresInteractiveTerminal(t *testing.T) {
+	hint.IsTTY = false
+
 	sendKey := &mockSendSSHPublicKey{}
 
 	deps := &moshDeps{
@@ -305,8 +308,12 @@ func TestMoshRequiresInteractiveTerminal(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when stdin is not a terminal, got nil")
 	}
-	if !strings.Contains(err.Error(), "interactive terminal") {
-		t.Errorf("error %q does not contain 'interactive terminal'", err.Error())
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "interactive terminal") {
+		t.Errorf("error %q does not contain 'interactive terminal'", errMsg)
+	}
+	if !strings.Contains(errMsg, "`mint ssh`") {
+		t.Errorf("error %q does not contain hint-formatted 'mint ssh'", errMsg)
 	}
 
 	// SendSSHPublicKey (and by extension, the mosh-server start) must NOT be
@@ -348,6 +355,8 @@ func TestMoshCommandTOFUFirstConnection(t *testing.T) {
 }
 
 func TestMoshCommandTOFUKeyMismatch(t *testing.T) {
+	hint.IsTTY = false
+
 	describe := &mockDescribeForSSH{
 		output: makeRunningInstanceWithAZ("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
 	}
@@ -371,6 +380,12 @@ func TestMoshCommandTOFUKeyMismatch(t *testing.T) {
 	errMsg := err.Error()
 	if !strings.Contains(errMsg, "HOST KEY CHANGED") {
 		t.Errorf("error missing HOST KEY CHANGED, got: %s", errMsg)
+	}
+	if !strings.Contains(errMsg, "Rebuild:") {
+		t.Errorf("error missing 'Rebuild:' label, got: %s", errMsg)
+	}
+	if !strings.Contains(errMsg, "`mint destroy && mint up`") {
+		t.Errorf("error missing hint-formatted recovery command, got: %s", errMsg)
 	}
 
 	// Mosh should NOT have been executed.

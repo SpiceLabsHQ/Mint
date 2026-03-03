@@ -11,6 +11,7 @@ import (
 
 	"github.com/SpiceLabsHQ/Mint/internal/cli"
 	"github.com/SpiceLabsHQ/Mint/internal/config"
+	"github.com/SpiceLabsHQ/Mint/internal/hint"
 )
 
 // fakeCmd builds a *cobra.Command with the given Use (name) attached to the
@@ -186,6 +187,8 @@ func TestInitAWSClientsProfilePropagation(t *testing.T) {
 }
 
 func TestInitAWSClientsNonExistentProfileError(t *testing.T) {
+	hint.IsTTY = false // Ensure non-TTY mode for consistent test assertions.
+
 	// When a non-existent profile is requested, initAWSClients must return a
 	// friendly error message instead of the raw SDK error string.
 	t.Run("flag profile not found returns friendly error", func(t *testing.T) {
@@ -199,7 +202,7 @@ func TestInitAWSClientsNonExistentProfileError(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error for non-existent profile, got nil")
 		}
-		want := `profile "ghost-profile" not found — check ~/.aws/config or run "aws configure"`
+		want := "profile \"ghost-profile\" not found — check ~/.aws/config or run `aws configure`"
 		if err.Error() != want {
 			t.Errorf("error = %q, want %q", err.Error(), want)
 		}
@@ -227,7 +230,7 @@ func TestInitAWSClientsNonExistentProfileError(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error for non-existent profile, got nil")
 		}
-		want := `profile "config-ghost-profile" not found — check ~/.aws/config or run "aws configure"`
+		want := "profile \"config-ghost-profile\" not found — check ~/.aws/config or run `aws configure`"
 		if err.Error() != want {
 			t.Errorf("error = %q, want %q", err.Error(), want)
 		}
@@ -415,7 +418,9 @@ func TestIsSSOReAuthError(t *testing.T) {
 }
 
 func TestCredentialErrMessage(t *testing.T) {
-	const genericMsg = `AWS credentials unavailable — run "aws configure", set AWS_PROFILE, or use --profile`
+	hint.IsTTY = false // Ensure non-TTY mode for consistent test assertions.
+
+	genericMsg := "AWS credentials unavailable — run `aws configure`, set AWS_PROFILE, or use --profile"
 
 	tests := []struct {
 		name        string
@@ -428,13 +433,13 @@ func TestCredentialErrMessage(t *testing.T) {
 			name:        "SSO error with profile returns sso login hint",
 			err:         fmt.Errorf("token has expired"),
 			profile:     "my-dev",
-			wantContain: "aws sso login --profile my-dev",
+			wantContain: "`aws sso login --profile my-dev`",
 		},
 		{
 			name:        "SSO error with profile contains profile name",
 			err:         fmt.Errorf("SSOProviderInvalidToken: session expired"),
 			profile:     "prod",
-			wantContain: "aws sso login --profile prod",
+			wantContain: "`aws sso login --profile prod`",
 		},
 		{
 			name:        "SSO error without profile returns generic message",

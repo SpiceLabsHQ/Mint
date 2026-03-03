@@ -14,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2instanceconnect"
 	mintaws "github.com/SpiceLabsHQ/Mint/internal/aws"
 	"github.com/SpiceLabsHQ/Mint/internal/cli"
+	"github.com/SpiceLabsHQ/Mint/internal/hint"
 	"github.com/SpiceLabsHQ/Mint/internal/provision"
 	"github.com/spf13/cobra"
 )
@@ -485,6 +486,8 @@ func newHappyRecreateDepsWithMocks(owner string, lm lifecycleMocks) *recreateDep
 // ---------------------------------------------------------------------------
 
 func TestRecreateCommand(t *testing.T) {
+	hint.IsTTY = false // Ensure non-TTY mode for consistent test assertions.
+
 	tests := []struct {
 		name           string
 		deps           *recreateDeps

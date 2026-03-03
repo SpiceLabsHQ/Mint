@@ -15,6 +15,7 @@ import (
 	mintaws "github.com/SpiceLabsHQ/Mint/internal/aws"
 	"github.com/SpiceLabsHQ/Mint/internal/cli"
 	"github.com/SpiceLabsHQ/Mint/internal/config"
+	"github.com/SpiceLabsHQ/Mint/internal/hint"
 	"github.com/SpiceLabsHQ/Mint/internal/sshconfig"
 	"github.com/SpiceLabsHQ/Mint/internal/tags"
 	"github.com/SpiceLabsHQ/Mint/internal/vm"
@@ -121,13 +122,13 @@ func runKeyAdd(cmd *cobra.Command, deps *keyAddDeps, arg string) error {
 		return fmt.Errorf("discovering VM: %w", err)
 	}
 	if found == nil {
-		return fmt.Errorf("no VM %q found — run mint up first to create one", vmName)
+		return fmt.Errorf("no VM %q found \u2014 run %s first to create one", vmName, hint.Cmd("mint up"))
 	}
 
 	// Verify VM is running.
 	if found.State != string(ec2types.InstanceStateNameRunning) {
-		return fmt.Errorf("VM %q (%s) is not running (state: %s) — run mint up to start it",
-			vmName, found.ID, found.State)
+		return fmt.Errorf("VM %q (%s) is not running (state: %s) \u2014 run %s to start it",
+			vmName, found.ID, found.State, hint.Cmd("mint up"))
 	}
 
 	// Check bootstrap status before attempting any SSH/keyscan operation (ADR-0001).
@@ -136,13 +137,13 @@ func runKeyAdd(cmd *cobra.Command, deps *keyAddDeps, arg string) error {
 	case tags.BootstrapPending:
 		return fmt.Errorf(
 			"VM %q bootstrap is not complete (status: pending).\n"+
-				"Run 'mint doctor' for details or 'mint recreate' to rebuild.",
-			vmName,
+				"Run %s for details or %s to rebuild.",
+			vmName, hint.Cmd("mint doctor"), hint.Cmd("mint recreate"),
 		)
 	case tags.BootstrapFailed:
 		return fmt.Errorf(
-			"VM %q bootstrap failed.\nRun 'mint recreate' to rebuild.",
-			vmName,
+			"VM %q bootstrap failed.\nRun %s to rebuild.",
+			vmName, hint.Cmd("mint recreate"),
 		)
 	}
 

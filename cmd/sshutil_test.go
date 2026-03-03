@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2instanceconnect"
 
 	mintaws "github.com/SpiceLabsHQ/Mint/internal/aws"
+	"github.com/SpiceLabsHQ/Mint/internal/hint"
 	"github.com/SpiceLabsHQ/Mint/internal/sshconfig"
 )
 
@@ -445,14 +446,17 @@ func TestTOFURemoteRunnerMatchingKeyProceeds(t *testing.T) {
 // --- verifyHostKey direct tests ---
 
 // TestVerifyHostKeyMismatchErrorFormat directly exercises the error-message
-// formatting path in verifyHostKey (sshutil.go lines 258-264). It asserts that
-// when a stored key exists and the newly scanned key differs, the error contains:
+// formatting path in verifyHostKey (sshutil.go). It asserts that when a stored
+// key exists and the newly scanned key differs, the error contains:
 //   - the VM name
 //   - the stored (old) fingerprint labeled "Stored fingerprint:"
 //   - the current (new) fingerprint labeled "Current fingerprint:"
 //   - the "HOST KEY CHANGED" sentinel
-//   - the remediation hint mentioning "mint destroy && mint up"
+//   - hint.Suggest-formatted remediation for "mint recreate"
+//   - hint.Suggest-formatted instruction to accept the new key via known_hosts
 func TestVerifyHostKeyMismatchErrorFormat(t *testing.T) {
+	hint.IsTTY = false
+
 	const vmName = "my-dev-vm"
 	const storedFP = "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 	const currentFP = "SHA256:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
@@ -498,9 +502,15 @@ func TestVerifyHostKeyMismatchErrorFormat(t *testing.T) {
 		t.Errorf("error missing 'Current fingerprint: %s', got:\n%s", currentFP, msg)
 	}
 
-	// Assert the remediation hint is present.
-	if !strings.Contains(msg, "mint recreate") {
-		t.Errorf("error missing remediation hint 'mint recreate', got:\n%s", msg)
+	// Assert the hint.Suggest-formatted remediation hints are present.
+	if !strings.Contains(msg, "Rebuild:") {
+		t.Errorf("error missing 'Rebuild:' label, got:\n%s", msg)
+	}
+	if !strings.Contains(msg, "`mint recreate`") {
+		t.Errorf("error missing hint-formatted 'mint recreate', got:\n%s", msg)
+	}
+	if !strings.Contains(msg, "Accept new key:") {
+		t.Errorf("error missing 'Accept new key:' label, got:\n%s", msg)
 	}
 	if !strings.Contains(msg, "known_hosts") {
 		t.Errorf("error missing known_hosts reference, got:\n%s", msg)
@@ -515,6 +525,8 @@ func TestVerifyHostKeyMismatchErrorFormat(t *testing.T) {
 // TestVerifyHostKeyMismatchErrorFormatViaRun exercises the same mismatch path
 // through the public Run method to confirm the error propagates unchanged.
 func TestVerifyHostKeyMismatchErrorFormatViaRun(t *testing.T) {
+	hint.IsTTY = false
+
 	const vmName = "staging-vm"
 	const storedFP = "SHA256:oldfingerprintvalue"
 	const currentFP = "SHA256:newfingerprintvalue"
@@ -555,8 +567,11 @@ func TestVerifyHostKeyMismatchErrorFormatViaRun(t *testing.T) {
 	if !strings.Contains(msg, "Current fingerprint: "+currentFP) {
 		t.Errorf("error missing 'Current fingerprint: %s', got:\n%s", currentFP, msg)
 	}
-	if !strings.Contains(msg, "mint recreate") {
-		t.Errorf("error missing 'mint recreate' remediation hint, got:\n%s", msg)
+	if !strings.Contains(msg, "Rebuild:") {
+		t.Errorf("error missing 'Rebuild:' label, got:\n%s", msg)
+	}
+	if !strings.Contains(msg, "`mint recreate`") {
+		t.Errorf("error missing hint-formatted 'mint recreate', got:\n%s", msg)
 	}
 	if !strings.Contains(msg, "known_hosts") {
 		t.Errorf("error missing known_hosts reference, got:\n%s", msg)

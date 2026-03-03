@@ -18,6 +18,7 @@ import (
 	"github.com/SpiceLabsHQ/Mint/internal/bootstrap"
 	"github.com/SpiceLabsHQ/Mint/internal/cli"
 	"github.com/SpiceLabsHQ/Mint/internal/config"
+	"github.com/SpiceLabsHQ/Mint/internal/hint"
 	"github.com/SpiceLabsHQ/Mint/internal/progress"
 	"github.com/SpiceLabsHQ/Mint/internal/provision"
 	"github.com/SpiceLabsHQ/Mint/internal/sshconfig"
@@ -292,7 +293,7 @@ func printUpHuman(cmd *cobra.Command, result *provision.ProvisionResult, verbose
 			fmt.Fprintln(w, "\nBootstrap complete. VM is ready.")
 		} else {
 			// pending, unknown, or empty — don't claim success
-			fmt.Fprintln(w, "\nBootstrap in progress — run 'mint status' to check.")
+			fmt.Fprintf(w, "\nBootstrap in progress — run %s to check.\n", hint.Cmd("mint status"))
 		}
 		return nil
 	}
@@ -362,7 +363,7 @@ func discoverEFS(ctx context.Context, client mintaws.DescribeFileSystemsAPI) (st
 		}
 	}
 
-	return "", fmt.Errorf("no admin EFS found — run 'mint init' first")
+	return "", fmt.Errorf("no admin EFS found — run %s first", hint.Cmd("mint init"))
 }
 
 // efsTagsToMap converts EFS tags to a map for convenient lookup.
