@@ -19,6 +19,7 @@ func TestCodeCommand(t *testing.T) {
 		describe          *mockDescribeForSSH
 		owner             string
 		vmName            string
+		projectArg        string // positional arg: mint code <project>
 		pathFlag          string
 		sshConfigApproved bool
 		wantErr           bool
@@ -141,6 +142,90 @@ func TestCodeCommand(t *testing.T) {
 			wantErrContain:    "ssh_config_approved",
 			wantExec:          false,
 		},
+		// --- New tests for positional project argument (#202) ---
+		{
+			name: "project arg resolves to /mint/projects/<name>",
+			describe: &mockDescribeForSSH{
+				output: makeRunningInstanceWithAZ("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
+			},
+			owner:             "alice",
+			projectArg:        "myproject",
+			sshConfigApproved: true,
+			wantExec:          true,
+			checkCmd: func(t *testing.T, captured capturedCommand) {
+				t.Helper()
+				argsStr := strings.Join(captured.args, " ")
+				if !strings.Contains(argsStr, "/mint/projects/myproject") {
+					t.Errorf("expected path /mint/projects/myproject, args: %v", captured.args)
+				}
+			},
+		},
+		{
+			name: "project arg with dots and hyphens resolves correctly",
+			describe: &mockDescribeForSSH{
+				output: makeRunningInstanceWithAZ("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
+			},
+			owner:             "alice",
+			projectArg:        "my-project.v2",
+			sshConfigApproved: true,
+			wantExec:          true,
+			checkCmd: func(t *testing.T, captured capturedCommand) {
+				t.Helper()
+				argsStr := strings.Join(captured.args, " ")
+				if !strings.Contains(argsStr, "/mint/projects/my-project.v2") {
+					t.Errorf("expected path /mint/projects/my-project.v2, args: %v", captured.args)
+				}
+			},
+		},
+		{
+			name: "project arg and --path flag conflict errors",
+			describe: &mockDescribeForSSH{
+				output: makeRunningInstanceWithAZ("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
+			},
+			owner:             "alice",
+			projectArg:        "myproject",
+			pathFlag:          "/custom/path",
+			sshConfigApproved: true,
+			wantErr:           true,
+			wantErrContain:    "cannot use both",
+			wantExec:          false,
+		},
+		{
+			name: "invalid project name with shell metacharacters rejected",
+			describe: &mockDescribeForSSH{
+				output: makeRunningInstanceWithAZ("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
+			},
+			owner:             "alice",
+			projectArg:        "../evil",
+			sshConfigApproved: true,
+			wantErr:           true,
+			wantErrContain:    "invalid project name",
+			wantExec:          false,
+		},
+		{
+			name: "invalid project name with spaces rejected",
+			describe: &mockDescribeForSSH{
+				output: makeRunningInstanceWithAZ("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
+			},
+			owner:             "alice",
+			projectArg:        "rm -rf /",
+			sshConfigApproved: true,
+			wantErr:           true,
+			// cobra.MaximumNArgs(1) catches this as too many args
+			wantExec: false,
+		},
+		{
+			name: "invalid project name with semicolon rejected",
+			describe: &mockDescribeForSSH{
+				output: makeRunningInstanceWithAZ("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
+			},
+			owner:             "alice",
+			projectArg:        "foo;bar",
+			sshConfigApproved: true,
+			wantErr:           true,
+			wantErrContain:    "invalid project name",
+			wantExec:          false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -190,6 +275,9 @@ func TestCodeCommand(t *testing.T) {
 			if tt.vmName != "" && tt.vmName != "default" {
 				args = append([]string{"--vm", tt.vmName}, args...)
 			}
+			if tt.projectArg != "" {
+				args = append(args, tt.projectArg)
+			}
 			if tt.pathFlag != "" {
 				args = append(args, "--path", tt.pathFlag)
 			}
@@ -222,6 +310,43 @@ func TestCodeCommand(t *testing.T) {
 				t.Errorf("unexpected command execution: %s %v", captured.name, captured.args)
 			}
 		})
+	}
+}
+
+func TestCodeCommandTooManyArgs(t *testing.T) {
+	configDir := t.TempDir()
+	t.Setenv("MINT_CONFIG_DIR", configDir)
+
+	deps := &codeDeps{
+		describe: &mockDescribeForSSH{
+			output: makeRunningInstanceWithAZ("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
+		},
+		owner:             "alice",
+		sshConfigApproved: true,
+	}
+
+	cmd := newCodeCommandWithDeps(deps)
+	root := &cobra.Command{
+		Use:           "mint",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			cliCtx := cli.NewCLIContext(cmd)
+			cmd.SetContext(cli.WithContext(context.Background(), cliCtx))
+			return nil
+		},
+	}
+	root.PersistentFlags().Bool("verbose", false, "")
+	root.PersistentFlags().Bool("debug", false, "")
+	root.PersistentFlags().Bool("json", false, "")
+	root.PersistentFlags().Bool("yes", false, "")
+	root.PersistentFlags().String("vm", "default", "")
+	root.AddCommand(cmd)
+	root.SetArgs([]string{"code", "arg1", "arg2"})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("expected error for two positional args, got nil")
 	}
 }
 

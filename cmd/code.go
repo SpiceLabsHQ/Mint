@@ -33,14 +33,15 @@ func newCodeCommand() *cobra.Command {
 // for testing.
 func newCodeCommandWithDeps(deps *codeDeps) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "code",
+		Use:   "code [project]",
 		Short: "Open VS Code connected to the VM",
 		Long: "Open VS Code with Remote-SSH connected to the VM. " +
-			"Ensures the SSH config entry exists before launching.",
-		Args: cobra.NoArgs,
+			"Ensures the SSH config entry exists before launching.\n\n" +
+			"If a project name is given, opens /mint/projects/<name> in VS Code.",
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if deps != nil {
-				return runCode(cmd, deps)
+				return runCode(cmd, args, deps)
 			}
 			clients := awsClientsFromContext(cmd.Context())
 			if clients == nil {
@@ -59,7 +60,7 @@ func newCodeCommandWithDeps(deps *codeDeps) *cobra.Command {
 			if profile == "" && clients.mintConfig != nil {
 				profile = clients.mintConfig.AWSProfile
 			}
-			return runCode(cmd, &codeDeps{
+			return runCode(cmd, args, &codeDeps{
 				describe:          clients.ec2Client,
 				owner:             clients.owner,
 				profile:           profile,
@@ -76,7 +77,7 @@ func newCodeCommandWithDeps(deps *codeDeps) *cobra.Command {
 
 // runCode executes the code command logic: discover VM, verify running,
 // ensure SSH config, exec VS Code with --remote.
-func runCode(cmd *cobra.Command, deps *codeDeps) error {
+func runCode(cmd *cobra.Command, args []string, deps *codeDeps) error {
 	ctx := cmd.Context()
 	if ctx == nil {
 		ctx = context.Background()
@@ -88,9 +89,10 @@ func runCode(cmd *cobra.Command, deps *codeDeps) error {
 		vmName = cliCtx.VM
 	}
 
-	remotePath, _ := cmd.Flags().GetString("path")
-	if remotePath == "" {
-		remotePath = "/home/ubuntu"
+	// Resolve remote path from positional arg or --path flag.
+	remotePath, err := resolveCodePath(cmd, args)
+	if err != nil {
+		return err
 	}
 
 	// Discover VM by owner + VM name.
@@ -136,4 +138,41 @@ func runCode(cmd *cobra.Command, deps *codeDeps) error {
 	}
 
 	return runner("code", "--remote", remoteName, remotePath)
+}
+
+// resolveCodePath determines the remote directory to open in VS Code.
+//
+// Priority:
+//  1. Positional arg (project name) -> /mint/projects/<name>
+//  2. --path flag (explicit override)
+//  3. Default: /home/ubuntu
+//
+// It is an error to provide both a positional arg and --path.
+func resolveCodePath(cmd *cobra.Command, args []string) (string, error) {
+	pathChanged := cmd.Flags().Changed("path")
+	pathFlag, _ := cmd.Flags().GetString("path")
+
+	if len(args) > 0 {
+		project := args[0]
+
+		// Reject --path when a positional project name is given.
+		if pathChanged {
+			return "", fmt.Errorf(
+				"cannot use both project argument %q and --path flag — "+
+					"use one or the other", project)
+		}
+
+		// Validate the project name to prevent shell injection.
+		if err := validateProjectName(project); err != nil {
+			return "", err
+		}
+
+		return fmt.Sprintf("/mint/projects/%s", project), nil
+	}
+
+	// No positional arg: use --path flag or its default.
+	if pathFlag == "" {
+		return "/home/ubuntu", nil
+	}
+	return pathFlag, nil
 }
