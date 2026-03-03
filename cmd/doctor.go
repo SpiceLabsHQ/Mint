@@ -16,6 +16,7 @@ import (
 	mintaws "github.com/SpiceLabsHQ/Mint/internal/aws"
 	"github.com/SpiceLabsHQ/Mint/internal/cli"
 	"github.com/SpiceLabsHQ/Mint/internal/config"
+	"github.com/SpiceLabsHQ/Mint/internal/hint"
 	"github.com/SpiceLabsHQ/Mint/internal/identity"
 	"github.com/SpiceLabsHQ/Mint/internal/sshconfig"
 	"github.com/SpiceLabsHQ/Mint/internal/tags"
@@ -339,8 +340,8 @@ func checkDiskUsage(ctx context.Context, deps *doctorDeps, v *vm.VM, prefix stri
 			return checkResult{
 				name:   prefix + "/disk",
 				status: "WARN",
-				message: fmt.Sprintf("cannot connect to VM (port 41122 refused) — "+
-					"bootstrap may be incomplete, run 'mint doctor' for details"),
+				message: fmt.Sprintf("cannot connect to VM (port 41122 refused) \u2014 "+
+					"bootstrap may be incomplete, run %s for details", hint.Cmd("mint doctor")),
 			}
 		}
 		return checkResult{
@@ -433,8 +434,8 @@ func checkComponents(ctx context.Context, deps *doctorDeps, v *vm.VM, prefix str
 				results = append(results, checkResult{
 					name:   prefix + "/" + comp.name,
 					status: "FAIL",
-					message: fmt.Sprintf("cannot connect to VM (port 41122 refused) — "+
-						"bootstrap may be incomplete, run 'mint doctor' for details"),
+					message: fmt.Sprintf("cannot connect to VM (port 41122 refused) \u2014 "+
+						"bootstrap may be incomplete, run %s for details", hint.Cmd("mint doctor")),
 				})
 			} else {
 				results = append(results, checkResult{
@@ -557,7 +558,7 @@ func checkConfig(deps *doctorDeps) []checkResult {
 		results = append(results, checkResult{
 			name:    "region",
 			status:  "FAIL",
-			message: "region is not set — run mint config set region <region>",
+			message: fmt.Sprintf("region is not set \u2014 run %s", hint.Cmd("mint config set region <region>")),
 		})
 	} else if !regionFormatPattern.MatchString(cfg.Region) {
 		results = append(results, checkResult{
@@ -618,7 +619,7 @@ func checkSSHConfig(deps *doctorDeps) checkResult {
 		return checkResult{
 			name:    "SSH config",
 			status:  "WARN",
-			message: "SSH config file not found — run mint up to configure SSH automatically",
+			message: fmt.Sprintf("SSH config file not found \u2014 run %s to configure SSH automatically", hint.Cmd("mint up")),
 		}
 	}
 
@@ -627,7 +628,7 @@ func checkSSHConfig(deps *doctorDeps) checkResult {
 		return checkResult{
 			name:    "SSH config",
 			status:  "WARN",
-			message: "no mint managed block found — run mint up to configure SSH automatically",
+			message: fmt.Sprintf("no mint managed block found \u2014 run %s to configure SSH automatically", hint.Cmd("mint up")),
 		}
 	}
 

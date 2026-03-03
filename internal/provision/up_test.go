@@ -15,6 +15,7 @@ import (
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	mintaws "github.com/SpiceLabsHQ/Mint/internal/aws"
 	"github.com/SpiceLabsHQ/Mint/internal/bootstrap"
+	"github.com/SpiceLabsHQ/Mint/internal/hint"
 	"github.com/SpiceLabsHQ/Mint/internal/tags"
 )
 
@@ -36,6 +37,7 @@ exec /tmp/bootstrap.sh
 // "stub template not loaded" during any test that exercises the launch path.
 func TestMain(m *testing.M) {
 	bootstrap.SetStub([]byte(testStubTemplate))
+	hint.IsTTY = false
 	m.Run()
 }
 

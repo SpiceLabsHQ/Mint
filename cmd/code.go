@@ -10,6 +10,7 @@ import (
 
 	mintaws "github.com/SpiceLabsHQ/Mint/internal/aws"
 	"github.com/SpiceLabsHQ/Mint/internal/cli"
+	"github.com/SpiceLabsHQ/Mint/internal/hint"
 	"github.com/SpiceLabsHQ/Mint/internal/sshconfig"
 	"github.com/SpiceLabsHQ/Mint/internal/vm"
 )
@@ -120,20 +121,20 @@ func runCode(cmd *cobra.Command, args []string, deps *codeDeps) error {
 		return fmt.Errorf("discovering VM: %w", err)
 	}
 	if found == nil {
-		return fmt.Errorf("no VM %q found — run mint up first to create one", vmName)
+		return fmt.Errorf("no VM %q found — run %s first to create one", vmName, hint.Cmd("mint up"))
 	}
 
 	// Verify VM is running.
 	if found.State != string(ec2types.InstanceStateNameRunning) {
-		return fmt.Errorf("VM %q (%s) is not running (state: %s) — run mint up to start it",
-			vmName, found.ID, found.State)
+		return fmt.Errorf("VM %q (%s) is not running (state: %s) — run %s to start it",
+			vmName, found.ID, found.State, hint.Cmd("mint up"))
 	}
 
 	// ADR-0015: Check permission before writing to ~/.ssh/config.
 	if !deps.sshConfigApproved {
 		return fmt.Errorf(
-			"mint needs permission to update ~/.ssh/config — " +
-				"run mint config set ssh_config_approved true",
+			"mint needs permission to update ~/.ssh/config — run %s",
+			hint.Cmd("mint config set ssh_config_approved true"),
 		)
 	}
 
@@ -190,8 +191,8 @@ func resolveVMForProject(ctx context.Context, cmd *cobra.Command, project string
 	// ADR-0015: Check permission before SSH probing (which writes SSH config later).
 	if !deps.sshConfigApproved {
 		return false, nil, fmt.Errorf(
-			"mint needs permission to update ~/.ssh/config — " +
-				"run mint config set ssh_config_approved true",
+			"mint needs permission to update ~/.ssh/config — run %s",
+			hint.Cmd("mint config set ssh_config_approved true"),
 		)
 	}
 
@@ -212,8 +213,8 @@ func resolveVMForProject(ctx context.Context, cmd *cobra.Command, project string
 	switch len(matches) {
 	case 0:
 		return false, nil, fmt.Errorf(
-			"project %q not found on any running VM — use mint project add to clone it",
-			project)
+			"project %q not found on any running VM — use %s to clone it",
+			project, hint.Cmd("mint project add"))
 
 	case 1:
 		return true, matches[0], nil
@@ -225,8 +226,8 @@ func resolveVMForProject(ctx context.Context, cmd *cobra.Command, project string
 			names[i] = m.Name
 		}
 		return false, nil, fmt.Errorf(
-			"project %q found on multiple VMs: %s — use --vm to choose",
-			project, strings.Join(names, ", "))
+			"project %q found on multiple VMs: %s — use %s to choose",
+			project, strings.Join(names, ", "), hint.Cmd("--vm"))
 	}
 }
 
@@ -251,7 +252,7 @@ func codeDiscoverProjects(cmd *cobra.Command, ctx context.Context, deps *codeDep
 
 	switch len(projects) {
 	case 0:
-		fmt.Fprintln(w, "No projects yet — run mint project add <git-url>")
+		fmt.Fprintf(w, "No projects yet — run %s\n", hint.Cmd("mint project add <git-url>"))
 		return nil
 
 	case 1:
@@ -264,7 +265,7 @@ func codeDiscoverProjects(cmd *cobra.Command, ctx context.Context, deps *codeDep
 		fmt.Fprintln(w, "Multiple projects found — specify which to open:")
 		fmt.Fprintln(w)
 		for _, p := range projects {
-			fmt.Fprintf(w, "  mint code %s\n", p)
+			fmt.Fprintf(w, "  %s\n", hint.Cmd(fmt.Sprintf("mint code %s", p)))
 		}
 		return nil
 	}

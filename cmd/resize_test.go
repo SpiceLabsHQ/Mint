@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/SpiceLabsHQ/Mint/internal/cli"
+	"github.com/SpiceLabsHQ/Mint/internal/hint"
 	"github.com/spf13/cobra"
 )
 
@@ -156,6 +157,8 @@ func newHappyResizeDeps(owner string) *resizeDeps {
 // ---------------------------------------------------------------------------
 
 func TestResizeCommand(t *testing.T) {
+	hint.IsTTY = false // Ensure non-TTY mode for consistent test assertions.
+
 	tests := []struct {
 		name           string
 		deps           *resizeDeps
@@ -216,7 +219,7 @@ func TestResizeCommand(t *testing.T) {
 			}(),
 			args:           []string{"resize", "m6i.xlarge"},
 			wantErr:        true,
-			wantErrContain: "no VM",
+			wantErrContain: "`mint up`",
 		},
 		{
 			name: "rejects resize when VM in pending state",

@@ -13,6 +13,7 @@ import (
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/ec2instanceconnect"
 	"github.com/SpiceLabsHQ/Mint/internal/cli"
+	"github.com/SpiceLabsHQ/Mint/internal/hint"
 	"github.com/SpiceLabsHQ/Mint/internal/sshconfig"
 	"github.com/spf13/cobra"
 )
@@ -158,6 +159,8 @@ func newTestRootForSSH() *cobra.Command {
 // TestSSHBootstrapPreCheck verifies that runSSH checks the bootstrap tag
 // before attempting ssh-keyscan or any SSH operation.
 func TestSSHBootstrapPreCheck(t *testing.T) {
+	hint.IsTTY = false
+
 	tests := []struct {
 		name            string
 		bootstrapStatus string
@@ -173,17 +176,17 @@ func TestSSHBootstrapPreCheck(t *testing.T) {
 			wantSendKey:     false,
 		},
 		{
-			name:            "pending bootstrap error mentions mint doctor",
+			name:            "pending bootstrap error mentions mint doctor with hint formatting",
 			bootstrapStatus: "pending",
 			wantErr:         true,
-			wantErrContain:  "mint doctor",
+			wantErrContain:  "`mint doctor`",
 			wantSendKey:     false,
 		},
 		{
-			name:            "pending bootstrap error mentions mint recreate",
+			name:            "pending bootstrap error mentions mint recreate with hint formatting",
 			bootstrapStatus: "pending",
 			wantErr:         true,
-			wantErrContain:  "mint recreate",
+			wantErrContain:  "`mint recreate`",
 			wantSendKey:     false,
 		},
 		{
@@ -194,10 +197,10 @@ func TestSSHBootstrapPreCheck(t *testing.T) {
 			wantSendKey:     false,
 		},
 		{
-			name:            "failed bootstrap error mentions mint recreate",
+			name:            "failed bootstrap error mentions mint recreate with hint formatting",
 			bootstrapStatus: "failed",
 			wantErr:         true,
-			wantErrContain:  "mint recreate",
+			wantErrContain:  "`mint recreate`",
 			wantSendKey:     false,
 		},
 		{
@@ -678,6 +681,8 @@ func TestSSHCommandTOFUKeyMatch(t *testing.T) {
 }
 
 func TestSSHCommandTOFUKeyMismatch(t *testing.T) {
+	hint.IsTTY = false
+
 	describe := &mockDescribeForSSH{
 		output: makeRunningInstanceWithAZ("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
 	}
@@ -699,7 +704,7 @@ func TestSSHCommandTOFUKeyMismatch(t *testing.T) {
 		t.Fatal("expected error for key mismatch, got nil")
 	}
 
-	// Error should contain both fingerprints and instructions.
+	// Error should contain both fingerprints and hint-formatted instructions.
 	errMsg := err.Error()
 	if !strings.Contains(errMsg, "HOST KEY CHANGED") {
 		t.Errorf("error missing HOST KEY CHANGED, got: %s", errMsg)
@@ -710,8 +715,11 @@ func TestSSHCommandTOFUKeyMismatch(t *testing.T) {
 	if !strings.Contains(errMsg, "SHA256:newfp") {
 		t.Errorf("error missing new fingerprint, got: %s", errMsg)
 	}
-	if !strings.Contains(errMsg, "mint destroy && mint up") {
-		t.Errorf("error missing recovery instructions, got: %s", errMsg)
+	if !strings.Contains(errMsg, "Rebuild:") {
+		t.Errorf("error missing Rebuild label, got: %s", errMsg)
+	}
+	if !strings.Contains(errMsg, "`mint destroy && mint up`") {
+		t.Errorf("error missing hint-formatted recovery instructions, got: %s", errMsg)
 	}
 
 	// SSH should NOT have been executed.

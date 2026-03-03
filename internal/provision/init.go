@@ -21,6 +21,7 @@ import (
 	smithy "github.com/aws/smithy-go"
 
 	mintaws "github.com/SpiceLabsHQ/Mint/internal/aws"
+	"github.com/SpiceLabsHQ/Mint/internal/hint"
 	"github.com/SpiceLabsHQ/Mint/internal/tags"
 )
 
@@ -139,8 +140,8 @@ func (i *Initializer) validateVPC(ctx context.Context) (string, error) {
 	}
 
 	if len(out.Vpcs) == 0 {
-		return "", fmt.Errorf("no default VPC found in this region; mint requires a default VPC (ADR-0010). " +
-			"Create one with: aws ec2 create-default-vpc")
+		return "", fmt.Errorf("no default VPC found in this region — mint requires a default VPC (ADR-0010).\n%s",
+			hint.Suggest("Create one with", "aws ec2 create-default-vpc"))
 	}
 
 	vpcID := aws.ToString(out.Vpcs[0].VpcId)
@@ -189,7 +190,7 @@ func (i *Initializer) validateInstanceProfile(ctx context.Context) error {
 		}
 		var ae smithy.APIError
 		if errors.As(err, &ae) && ae.ErrorCode() == "AccessDenied" {
-			log.Printf("Warning: cannot verify instance profile %q (iam:GetInstanceProfile permission denied) — assuming profile exists. Ask your admin to run 'mint admin setup' if provisioning fails.", defaultInstanceProfileName)
+			log.Printf("Warning: cannot verify instance profile %q (iam:GetInstanceProfile permission denied) — assuming profile exists. Ask your admin to run %s if provisioning fails.", defaultInstanceProfileName, hint.Cmd("mint admin setup"))
 			return nil
 		}
 		return fmt.Errorf("get instance profile %q: %w", defaultInstanceProfileName, err)

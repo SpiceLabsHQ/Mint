@@ -11,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/SpiceLabsHQ/Mint/internal/cli"
+	"github.com/SpiceLabsHQ/Mint/internal/hint"
 	"github.com/spf13/cobra"
 )
 
@@ -100,6 +101,8 @@ func newTestRoot() *cobra.Command {
 }
 
 func TestDownCommand(t *testing.T) {
+	hint.IsTTY = false // Ensure non-TTY mode for consistent test assertions.
+
 	tests := []struct {
 		name           string
 		describe       *mockDescribeInstances
@@ -134,7 +137,7 @@ func TestDownCommand(t *testing.T) {
 			owner:          "alice",
 			vmName:         "default",
 			wantErr:        true,
-			wantErrContain: "mint up",
+			wantErrContain: "`mint up`",
 			wantStopCalled: false,
 		},
 		{

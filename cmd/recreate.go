@@ -20,6 +20,7 @@ import (
 	mintaws "github.com/SpiceLabsHQ/Mint/internal/aws"
 	"github.com/SpiceLabsHQ/Mint/internal/bootstrap"
 	"github.com/SpiceLabsHQ/Mint/internal/cli"
+	"github.com/SpiceLabsHQ/Mint/internal/hint"
 	"github.com/SpiceLabsHQ/Mint/internal/config"
 	"github.com/SpiceLabsHQ/Mint/internal/progress"
 	"github.com/SpiceLabsHQ/Mint/internal/provision"
@@ -194,7 +195,7 @@ func runRecreate(cmd *cobra.Command, deps *recreateDeps) error {
 		return fmt.Errorf("discovering VM: %w", err)
 	}
 	if found == nil {
-		return fmt.Errorf("no VM %q found — run mint up first to create one", vmName)
+		return fmt.Errorf("no VM %q found — run %s first to create one", vmName, hint.Cmd("mint up"))
 	}
 
 	// Verify VM is running (session detection requires SSH access).
@@ -216,7 +217,7 @@ func runRecreate(cmd *cobra.Command, deps *recreateDeps) error {
 	}
 
 	if activeSessions != "" && !force {
-		return fmt.Errorf("active sessions detected on VM %q:\n\n%s\n\nUse --force to proceed anyway", vmName, activeSessions)
+		return fmt.Errorf("active sessions detected on VM %q:\n\n%s\n\nUse %s to proceed anyway", vmName, activeSessions, hint.Cmd("--force"))
 	}
 
 	if activeSessions != "" && force {

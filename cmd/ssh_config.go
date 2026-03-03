@@ -5,9 +5,10 @@ import (
 	"os"
 	"path/filepath"
 
+	mintaws "github.com/SpiceLabsHQ/Mint/internal/aws"
 	"github.com/SpiceLabsHQ/Mint/internal/cli"
 	"github.com/SpiceLabsHQ/Mint/internal/config"
-	mintaws "github.com/SpiceLabsHQ/Mint/internal/aws"
+	"github.com/SpiceLabsHQ/Mint/internal/hint"
 	"github.com/SpiceLabsHQ/Mint/internal/sshconfig"
 	"github.com/SpiceLabsHQ/Mint/internal/vm"
 	"github.com/spf13/cobra"
@@ -101,7 +102,11 @@ func runSSHConfig(cmd *cobra.Command, deps *sshConfigDeps) error {
 	if explicitMode {
 		// Validate all three are provided when any is given.
 		if hostname == "" {
-			return fmt.Errorf("--hostname is required when --instance-id or --az are provided\n\nTip: mint ssh-config is called automatically by mint up.\nTo add manually: mint ssh-config --hostname <ip> --instance-id <id> --az <az>")
+			return fmt.Errorf("--hostname is required when --instance-id or --az are provided\n\n"+
+				"Tip: %s is called automatically by %s.\n"+
+				"To add manually:\n%s",
+				hint.Cmd("mint ssh-config"), hint.Cmd("mint up"),
+				hint.Block("mint ssh-config --hostname <ip> --instance-id <id> --az <az>"))
 		}
 		if instanceID == "" {
 			return fmt.Errorf("--instance-id is required (EC2 instance ID for ProxyCommand)")
@@ -139,8 +144,9 @@ func runSSHConfig(cmd *cobra.Command, deps *sshConfigDeps) error {
 		}
 		if found == nil {
 			return fmt.Errorf(
-				"No running VM found. Provide --hostname, --instance-id, and --az, "+
-					"or run 'mint up' first.",
+				"no running VM found — provide --hostname, --instance-id, and --az, "+
+					"or run %s first",
+				hint.Cmd("mint up"),
 			)
 		}
 		hostname = found.PublicIP
@@ -159,8 +165,9 @@ func runSSHConfig(cmd *cobra.Command, deps *sshConfigDeps) error {
 		if !yes {
 			return fmt.Errorf(
 				"mint needs permission to write to %s (ADR-0015) — "+
-					"run with --yes to approve, or set ssh_config_approved=true in mint config",
+					"run with --yes to approve, or set ssh_config_approved=true in config\n%s",
 				sshConfigPath,
+				hint.Suggest("Approve", "mint ssh-config --yes"),
 			)
 		}
 
