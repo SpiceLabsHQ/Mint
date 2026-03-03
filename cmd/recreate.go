@@ -20,6 +20,7 @@ import (
 	mintaws "github.com/SpiceLabsHQ/Mint/internal/aws"
 	"github.com/SpiceLabsHQ/Mint/internal/bootstrap"
 	"github.com/SpiceLabsHQ/Mint/internal/cli"
+	"github.com/SpiceLabsHQ/Mint/internal/hint"
 	"github.com/SpiceLabsHQ/Mint/internal/config"
 	"github.com/SpiceLabsHQ/Mint/internal/progress"
 	"github.com/SpiceLabsHQ/Mint/internal/provision"
@@ -160,6 +161,11 @@ func newRecreateCommandWithDeps(deps *recreateDeps) *cobra.Command {
 // runRecreate executes the recreate command logic: discover VM, check for
 // active sessions, confirm with user, then signal readiness for the lifecycle
 // sequence (implemented in a separate unit).
+//
+// The spinner is intentionally NOT started until after the user confirms the
+// operation. This follows the same pattern as destroy.go: interactive prompts
+// must not compete with spinner output for the terminal line. Discovery and
+// session detection messages are printed as plain verbose text.
 func runRecreate(cmd *cobra.Command, deps *recreateDeps) error {
 	ctx := cmd.Context()
 	if ctx == nil {
@@ -168,26 +174,28 @@ func runRecreate(cmd *cobra.Command, deps *recreateDeps) error {
 
 	cliCtx := cli.FromCommand(cmd)
 	vmName := "default"
+	verbose := false
 	yes := false
 	if cliCtx != nil {
 		vmName = cliCtx.VM
+		verbose = cliCtx.Verbose
 		yes = cliCtx.Yes
 	}
 
 	force, _ := cmd.Flags().GetBool("force")
 	w := cmd.OutOrStdout()
-	sp := progress.NewCommandSpinner(w, false)
 
-	// Discover VM.
-	sp.Start(fmt.Sprintf("Discovering VM %q for owner %q...", vmName, deps.owner))
+	// Discover VM — plain text, no spinner (follows destroy.go pattern).
+	if verbose {
+		fmt.Fprintf(w, "Discovering VM %q for owner %q...\n", vmName, deps.owner)
+	}
 
 	found, err := vm.FindVM(ctx, deps.describe, deps.owner, vmName)
 	if err != nil {
-		sp.Fail(err.Error())
 		return fmt.Errorf("discovering VM: %w", err)
 	}
 	if found == nil {
-		return fmt.Errorf("no VM %q found — run mint up first to create one", vmName)
+		return fmt.Errorf("no VM %q found — run %s first to create one", vmName, hint.Cmd("mint up"))
 	}
 
 	// Verify VM is running (session detection requires SSH access).
@@ -196,18 +204,20 @@ func runRecreate(cmd *cobra.Command, deps *recreateDeps) error {
 		return fmt.Errorf("VM %q is %s — must be running to recreate (need SSH access for session detection)", vmName, found.State)
 	}
 
-	// Active session detection: check for tmux clients and SSH/mosh sessions.
-	sp.Update(fmt.Sprintf("Checking for active sessions on VM %q...", vmName))
+	// Active session detection — plain text, no spinner.
+	if verbose {
+		fmt.Fprintf(w, "Checking for active sessions on VM %q...\n", vmName)
+	}
 
 	activeSessions, err := detectActiveSessions(ctx, deps, found)
 	if err != nil {
 		// Non-fatal: if we can't detect sessions, warn but continue with
 		// confirmation. This avoids blocking recreate when SSH is flaky.
-		sp.Update(fmt.Sprintf("Warning: could not detect active sessions: %v", err))
+		fmt.Fprintf(w, "Warning: could not detect active sessions: %v\n", err)
 	}
 
 	if activeSessions != "" && !force {
-		return fmt.Errorf("active sessions detected on VM %q:\n\n%s\n\nUse --force to proceed anyway", vmName, activeSessions)
+		return fmt.Errorf("active sessions detected on VM %q:\n\n%s\n\nUse %s to proceed anyway", vmName, activeSessions, hint.Cmd("--force"))
 	}
 
 	if activeSessions != "" && force {
@@ -233,6 +243,10 @@ func runRecreate(cmd *cobra.Command, deps *recreateDeps) error {
 			return fmt.Errorf("no confirmation input received — recreate aborted")
 		}
 	}
+
+	// Spinner starts AFTER confirmation is obtained (follows destroy.go pattern).
+	sp := progress.NewCommandSpinner(w, false)
+	sp.Start("Starting recreate lifecycle...")
 
 	// Guards passed — execute the 9-step recreate lifecycle.
 	return executeRecreateLifecycle(ctx, deps, found, vmName, sp, w)

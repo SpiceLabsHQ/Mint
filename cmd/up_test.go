@@ -15,8 +15,9 @@ import (
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/efs"
 	efstypes "github.com/aws/aws-sdk-go-v2/service/efs/types"
-	"github.com/SpiceLabsHQ/Mint/internal/cli"
 	mintaws "github.com/SpiceLabsHQ/Mint/internal/aws"
+	"github.com/SpiceLabsHQ/Mint/internal/cli"
+	"github.com/SpiceLabsHQ/Mint/internal/hint"
 	"github.com/SpiceLabsHQ/Mint/internal/provision"
 	"github.com/spf13/cobra"
 )
@@ -818,6 +819,8 @@ func TestDiscoverEFS_Found(t *testing.T) {
 }
 
 func TestDiscoverEFS_NotFound(t *testing.T) {
+	hint.IsTTY = false // Ensure non-TTY mode for consistent test assertions.
+
 	stub := &stubUpDescribeFileSystems{
 		output: &efs.DescribeFileSystemsOutput{
 			FileSystems: []efstypes.FileSystemDescription{},
@@ -830,6 +833,10 @@ func TestDiscoverEFS_NotFound(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "no admin EFS") {
 		t.Errorf("error = %q, want substring %q", err.Error(), "no admin EFS")
+	}
+	// Verify the hint-formatted command reference (backtick-wrapped in non-TTY).
+	if !strings.Contains(err.Error(), "`mint init`") {
+		t.Errorf("error = %q, want hint-formatted %q", err.Error(), "`mint init`")
 	}
 }
 
@@ -1354,6 +1361,8 @@ func TestPrintUpHumanAlreadyRunningBootstrapComplete(t *testing.T) {
 }
 
 func TestPrintUpHumanAlreadyRunningBootstrapPending(t *testing.T) {
+	hint.IsTTY = false // Ensure non-TTY mode for consistent test assertions.
+
 	buf := new(bytes.Buffer)
 	cmd := &cobra.Command{}
 	cmd.SetOut(buf)
@@ -1378,6 +1387,10 @@ func TestPrintUpHumanAlreadyRunningBootstrapPending(t *testing.T) {
 	// Should indicate bootstrap is still in progress.
 	if !strings.Contains(output, "progress") && !strings.Contains(output, "pending") && !strings.Contains(output, "in progress") {
 		t.Errorf("output should indicate bootstrap is pending/in-progress, got:\n%s", output)
+	}
+	// Verify the hint-formatted command reference (backtick-wrapped in non-TTY).
+	if !strings.Contains(output, "`mint status`") {
+		t.Errorf("output should contain hint-formatted mint status command, got:\n%s", output)
 	}
 }
 

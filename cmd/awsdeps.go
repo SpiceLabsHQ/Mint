@@ -22,6 +22,7 @@ import (
 
 	"github.com/SpiceLabsHQ/Mint/internal/cli"
 	"github.com/SpiceLabsHQ/Mint/internal/config"
+	"github.com/SpiceLabsHQ/Mint/internal/hint"
 	"github.com/SpiceLabsHQ/Mint/internal/identity"
 )
 
@@ -110,9 +111,9 @@ func isSSOReAuthError(err error) bool {
 // returns the generic credential setup message.
 func credentialErrMessage(err error, profile string) string {
 	if isSSOReAuthError(err) && profile != "" {
-		return fmt.Sprintf("SSO token expired — run: aws sso login --profile %s", profile)
+		return fmt.Sprintf("SSO token expired — run %s", hint.Cmd("aws sso login --profile "+profile))
 	}
-	return `AWS credentials unavailable — run "aws configure", set AWS_PROFILE, or use --profile`
+	return fmt.Sprintf("AWS credentials unavailable — run %s, set AWS_PROFILE, or use --profile", hint.Cmd("aws configure"))
 }
 
 // commandNeedsAWS returns true if the command requires AWS client
@@ -187,7 +188,7 @@ func initAWSClients(ctx context.Context) (*awsClients, error) {
 	cfg, err := awscfg.LoadDefaultConfig(ctx, opts...)
 	if err != nil {
 		if strings.Contains(err.Error(), "failed to get shared config profile") {
-			return nil, fmt.Errorf("profile %q not found — check ~/.aws/config or run \"aws configure\"", effectiveProfile)
+			return nil, fmt.Errorf("profile %q not found — check ~/.aws/config or run %s", effectiveProfile, hint.Cmd("aws configure"))
 		}
 		return nil, fmt.Errorf("load AWS config: %w", err)
 	}

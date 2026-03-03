@@ -17,6 +17,7 @@ import (
 	mintaws "github.com/SpiceLabsHQ/Mint/internal/aws"
 	"github.com/SpiceLabsHQ/Mint/internal/cli"
 	"github.com/SpiceLabsHQ/Mint/internal/config"
+	"github.com/SpiceLabsHQ/Mint/internal/hint"
 	"github.com/SpiceLabsHQ/Mint/internal/progress"
 	"github.com/SpiceLabsHQ/Mint/internal/sshconfig"
 	"github.com/SpiceLabsHQ/Mint/internal/vm"
@@ -93,14 +94,14 @@ func runSSH(cmd *cobra.Command, deps *sshDeps, extraArgs []string) error {
 	}
 	if found == nil {
 		sp.Stop("")
-		return fmt.Errorf("no VM %q found — run mint up first to create one", vmName)
+		return fmt.Errorf("no VM %q found — run %s first to create one", vmName, hint.Cmd("mint up"))
 	}
 
 	// Verify VM is running.
 	if found.State != string(ec2types.InstanceStateNameRunning) {
 		sp.Stop("")
-		return fmt.Errorf("VM %q (%s) is not running (state: %s) — run mint up to start it",
-			vmName, found.ID, found.State)
+		return fmt.Errorf("VM %q (%s) is not running (state: %s) — run %s to start it",
+			vmName, found.ID, found.State, hint.Cmd("mint up"))
 	}
 
 	// Check bootstrap status before attempting any SSH operation (ADR-0001).
@@ -111,21 +112,21 @@ func runSSH(cmd *cobra.Command, deps *sshDeps, extraArgs []string) error {
 		sp.Stop("")
 		return fmt.Errorf(
 			"VM %q bootstrap is not complete (status: pending).\n"+
-				"Run 'mint doctor' for details or 'mint recreate' to rebuild.",
-			vmName,
+				"Run %s for details or %s to rebuild.",
+			vmName, hint.Cmd("mint doctor"), hint.Cmd("mint recreate"),
 		)
 	case "failed":
 		sp.Stop("")
 		return fmt.Errorf(
-			"VM %q bootstrap failed.\nRun 'mint recreate' to rebuild.",
-			vmName,
+			"VM %q bootstrap failed.\nRun %s to rebuild.",
+			vmName, hint.Cmd("mint recreate"),
 		)
 	}
 
 	// Use availability zone from FindVM (already populated via DescribeInstances).
 	if found.AvailabilityZone == "" {
 		sp.Stop("")
-		return fmt.Errorf("VM %q (%s) has no availability zone — this is unexpected, try mint destroy && mint up", vmName, found.ID)
+		return fmt.Errorf("VM %q (%s) has no availability zone — this is unexpected, try %s", vmName, found.ID, hint.Cmd("mint destroy && mint up"))
 	}
 
 	// Spinner must be fully stopped before exec — exec replaces the process and
@@ -174,8 +175,9 @@ func runSSH(cmd *cobra.Command, deps *sshDeps, extraArgs []string) error {
 					"  Stored fingerprint: %s\n"+
 					"  Current fingerprint: %s\n\n"+
 					"This could indicate a man-in-the-middle attack, or the VM was rebuilt.\n"+
-					"If this is expected (VM was rebuilt), run: mint destroy && mint up",
+					"%s",
 				vmName, existing, fingerprint,
+				hint.Suggest("Rebuild", "mint destroy && mint up"),
 			)
 		}
 

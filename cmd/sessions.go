@@ -14,6 +14,7 @@ import (
 
 	mintaws "github.com/SpiceLabsHQ/Mint/internal/aws"
 	"github.com/SpiceLabsHQ/Mint/internal/cli"
+	"github.com/SpiceLabsHQ/Mint/internal/hint"
 	"github.com/SpiceLabsHQ/Mint/internal/progress"
 	"github.com/SpiceLabsHQ/Mint/internal/vm"
 )
@@ -94,14 +95,14 @@ func runSessions(cmd *cobra.Command, deps *sessionsDeps) error {
 	}
 	if found == nil {
 		sp.Stop("")
-		return fmt.Errorf("no VM %q found — run mint up first to create one", vmName)
+		return fmt.Errorf("no VM %q found — run %s first to create one", vmName, hint.Cmd("mint up"))
 	}
 
 	// Verify VM is running.
 	if found.State != string(ec2types.InstanceStateNameRunning) {
 		sp.Stop("")
-		return fmt.Errorf("VM %q (%s) is not running (state: %s) — run mint up to start it",
-			vmName, found.ID, found.State)
+		return fmt.Errorf("VM %q (%s) is not running (state: %s) — run %s to start it",
+			vmName, found.ID, found.State, hint.Cmd("mint up"))
 	}
 
 	// Execute tmux list-sessions remotely.
@@ -128,9 +129,10 @@ func runSessions(cmd *cobra.Command, deps *sessionsDeps) error {
 		sp.Fail(err.Error())
 		if isSSHConnectionError(err) {
 			return fmt.Errorf(
-				"cannot connect to VM %q (port 41122 refused).\n"+
-					"Bootstrap may be incomplete — run 'mint doctor' for details.",
+				"cannot connect to VM %q (port 41122 refused) — "+
+					"bootstrap may be incomplete\n%s",
 				vmName,
+				hint.Suggest("Diagnose", "mint doctor"),
 			)
 		}
 		return fmt.Errorf("listing tmux sessions: %w", err)

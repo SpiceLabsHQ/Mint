@@ -43,6 +43,7 @@ These are non-negotiable constraints from the ADRs. Do not deviate without updat
 - **Auto-stop idle detection** (ADR-0018): systemd timer checks SSH/mosh sessions, tmux clients, `claude` processes in containers, manual extend. `mint list` auto-warns on VMs exceeding idle timeout.
 - **SSH host key TOFU** (ADR-0019): Trust-on-first-use with loud change detection. Keys stored in `~/.config/mint/known_hosts`.
 - **Binary signing deferred** (ADR-0020): v1 uses checksum verification only. Signing (minisign → cosign) planned for v2.
+- **Autonomous CD pipeline** (ADR-0026): Every merge to `main` auto-releases. go-semantic-release (in `ci.yml`) creates semantic version tags from conventional commits → tag push triggers `release.yml` → goreleaser builds binaries and replaces release notes. Conventional commits (`feat:`, `fix:`) control bump magnitude; `force-bump-patch-version` ensures every merge ships at minimum a patch release.
 
 ## CLI UX Conventions (ADR-0012)
 
@@ -108,7 +109,7 @@ go mod tidy                       # always run after adding new dependencies
 |----------|---------|
 | `docs/SPEC.md` | Complete specification — the authoritative source |
 | `docs/ROADMAP.md` | Phased implementation plan (Phase 0–4) |
-| `docs/adr/0001-*.md` through `docs/adr/0024-*.md` | Architecture Decision Records — binding constraints |
+| `docs/adr/0001-*.md` through `docs/adr/0026-*.md` | Architecture Decision Records — binding constraints |
 | `docs/command-reference.md` | Complete command documentation with ADR cross-references |
 | `.devcontainer/` | Developer isolated environment (Go 1.24, AWS CLI, isolated `MINT_CONFIG_DIR`) |
 

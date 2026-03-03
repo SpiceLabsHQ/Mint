@@ -14,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2instanceconnect"
 	mintaws "github.com/SpiceLabsHQ/Mint/internal/aws"
 	"github.com/SpiceLabsHQ/Mint/internal/cli"
+	"github.com/SpiceLabsHQ/Mint/internal/hint"
 	"github.com/SpiceLabsHQ/Mint/internal/provision"
 	"github.com/spf13/cobra"
 )
@@ -485,6 +486,8 @@ func newHappyRecreateDepsWithMocks(owner string, lm lifecycleMocks) *recreateDep
 // ---------------------------------------------------------------------------
 
 func TestRecreateCommand(t *testing.T) {
+	hint.IsTTY = false // Ensure non-TTY mode for consistent test assertions.
+
 	tests := []struct {
 		name           string
 		deps           *recreateDeps
@@ -2331,3 +2334,186 @@ func TestRecreateUserBootstrapScriptPresent(t *testing.T) {
 	}
 }
 var _ provision.AMIResolver = func(ctx context.Context, client mintaws.DescribeImagesAPI) (string, error) { return "", nil }
+
+// ---------------------------------------------------------------------------
+// Tests — Spinner not active during confirmation prompt (#200)
+// ---------------------------------------------------------------------------
+
+// TestRecreateSpinnerNotActiveBeforeConfirmation verifies that in verbose mode,
+// the "Discovering VM" and "Checking for active sessions" messages appear as
+// plain text (no [HH:MM:SS] spinner timestamp prefix), and that lifecycle step
+// messages (Step N/9) only appear AFTER the confirmation prompt text.
+//
+// This is the regression test for issue #200 where the spinner goroutine
+// continuously overwrites the terminal line, making the confirmation prompt
+// invisible.
+func TestRecreateSpinnerNotActiveBeforeConfirmation(t *testing.T) {
+	deps := newHappyRecreateDeps("alice")
+
+	buf := new(bytes.Buffer)
+	cmd := newRecreateCommandWithDeps(deps)
+	root := newRecreateTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetIn(strings.NewReader("default\n"))
+	root.SetArgs([]string{"recreate", "--verbose"})
+
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := buf.String()
+	lines := strings.Split(output, "\n")
+
+	// Find the confirmation prompt line.
+	confirmIdx := -1
+	for i, line := range lines {
+		if strings.Contains(line, "Type the VM name") {
+			confirmIdx = i
+			break
+		}
+	}
+	if confirmIdx == -1 {
+		t.Fatalf("confirmation prompt not found in output:\n%s", output)
+	}
+
+	// Verify no lifecycle step messages appear before the confirmation prompt.
+	for i := 0; i < confirmIdx; i++ {
+		if strings.Contains(lines[i], "Step ") && strings.Contains(lines[i], "/9") {
+			t.Errorf("lifecycle step message found before confirmation prompt at line %d: %q", i, lines[i])
+		}
+	}
+
+	// Verify that lines before confirmation that contain "Discovering VM" or
+	// "Checking for active sessions" do NOT have spinner timestamp prefixes
+	// (the [HH:MM:SS] format from non-interactive spinner mode).
+	timestampPattern := "[" // spinner writeLine uses [HH:MM:SS] prefix
+	for i := 0; i < confirmIdx; i++ {
+		trimmed := strings.TrimSpace(lines[i])
+		if trimmed == "" {
+			continue
+		}
+		if strings.Contains(trimmed, "Discovering VM") || strings.Contains(trimmed, "Checking for active sessions") {
+			if len(trimmed) > 0 && trimmed[0] == timestampPattern[0] {
+				t.Errorf("pre-confirmation message at line %d has spinner timestamp prefix: %q", i, lines[i])
+			}
+		}
+	}
+
+	// Verify "Recreate complete" still appears at the end.
+	if !strings.Contains(output, "Recreate complete") {
+		t.Errorf("output missing 'Recreate complete', got:\n%s", output)
+	}
+}
+
+// TestRecreateSessionWarningAppearsAsPlainText verifies that when session
+// detection fails (non-fatal), the warning message is printed as plain text
+// (once, not as a repeating spinner update). In the fixed code, the warning
+// should appear as a plain fmt.Fprintf line.
+func TestRecreateSessionWarningAppearsAsPlainText(t *testing.T) {
+	runner := &mockRecreateRemoteRunner{
+		tmuxOutput:   nil,
+		tmuxErr:      fmt.Errorf("connection refused"),
+		whoOutput:    nil,
+		whoErr:       fmt.Errorf("connection refused"),
+		dockerPsOut:  nil,
+		dockerPsErr:  fmt.Errorf("connection refused"),
+		catExtendOut: nil,
+		catExtendErr: fmt.Errorf("connection refused"),
+	}
+	deps := newHappyRecreateDeps("alice")
+	deps.remoteRun = runner.run
+
+	buf := new(bytes.Buffer)
+	cmd := newRecreateCommandWithDeps(deps)
+	root := newRecreateTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"recreate", "--yes", "--verbose"})
+
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := buf.String()
+
+	// The session detection warning must appear exactly once.
+	const warnMsg = "Warning: could not detect active sessions"
+	count := strings.Count(output, warnMsg)
+	if count != 1 {
+		t.Errorf("%q appears %d time(s), want exactly 1\nfull output:\n%s", warnMsg, count, output)
+	}
+
+	// The warning line must NOT have a spinner timestamp prefix [HH:MM:SS].
+	for _, line := range strings.Split(output, "\n") {
+		if strings.Contains(line, warnMsg) {
+			trimmed := strings.TrimSpace(line)
+			if len(trimmed) > 0 && trimmed[0] == '[' {
+				t.Errorf("session warning has spinner timestamp prefix (should be plain text): %q", line)
+			}
+			break
+		}
+	}
+}
+
+// TestRecreateSpinnerOnlyDuringLifecycle verifies that spinner-formatted
+// output (timestamped lines in non-interactive mode) only appears for the
+// lifecycle steps (after confirmation), not for the pre-confirmation phase.
+// All lines from "Discovering VM" through the confirmation info text must be
+// plain (no [HH:MM:SS] timestamp prefix).
+func TestRecreateSpinnerOnlyDuringLifecycle(t *testing.T) {
+	deps := newHappyRecreateDeps("alice")
+
+	buf := new(bytes.Buffer)
+	cmd := newRecreateCommandWithDeps(deps)
+	root := newRecreateTestRoot(cmd)
+	root.SetOut(buf)
+	root.SetErr(buf)
+	root.SetArgs([]string{"recreate", "--yes", "--verbose"})
+
+	err := root.Execute()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	output := buf.String()
+	lines := strings.Split(output, "\n")
+
+	// Find the last pre-confirmation line: "Project EBS volumes will be preserved"
+	// Everything from line 0 up to and including this line must be plain text.
+	lastPreConfIdx := -1
+	for i, line := range lines {
+		if strings.Contains(line, "EBS volumes will be preserved") {
+			lastPreConfIdx = i
+		}
+	}
+	if lastPreConfIdx == -1 {
+		t.Fatalf("pre-confirmation info text not found in output:\n%s", output)
+	}
+
+	// All lines from start through lastPreConfIdx must NOT have spinner timestamps.
+	for i := 0; i <= lastPreConfIdx; i++ {
+		trimmed := strings.TrimSpace(lines[i])
+		if trimmed == "" {
+			continue
+		}
+		// Spinner non-interactive format: "[HH:MM:SS] message"
+		if len(trimmed) > 10 && trimmed[0] == '[' && trimmed[9] == ']' {
+			t.Errorf("pre-confirmation line %d has spinner timestamp prefix (should be plain text): %q", i, lines[i])
+		}
+	}
+
+	// Verify that lifecycle steps still appear somewhere after the pre-confirmation text.
+	foundStep := false
+	for i := lastPreConfIdx + 1; i < len(lines); i++ {
+		if strings.Contains(lines[i], "Step 1/9") {
+			foundStep = true
+			break
+		}
+	}
+	if !foundStep {
+		t.Errorf("Step 1/9 not found after pre-confirmation text in output:\n%s", output)
+	}
+}

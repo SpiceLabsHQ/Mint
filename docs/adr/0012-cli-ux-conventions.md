@@ -56,7 +56,7 @@ Adopt the following conventions across the Mint CLI:
 
 - `mint extend [--vm <name>] [duration]` — Extends the idle timer for the current VM. Duration defaults to the configured idle timeout. Writes to `/var/lib/mint/idle-extended-until` on the VM.
 
-- `mint code [--vm <name>]` — Opens VS Code Remote-SSH to the specified VM. Launches `code --remote ssh-remote+mint-<vm>`.
+- `mint code [project] [--vm <name>]` — Opens VS Code Remote-SSH to the specified VM. If a project name is given, opens `/mint/projects/<name>`. With no arguments, discovers projects on the VM: auto-opens if exactly one exists, or lists them with `mint code <name>` examples. When `--vm` is omitted and multiple VMs exist, auto-resolves which VM hosts the project. Launches `code --remote ssh-remote+mint-<vm>`.
 
 - `mint project list [--vm <name>]` — Lists projects on a VM. A "project" is a directory on the Project EBS volume, typically containing a devcontainer configuration. Supports `--json` for machine-readable output.
 

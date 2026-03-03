@@ -17,6 +17,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	mintaws "github.com/SpiceLabsHQ/Mint/internal/aws"
+	"github.com/SpiceLabsHQ/Mint/internal/hint"
 	"github.com/SpiceLabsHQ/Mint/internal/sshconfig"
 )
 
@@ -266,10 +267,11 @@ func (t *TOFURemoteRunner) verifyHostKey(host string, port int) error {
 				"  Stored fingerprint: %s\n"+
 				"  Current fingerprint: %s\n\n"+
 				"This could indicate a man-in-the-middle attack, or the VM was rebuilt.\n"+
-				"If the VM was rebuilt, run 'mint recreate' to rebuild with automatic key rotation.\n"+
-				"To accept the new key for a VM that is already running, delete the %q entry\n"+
-				"from ~/.config/mint/known_hosts",
-			t.vmName, existing, fingerprint, t.vmName,
+				"%s\n"+
+				"%s",
+			t.vmName, existing, fingerprint,
+			hint.Suggest("Rebuild", "mint recreate"),
+			hint.Suggest("Accept new key", fmt.Sprintf("delete the %q entry from ~/.config/mint/known_hosts", t.vmName)),
 		)
 	}
 

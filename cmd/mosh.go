@@ -15,6 +15,7 @@ import (
 	mintaws "github.com/SpiceLabsHQ/Mint/internal/aws"
 	"github.com/SpiceLabsHQ/Mint/internal/cli"
 	"github.com/SpiceLabsHQ/Mint/internal/config"
+	"github.com/SpiceLabsHQ/Mint/internal/hint"
 	"github.com/SpiceLabsHQ/Mint/internal/sshconfig"
 	"github.com/SpiceLabsHQ/Mint/internal/vm"
 )
@@ -84,7 +85,7 @@ func runMosh(cmd *cobra.Command, deps *moshDeps) error {
 		isTTY = func() bool { return term.IsTerminal(int(os.Stdin.Fd())) }
 	}
 	if !isTTY() {
-		return fmt.Errorf("mosh requires an interactive terminal; use 'mint ssh' for non-interactive connections")
+		return fmt.Errorf("mosh requires an interactive terminal — use %s for non-interactive connections", hint.Cmd("mint ssh"))
 	}
 
 	// Check that mosh is installed locally before doing any AWS work.
@@ -93,7 +94,8 @@ func runMosh(cmd *cobra.Command, deps *moshDeps) error {
 		lookup = exec.LookPath
 	}
 	if _, err := lookup("mosh"); err != nil {
-		return fmt.Errorf("mosh is not installed — install it with: brew install mosh (macOS) or apt install mosh (Linux)")
+		return fmt.Errorf("mosh is not installed — install it with %s (macOS) or %s (Linux)",
+			hint.Cmd("brew install mosh"), hint.Cmd("apt install mosh"))
 	}
 
 	ctx := cmd.Context()
@@ -113,13 +115,13 @@ func runMosh(cmd *cobra.Command, deps *moshDeps) error {
 		return fmt.Errorf("discovering VM: %w", err)
 	}
 	if found == nil {
-		return fmt.Errorf("no VM %q found — run mint up first to create one", vmName)
+		return fmt.Errorf("no VM %q found — run %s first to create one", vmName, hint.Cmd("mint up"))
 	}
 
 	// Verify VM is running.
 	if found.State != string(ec2types.InstanceStateNameRunning) {
-		return fmt.Errorf("VM %q (%s) is not running (state: %s) — run mint up to start it",
-			vmName, found.ID, found.State)
+		return fmt.Errorf("VM %q (%s) is not running (state: %s) — run %s to start it",
+			vmName, found.ID, found.State, hint.Cmd("mint up"))
 	}
 
 	// TOFU host key verification (ADR-0019).
@@ -146,8 +148,9 @@ func runMosh(cmd *cobra.Command, deps *moshDeps) error {
 					"  Stored fingerprint: %s\n"+
 					"  Current fingerprint: %s\n\n"+
 					"This could indicate a man-in-the-middle attack, or the VM was rebuilt.\n"+
-					"If this is expected (VM was rebuilt), run: mint destroy && mint up",
+					"%s",
 				vmName, existing, fingerprint,
+				hint.Suggest("Rebuild", "mint destroy && mint up"),
 			)
 		}
 
@@ -170,7 +173,7 @@ func runMosh(cmd *cobra.Command, deps *moshDeps) error {
 
 	// Use availability zone from FindVM (already populated via DescribeInstances).
 	if found.AvailabilityZone == "" {
-		return fmt.Errorf("VM %q (%s) has no availability zone — this is unexpected, try mint destroy && mint up", vmName, found.ID)
+		return fmt.Errorf("VM %q (%s) has no availability zone — this is unexpected, try %s", vmName, found.ID, hint.Cmd("mint destroy && mint up"))
 	}
 
 	// Generate ephemeral SSH key pair.

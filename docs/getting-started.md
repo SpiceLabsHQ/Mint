@@ -132,13 +132,31 @@ If the bootstrap times out, Mint prompts you to choose: stop the instance (halt 
 
 This is the everyday workflow for working at your desk.
 
+### Add a project
+
+Clone a repository and set up its devcontainer on the VM:
+
+```bash
+mint project add https://github.com/your-org/your-repo.git
+```
+
+This clones the repo to `/mint/projects/your-repo`, builds the devcontainer, and creates a named tmux session.
+
+List projects on the VM:
+
+```bash
+mint project list
+```
+
 ### Open VS Code
 
 ```bash
-mint code
+mint code your-repo
 ```
 
-This opens VS Code connected to your VM via Remote-SSH. Behind the scenes, Mint ensures your `~/.ssh/config` has the correct entry and runs `code --remote ssh-remote+mint-default /home/ubuntu`.
+This opens VS Code connected to your VM via Remote-SSH, directly at `/mint/projects/your-repo`. Behind the scenes, Mint ensures your `~/.ssh/config` has the correct entry and launches VS Code with the Remote-SSH extension.
+
+If you have only one project, you can omit the name -- `mint code` auto-opens it. If you have multiple projects, `mint code` with no arguments lists them with example commands.
 
 ### Open a devcontainer
 
@@ -148,22 +166,6 @@ Once VS Code is connected to the VM:
 2. VS Code detects the devcontainer configuration and shows a notification: "Reopen in Container"
 3. Click it, or use the Command Palette: **Dev Containers: Reopen in Container**
 4. Claude Code runs in the integrated terminal inside the container
-
-### Add a project
-
-Clone a repository and set up its devcontainer on the VM:
-
-```bash
-mint project add https://github.com/your-org/your-repo.git
-```
-
-This clones the repo to `/mint/projects/your-repo`, builds the devcontainer, and creates a named tmux session. You can then open it with `mint code --path /mint/projects/your-repo`.
-
-List projects on the VM:
-
-```bash
-mint project list
-```
 
 ## Connect from iPad (Secondary Workflow)
 
@@ -221,7 +223,7 @@ docker exec -it <container-name> /bin/bash
 |---------|-------------|
 | `mint up` | Start your VM (or create it if it does not exist) |
 | `mint down` | Stop the VM -- billing stops, all data persists |
-| `mint code` | Open VS Code connected to the VM |
+| `mint code [project]` | Open VS Code connected to the VM (auto-discovers projects) |
 | `mint ssh` | Open an SSH session to the VM |
 | `mint mosh` | Open a mosh session to the VM |
 | `mint connect [session]` | Mosh in and attach to a tmux session |

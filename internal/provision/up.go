@@ -18,6 +18,7 @@ import (
 
 	mintaws "github.com/SpiceLabsHQ/Mint/internal/aws"
 	"github.com/SpiceLabsHQ/Mint/internal/bootstrap"
+	"github.com/SpiceLabsHQ/Mint/internal/hint"
 	"github.com/SpiceLabsHQ/Mint/internal/logging"
 	"github.com/SpiceLabsHQ/Mint/internal/tags"
 	"github.com/SpiceLabsHQ/Mint/internal/vm"
@@ -316,8 +317,8 @@ func (p *Provisioner) Run(ctx context.Context, owner, ownerARN, vmName string, c
 		if pendingVolAZ != az {
 			return nil, fmt.Errorf(
 				"pending-attach volume %s is in %s but instance launched in %s — "+
-					"run 'mint destroy' and start fresh to resolve this AZ mismatch",
-				pendingVolID, pendingVolAZ, az,
+					"run %s and start fresh to resolve this AZ mismatch",
+				pendingVolID, pendingVolAZ, az, hint.Cmd("mint destroy"),
 			)
 		}
 		_, attachErr := p.attachVolume.AttachVolume(ctx, &ec2.AttachVolumeInput{
@@ -399,8 +400,8 @@ func (p *Provisioner) handleExistingVM(ctx context.Context, existing *vm.VM) (*P
 		}
 		if existing.BootstrapStatus == tags.BootstrapFailed {
 			result.BootstrapError = fmt.Errorf(
-				"VM %q has a previously failed bootstrap — run 'mint recreate' to recover",
-				existing.Name,
+				"VM %q has a previously failed bootstrap — run %s to recover",
+				existing.Name, hint.Cmd("mint recreate"),
 			)
 		}
 		return result, nil
@@ -418,8 +419,8 @@ func (p *Provisioner) handleExistingVM(ctx context.Context, existing *vm.VM) (*P
 
 	if existing.BootstrapStatus == tags.BootstrapFailed {
 		result.BootstrapError = fmt.Errorf(
-			"VM %q bootstrap failed. Run 'mint recreate' to rebuild.",
-			existing.Name,
+			"VM %q bootstrap failed — run %s to rebuild",
+			existing.Name, hint.Cmd("mint recreate"),
 		)
 	}
 
@@ -441,10 +442,10 @@ func (p *Provisioner) checkEIPQuota(ctx context.Context, owner string) error {
 	count := len(out.Addresses)
 	if count >= DefaultEIPLimit {
 		return fmt.Errorf(
-			"EIP quota exceeded: you have %d of %d allowed Elastic IPs. "+
-				"Release unused EIPs at https://console.aws.amazon.com/vpc/home#Addresses: "+
-				"or run 'mint destroy' on unused VMs to free allocations",
-			count, DefaultEIPLimit,
+			"EIP quota exceeded: you have %d of %d allowed Elastic IPs — "+
+				"release unused EIPs at https://console.aws.amazon.com/vpc/home#Addresses: "+
+				"or run %s on unused VMs to free allocations",
+			count, DefaultEIPLimit, hint.Cmd("mint destroy"),
 		)
 	}
 
@@ -465,7 +466,7 @@ func (p *Provisioner) findSecurityGroup(ctx context.Context, owner, component st
 	}
 
 	if len(out.SecurityGroups) == 0 {
-		return "", fmt.Errorf("no security group found with tags mint:owner=%s, mint:component=%s — run 'mint init' first", owner, component)
+		return "", fmt.Errorf("no security group found with tags mint:owner=%s, mint:component=%s — run %s first", owner, component, hint.Cmd("mint init"))
 	}
 
 	return aws.ToString(out.SecurityGroups[0].GroupId), nil

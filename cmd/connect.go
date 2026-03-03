@@ -18,6 +18,7 @@ import (
 	mintaws "github.com/SpiceLabsHQ/Mint/internal/aws"
 	"github.com/SpiceLabsHQ/Mint/internal/cli"
 	"github.com/SpiceLabsHQ/Mint/internal/config"
+	"github.com/SpiceLabsHQ/Mint/internal/hint"
 	"github.com/SpiceLabsHQ/Mint/internal/sshconfig"
 	"github.com/SpiceLabsHQ/Mint/internal/vm"
 )
@@ -84,7 +85,8 @@ func runConnect(cmd *cobra.Command, deps *connectDeps, args []string) error {
 		lookup = exec.LookPath
 	}
 	if _, err := lookup("mosh"); err != nil {
-		return fmt.Errorf("mosh is not installed — install it with: brew install mosh (macOS) or apt install mosh (Linux)")
+		return fmt.Errorf("mosh is not installed — install it with %s (macOS) or %s (Linux)",
+			hint.Cmd("brew install mosh"), hint.Cmd("apt install mosh"))
 	}
 
 	ctx := cmd.Context()
@@ -104,13 +106,13 @@ func runConnect(cmd *cobra.Command, deps *connectDeps, args []string) error {
 		return fmt.Errorf("discovering VM: %w", err)
 	}
 	if found == nil {
-		return fmt.Errorf("no VM %q found — run mint up first to create one", vmName)
+		return fmt.Errorf("no VM %q found — run %s first to create one", vmName, hint.Cmd("mint up"))
 	}
 
 	// Verify VM is running.
 	if found.State != string(ec2types.InstanceStateNameRunning) {
-		return fmt.Errorf("VM %q (%s) is not running (state: %s) — run mint up to start it",
-			vmName, found.ID, found.State)
+		return fmt.Errorf("VM %q (%s) is not running (state: %s) — run %s to start it",
+			vmName, found.ID, found.State, hint.Cmd("mint up"))
 	}
 
 	// Determine session name: provided as arg, or picked interactively.
@@ -150,8 +152,9 @@ func runConnect(cmd *cobra.Command, deps *connectDeps, args []string) error {
 					"  Stored fingerprint: %s\n"+
 					"  Current fingerprint: %s\n\n"+
 					"This could indicate a man-in-the-middle attack, or the VM was rebuilt.\n"+
-					"If this is expected (VM was rebuilt), run: mint destroy && mint up",
+					"%s",
 				vmName, existing, fingerprint,
+				hint.Suggest("Rebuild", "mint destroy && mint up"),
 			)
 		}
 
@@ -174,7 +177,7 @@ func runConnect(cmd *cobra.Command, deps *connectDeps, args []string) error {
 
 	// Use availability zone from FindVM (already populated via DescribeInstances).
 	if found.AvailabilityZone == "" {
-		return fmt.Errorf("VM %q (%s) has no availability zone — this is unexpected, try mint destroy && mint up", vmName, found.ID)
+		return fmt.Errorf("VM %q (%s) has no availability zone — this is unexpected, try %s", vmName, found.ID, hint.Cmd("mint destroy && mint up"))
 	}
 
 	// Generate ephemeral SSH key pair.
@@ -246,14 +249,14 @@ func pickSession(ctx context.Context, cmd *cobra.Command, deps *connectDeps, fou
 	)
 	if err != nil {
 		if isTmuxNoSessionsError(err) {
-			return "", fmt.Errorf("no active sessions — create one with: mint project add <git-url>")
+			return "", fmt.Errorf("no active sessions — create one with %s", hint.Cmd("mint project add <git-url>"))
 		}
 		return "", fmt.Errorf("listing tmux sessions: %w", err)
 	}
 
 	sessions := parseTmuxSessions(string(output))
 	if len(sessions) == 0 {
-		return "", fmt.Errorf("no active sessions — create one with: mint project add <git-url>")
+		return "", fmt.Errorf("no active sessions — create one with %s", hint.Cmd("mint project add <git-url>"))
 	}
 
 	// Single session: auto-select.
