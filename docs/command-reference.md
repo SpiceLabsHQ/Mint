@@ -351,26 +351,43 @@ Note: `mint up` and `mint code` auto-generate SSH config entries when `ssh_confi
 Open VS Code connected to the VM.
 
 ```
-mint code [flags]
+mint code [project] [flags]
 ```
 
 Opens VS Code with Remote-SSH connected to the VM. Ensures the SSH config entry exists before launching. Requires `ssh_config_approved` to be `true` in the mint config. This is the primary workflow entry point: MacBook to VS Code Remote-SSH to EC2 host.
 
+**Arguments:**
+
+| Argument | Required | Description |
+|----------|----------|-------------|
+| `project` | No | Name of a project under `/mint/projects/` to open in VS Code |
+
 | Flag | Type | Default | Description |
 |------|------|---------|-------------|
-| `--path` | string | `/home/ubuntu` | Remote directory to open in VS Code |
+| `--path` | string | `/home/ubuntu` | Remote directory to open in VS Code (escape hatch; hidden) |
+
+**Bare invocation behavior:** When no project argument or `--path` flag is given, `mint code` discovers projects on the VM:
+
+- **Zero projects:** Prints guidance to run `mint project add <git-url>`.
+- **One project:** Auto-opens VS Code at that project.
+- **Multiple projects:** Lists available projects with `mint code <name>` examples.
+
+**Multi-VM auto-resolution:** When a project name is given without `--vm`, Mint scans all running VMs to find which one hosts the project. If exactly one VM has the project, it is auto-selected. If multiple VMs have it, Mint errors with the VM names and suggests `--vm`. If no VM has it, Mint suggests `mint project add`.
 
 **Examples:**
 
 ```bash
-# Open VS Code connected to the default VM
+# Discover projects (auto-opens if exactly one exists)
 mint code
 
-# Open a specific directory
-mint code --path /mint/projects/my-app
+# Open a specific project
+mint code my-app
 
-# Open VS Code to a named VM
-mint code --vm dev --path /mint/projects/api
+# Open a project on a named VM
+mint code api --vm dev
+
+# Escape hatch: open an arbitrary remote directory
+mint code --path /home/ubuntu/scratch
 ```
 
 ---
@@ -990,7 +1007,7 @@ date: 2025-01-15
 | `mint mosh` | Roaming SSH for iPads |
 | `mint connect` | Mosh + tmux session picker |
 | `mint sessions` | List tmux sessions |
-| `mint code` | Open VS Code Remote-SSH |
+| `mint code [project]` | Open VS Code Remote-SSH to a project |
 | `mint ssh-config` | Manage SSH config entries |
 | `mint key add` | Permanent SSH key escape hatch |
 | `mint project add` | Clone repo, optionally build devcontainer |
