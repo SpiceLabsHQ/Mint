@@ -39,9 +39,12 @@ checksum:
   name_template: "checksums.txt"
   algorithm: sha256
 
+release:
+  # goreleaser overwrites go-semantic-release's raw notes with a grouped changelog.
+  mode: replace
+
 snapshot:
   version_template: "{{ incpatch .Version }}-next"
-
 
 changelog:
   sort: asc
