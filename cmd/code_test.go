@@ -9,9 +9,29 @@ import (
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
+	mintaws "github.com/SpiceLabsHQ/Mint/internal/aws"
 	"github.com/SpiceLabsHQ/Mint/internal/cli"
 	"github.com/spf13/cobra"
 )
+
+// mockRemoteRunnerForCode returns a RemoteCommandRunner that captures invocations
+// and returns the configured output. It allows test assertions on the command
+// that was sent to the remote host.
+func mockRemoteRunnerForCode(stdout string, err error) (RemoteCommandRunner, *[][]string) {
+	var calls [][]string
+	runner := func(
+		ctx context.Context,
+		sendKey mintaws.SendSSHPublicKeyAPI,
+		instanceID, az, host string,
+		port int,
+		user string,
+		command []string,
+	) ([]byte, error) {
+		calls = append(calls, command)
+		return []byte(stdout), err
+	}
+	return runner, &calls
+}
 
 func TestCodeCommand(t *testing.T) {
 	tests := []struct {
@@ -22,35 +42,16 @@ func TestCodeCommand(t *testing.T) {
 		projectArg        string // positional arg: mint code <project>
 		pathFlag          string
 		sshConfigApproved bool
+		remoteOutput      string // mock output from ls -1 /mint/projects/
+		remoteErr         error  // mock error from remote command
 		wantErr           bool
 		wantErrContain    string
 		wantExec          bool
+		wantOutput        []string // strings expected in command stdout
 		checkCmd          func(t *testing.T, captured capturedCommand)
 	}{
 		{
-			name: "successful code open with default path",
-			describe: &mockDescribeForSSH{
-				output: makeRunningInstanceWithAZ("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
-			},
-			owner:             "alice",
-			sshConfigApproved: true,
-			wantExec:          true,
-			checkCmd: func(t *testing.T, captured capturedCommand) {
-				t.Helper()
-				if captured.name != "code" {
-					t.Errorf("expected code command, got %q", captured.name)
-				}
-				argsStr := strings.Join(captured.args, " ")
-				if !strings.Contains(argsStr, "--remote ssh-remote+mint-default") {
-					t.Errorf("missing --remote flag, args: %v", captured.args)
-				}
-				if !strings.Contains(argsStr, "/home/ubuntu") {
-					t.Errorf("missing default path, args: %v", captured.args)
-				}
-			},
-		},
-		{
-			name: "custom path flag",
+			name: "custom path flag bypasses project discovery",
 			describe: &mockDescribeForSSH{
 				output: makeRunningInstanceWithAZ("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
 			},
@@ -74,6 +75,7 @@ func TestCodeCommand(t *testing.T) {
 			owner:             "alice",
 			sshConfigApproved: true,
 			vmName:            "dev",
+			remoteOutput:      "myproject\n",
 			wantExec:          true,
 			checkCmd: func(t *testing.T, captured capturedCommand) {
 				t.Helper()
@@ -117,21 +119,6 @@ func TestCodeCommand(t *testing.T) {
 			wantExec:          false,
 		},
 		{
-			name: "ssh config written when approved",
-			describe: &mockDescribeForSSH{
-				output: makeRunningInstanceWithAZ("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
-			},
-			owner:             "alice",
-			sshConfigApproved: true,
-			wantExec:          true,
-			checkCmd: func(t *testing.T, captured capturedCommand) {
-				t.Helper()
-				if captured.name != "code" {
-					t.Errorf("expected code command, got %q", captured.name)
-				}
-			},
-		},
-		{
 			name: "skips ssh config when not approved",
 			describe: &mockDescribeForSSH{
 				output: makeRunningInstanceWithAZ("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
@@ -142,7 +129,7 @@ func TestCodeCommand(t *testing.T) {
 			wantErrContain:    "ssh_config_approved",
 			wantExec:          false,
 		},
-		// --- New tests for positional project argument (#202) ---
+		// --- Tests for positional project argument (#202) ---
 		{
 			name: "project arg resolves to /mint/projects/<name>",
 			describe: &mockDescribeForSSH{
@@ -226,6 +213,87 @@ func TestCodeCommand(t *testing.T) {
 			wantErrContain:    "invalid project name",
 			wantExec:          false,
 		},
+		// --- Tests for no-arg project discovery (#203) ---
+		{
+			name: "no args with zero projects shows hint",
+			describe: &mockDescribeForSSH{
+				output: makeRunningInstanceWithAZ("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
+			},
+			owner:             "alice",
+			sshConfigApproved: true,
+			remoteOutput:      "",
+			wantErr:           false,
+			wantExec:          false,
+			wantOutput:        []string{"No projects yet", "mint project add"},
+		},
+		{
+			name: "no args with only lost+found shows hint",
+			describe: &mockDescribeForSSH{
+				output: makeRunningInstanceWithAZ("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
+			},
+			owner:             "alice",
+			sshConfigApproved: true,
+			remoteOutput:      "lost+found\n",
+			wantErr:           false,
+			wantExec:          false,
+			wantOutput:        []string{"No projects yet", "mint project add"},
+		},
+		{
+			name: "no args with one project auto-opens VS Code",
+			describe: &mockDescribeForSSH{
+				output: makeRunningInstanceWithAZ("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
+			},
+			owner:             "alice",
+			sshConfigApproved: true,
+			remoteOutput:      "myproject\n",
+			wantExec:          true,
+			checkCmd: func(t *testing.T, captured capturedCommand) {
+				t.Helper()
+				argsStr := strings.Join(captured.args, " ")
+				if !strings.Contains(argsStr, "/mint/projects/myproject") {
+					t.Errorf("expected auto-open at /mint/projects/myproject, args: %v", captured.args)
+				}
+				if !strings.Contains(argsStr, "--remote ssh-remote+mint-default") {
+					t.Errorf("missing --remote flag, args: %v", captured.args)
+				}
+			},
+		},
+		{
+			name: "no args with multiple projects lists them",
+			describe: &mockDescribeForSSH{
+				output: makeRunningInstanceWithAZ("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
+			},
+			owner:             "alice",
+			sshConfigApproved: true,
+			remoteOutput:      "alpha\nbeta\ngamma\n",
+			wantErr:           false,
+			wantExec:          false,
+			wantOutput:        []string{"mint code alpha", "mint code beta", "mint code gamma"},
+		},
+		{
+			name: "no args with multiple projects filters lost+found",
+			describe: &mockDescribeForSSH{
+				output: makeRunningInstanceWithAZ("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
+			},
+			owner:             "alice",
+			sshConfigApproved: true,
+			remoteOutput:      "alpha\nlost+found\nbeta\n",
+			wantErr:           false,
+			wantExec:          false,
+			wantOutput:        []string{"mint code alpha", "mint code beta"},
+		},
+		{
+			name: "no args with remote command error propagates",
+			describe: &mockDescribeForSSH{
+				output: makeRunningInstanceWithAZ("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
+			},
+			owner:             "alice",
+			sshConfigApproved: true,
+			remoteErr:         fmt.Errorf("ssh: Connection refused"),
+			wantErr:           true,
+			wantErrContain:    "listing projects",
+			wantExec:          false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -243,10 +311,14 @@ func TestCodeCommand(t *testing.T) {
 			configDir := t.TempDir()
 			t.Setenv("MINT_CONFIG_DIR", configDir)
 
+			remoteRunner, _ := mockRemoteRunnerForCode(tt.remoteOutput, tt.remoteErr)
+
 			deps := &codeDeps{
 				describe:          tt.describe,
 				owner:             tt.owner,
 				runner:            runner,
+				sendKey:           &mockSendSSHPublicKey{},
+				runRemoteCommand:  remoteRunner,
 				sshConfigPath:     sshConfigDir + "/config",
 				sshConfigApproved: tt.sshConfigApproved,
 			}
@@ -309,6 +381,14 @@ func TestCodeCommand(t *testing.T) {
 			} else if captured != nil {
 				t.Errorf("unexpected command execution: %s %v", captured.name, captured.args)
 			}
+
+			// Check expected output strings.
+			output := buf.String()
+			for _, want := range tt.wantOutput {
+				if !strings.Contains(output, want) {
+					t.Errorf("output missing %q, got:\n%s", want, output)
+				}
+			}
 		})
 	}
 }
@@ -322,6 +402,7 @@ func TestCodeCommandTooManyArgs(t *testing.T) {
 			output: makeRunningInstanceWithAZ("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
 		},
 		owner:             "alice",
+		sendKey:           &mockSendSSHPublicKey{},
 		sshConfigApproved: true,
 	}
 
@@ -361,12 +442,16 @@ func TestCodeCommandSkipsSSHConfigWhenNotApproved(t *testing.T) {
 		return nil
 	}
 
+	remoteRunner, _ := mockRemoteRunnerForCode("", nil)
+
 	deps := &codeDeps{
 		describe: &mockDescribeForSSH{
 			output: makeRunningInstanceWithAZ("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
 		},
 		owner:             "alice",
 		runner:            runner,
+		sendKey:           &mockSendSSHPublicKey{},
+		runRemoteCommand:  remoteRunner,
 		sshConfigPath:     sshConfigDir + "/config",
 		sshConfigApproved: false,
 	}
@@ -420,12 +505,17 @@ func TestCodeCommandWritesSSHConfigWhenApproved(t *testing.T) {
 		return nil
 	}
 
+	// Single project so auto-open triggers VS Code launch.
+	remoteRunner, _ := mockRemoteRunnerForCode("myproject\n", nil)
+
 	deps := &codeDeps{
 		describe: &mockDescribeForSSH{
 			output: makeRunningInstanceWithAZ("i-abc123", "default", "alice", "1.2.3.4", "us-east-1a"),
 		},
 		owner:             "alice",
 		runner:            runner,
+		sendKey:           &mockSendSSHPublicKey{},
+		runRemoteCommand:  remoteRunner,
 		sshConfigPath:     sshConfigDir + "/config",
 		sshConfigApproved: true,
 	}

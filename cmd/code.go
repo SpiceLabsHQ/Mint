@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/spf13/cobra"
@@ -15,13 +16,15 @@ import (
 
 // codeDeps holds the injectable dependencies for the code command.
 type codeDeps struct {
-	describe           mintaws.DescribeInstancesAPI
-	owner              string
-	profile            string // AWS profile for ProxyCommand aws CLI
-	region             string // AWS region for ProxyCommand aws CLI
-	runner             CommandRunner
-	sshConfigPath      string
-	sshConfigApproved  bool
+	describe          mintaws.DescribeInstancesAPI
+	sendKey           mintaws.SendSSHPublicKeyAPI
+	runRemoteCommand  RemoteCommandRunner
+	owner             string
+	profile           string // AWS profile for ProxyCommand aws CLI
+	region            string // AWS region for ProxyCommand aws CLI
+	runner            CommandRunner
+	sshConfigPath     string
+	sshConfigApproved bool
 }
 
 // newCodeCommand creates the production code command.
@@ -37,7 +40,9 @@ func newCodeCommandWithDeps(deps *codeDeps) *cobra.Command {
 		Short: "Open VS Code connected to the VM",
 		Long: "Open VS Code with Remote-SSH connected to the VM. " +
 			"Ensures the SSH config entry exists before launching.\n\n" +
-			"If a project name is given, opens /mint/projects/<name> in VS Code.",
+			"If a project name is given, opens /mint/projects/<name> in VS Code.\n" +
+			"With no arguments, discovers projects on the VM: auto-opens if exactly one exists, " +
+			"or lists available projects with example commands.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if deps != nil {
@@ -62,6 +67,8 @@ func newCodeCommandWithDeps(deps *codeDeps) *cobra.Command {
 			}
 			return runCode(cmd, args, &codeDeps{
 				describe:          clients.ec2Client,
+				sendKey:           clients.icClient,
+				runRemoteCommand:  defaultRemoteRunner,
 				owner:             clients.owner,
 				profile:           profile,
 				region:            clients.region,
@@ -89,12 +96,6 @@ func runCode(cmd *cobra.Command, args []string, deps *codeDeps) error {
 		vmName = cliCtx.VM
 	}
 
-	// Resolve remote path from positional arg or --path flag.
-	remotePath, err := resolveCodePath(cmd, args)
-	if err != nil {
-		return err
-	}
-
 	// Discover VM by owner + VM name.
 	found, err := vm.FindVM(ctx, deps.describe, deps.owner, vmName)
 	if err != nil {
@@ -118,6 +119,77 @@ func runCode(cmd *cobra.Command, args []string, deps *codeDeps) error {
 		)
 	}
 
+	// When no positional arg and --path not explicitly set, discover projects
+	// on the VM and provide guidance.
+	pathChanged := cmd.Flags().Changed("path")
+	if len(args) == 0 && !pathChanged {
+		return codeDiscoverProjects(cmd, ctx, deps, vmName, found)
+	}
+
+	// Resolve remote path from positional arg or --path flag.
+	remotePath, err := resolveCodePath(cmd, args)
+	if err != nil {
+		return err
+	}
+
+	return launchVSCode(cmd, deps, vmName, found, remotePath)
+}
+
+// codeDiscoverProjects handles the no-argument code path: SSHes to the VM,
+// lists projects under /mint/projects/, and branches on the count:
+//   - 0 projects: prints guidance to run mint project add
+//   - 1 project: auto-opens VS Code at that project
+//   - 2+ projects: lists them with mint code <name> examples
+func codeDiscoverProjects(cmd *cobra.Command, ctx context.Context, deps *codeDeps, vmName string, found *vm.VM) error {
+	// SSH to the VM to list projects.
+	lsCmd := []string{"ls", "-1", "/mint/projects/"}
+	lsOutput, err := deps.runRemoteCommand(ctx, deps.sendKey, found.ID, found.AvailabilityZone,
+		found.PublicIP, defaultSSHPort, defaultSSHUser, lsCmd)
+	if err != nil {
+		return fmt.Errorf("listing projects: %w", err)
+	}
+
+	// Parse project names, filtering lost+found and blank lines.
+	projects := parseProjectNames(string(lsOutput))
+
+	w := cmd.OutOrStdout()
+
+	switch len(projects) {
+	case 0:
+		fmt.Fprintln(w, "No projects yet — run mint project add <git-url>")
+		return nil
+
+	case 1:
+		// Auto-open the sole project in VS Code.
+		remotePath := fmt.Sprintf("/mint/projects/%s", projects[0])
+		return launchVSCode(cmd, deps, vmName, found, remotePath)
+
+	default:
+		// List projects with example commands.
+		fmt.Fprintln(w, "Multiple projects found — specify which to open:")
+		fmt.Fprintln(w)
+		for _, p := range projects {
+			fmt.Fprintf(w, "  mint code %s\n", p)
+		}
+		return nil
+	}
+}
+
+// parseProjectNames extracts project directory names from ls -1 output,
+// filtering blank lines and the lost+found directory.
+func parseProjectNames(lsOutput string) []string {
+	var projects []string
+	for _, line := range strings.Split(lsOutput, "\n") {
+		name := strings.TrimSpace(line)
+		if name != "" && name != "lost+found" {
+			projects = append(projects, name)
+		}
+	}
+	return projects
+}
+
+// launchVSCode writes the SSH config and execs VS Code with --remote.
+func launchVSCode(cmd *cobra.Command, deps *codeDeps, vmName string, found *vm.VM, remotePath string) error {
 	// Ensure SSH config entry exists.
 	sshConfigPath := deps.sshConfigPath
 	if sshConfigPath == "" {
