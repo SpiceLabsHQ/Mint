@@ -136,7 +136,7 @@ All commands support `--verbose` (progress steps) and `--debug` (AWS SDK call de
 
 Projects live on VMs. A single VM typically hosts multiple projects, each in its own devcontainer.
 
-**`mint project add <git-url> [--branch <branch>] [--name <name>] [--vm <name>]`** — On the specified VM: clones the repo, builds the devcontainer (using BuildKit cache for layer reuse), and creates a named tmux session with a `docker exec` shell into the running container. The project name defaults to the repo name. The repo URL and branch are not stored in Mint's config — this is an imperative action on the VM.
+**`mint project add <git-url> [--branch <branch>] [--name <name>] [--vm <name>]`** — On the specified VM: clones the repo to `/mint/projects/<name>`. If a `.devcontainer/` directory or `.devcontainer.json` file is detected, builds the devcontainer (using BuildKit cache for layer reuse). If no devcontainer configuration is found, the clone completes without a container build. The project name defaults to the repo name. The repo URL and branch are not stored in Mint's config — this is an imperative action on the VM.
 
 **`mint project list [--vm <name>] [--json]`** — Lists projects on the VM by inspecting running devcontainers and project directories.
 

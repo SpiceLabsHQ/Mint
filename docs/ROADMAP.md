@@ -136,7 +136,7 @@ This roadmap breaks the Mint CLI into five phases, ordered by dependency and shi
 - Accept file path or stdin
 
 *Project management*:
-- `mint project add <git-url>` clones repo on VM, builds devcontainer via BuildKit, creates named tmux session with `docker exec` shell
+- `mint project add <git-url>` clones repo on VM; if a devcontainer config is detected, builds the devcontainer via BuildKit
 - `mint project list` inspects running devcontainers and project directories, shows state (running/stopped), `--json` output
 - `mint project rebuild <project>` tears down and rebuilds the devcontainer
 

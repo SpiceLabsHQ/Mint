@@ -421,13 +421,13 @@ Commands for cloning repos, building devcontainers, and managing projects on the
 
 ### `mint project add`
 
-Clone a repo, build its devcontainer, and create a tmux session.
+Clone a repo and optionally build its devcontainer.
 
 ```
 mint project add <git-url> [flags]
 ```
 
-Clones a git repository to `/mint/projects/<name>` on the VM, runs `devcontainer up` to build the development container, and creates a tmux session for the project. The command is resumable: if a previous run was interrupted, it detects existing state (clone, container, session) and resumes from the appropriate step.
+Clones a git repository to `/mint/projects/<name>` on the VM. If a `.devcontainer/` directory or `.devcontainer.json` file is detected, runs `devcontainer up` to build the development container. If no devcontainer configuration is found, the clone completes without a container build. The command is idempotent: for non-devcontainer projects, if the directory already exists the project is reported as already set up; for devcontainer projects, if the directory exists and the container is running the project is reported as already set up.
 
 **Arguments:**
 
@@ -993,7 +993,7 @@ date: 2025-01-15
 | `mint code` | Open VS Code Remote-SSH |
 | `mint ssh-config` | Manage SSH config entries |
 | `mint key add` | Permanent SSH key escape hatch |
-| `mint project add` | Clone + devcontainer + tmux |
+| `mint project add` | Clone repo, optionally build devcontainer |
 | `mint project list` | Show projects and containers |
 | `mint project rebuild` | Rebuild a devcontainer |
 | `mint doctor` | Health checks and diagnostics |
