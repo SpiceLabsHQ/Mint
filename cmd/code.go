@@ -96,6 +96,24 @@ func runCode(cmd *cobra.Command, args []string, deps *codeDeps) error {
 		vmName = cliCtx.VM
 	}
 
+	// When a project arg is given and --vm was not explicitly set, try
+	// multi-VM auto-resolution: scan all running VMs to find which one
+	// hosts the project. This avoids requiring --vm when the answer is
+	// unambiguous.
+	vmFlagChanged := cmd.Root().PersistentFlags().Changed("vm")
+	if len(args) == 1 && !vmFlagChanged {
+		resolved, resolvedVM, err := resolveVMForProject(ctx, cmd, args[0], deps)
+		if err != nil {
+			return err
+		}
+		if resolved {
+			// Multi-VM resolution found exactly one VM. Launch VS Code.
+			remotePath := fmt.Sprintf("/mint/projects/%s", args[0])
+			return launchVSCode(cmd, deps, resolvedVM.Name, resolvedVM, remotePath)
+		}
+		// Single VM (or zero): fall through to existing FindVM path.
+	}
+
 	// Discover VM by owner + VM name.
 	found, err := vm.FindVM(ctx, deps.describe, deps.owner, vmName)
 	if err != nil {
@@ -133,6 +151,83 @@ func runCode(cmd *cobra.Command, args []string, deps *codeDeps) error {
 	}
 
 	return launchVSCode(cmd, deps, vmName, found, remotePath)
+}
+
+// resolveVMForProject handles multi-VM auto-resolution when a project name is
+// given without an explicit --vm flag. It lists all VMs, filters to running,
+// and if multiple running VMs exist, SSH probes each to find which one hosts
+// the project directory.
+//
+// Returns:
+//   - (true, vm, nil) when multi-VM resolution found exactly one match
+//   - (false, nil, nil) when only 0-1 running VMs exist (caller should use FindVM)
+//   - (false, nil, err) on any error
+func resolveVMForProject(ctx context.Context, cmd *cobra.Command, project string, deps *codeDeps) (bool, *vm.VM, error) {
+	// Validate project name early.
+	if err := validateProjectName(project); err != nil {
+		return false, nil, err
+	}
+
+	// List all VMs for this owner.
+	allVMs, err := vm.ListVMs(ctx, deps.describe, deps.owner)
+	if err != nil {
+		return false, nil, fmt.Errorf("listing VMs: %w", err)
+	}
+
+	// Filter to running VMs only.
+	var running []*vm.VM
+	for _, v := range allVMs {
+		if v.State == string(ec2types.InstanceStateNameRunning) {
+			running = append(running, v)
+		}
+	}
+
+	// 0-1 running VMs: no multi-VM resolution needed.
+	if len(running) <= 1 {
+		return false, nil, nil
+	}
+
+	// ADR-0015: Check permission before SSH probing (which writes SSH config later).
+	if !deps.sshConfigApproved {
+		return false, nil, fmt.Errorf(
+			"mint needs permission to update ~/.ssh/config — " +
+				"run mint config set ssh_config_approved true",
+		)
+	}
+
+	// Multiple running VMs: SSH probe each to check if /mint/projects/<name> exists.
+	probeCmd := []string{"test", "-d", fmt.Sprintf("/mint/projects/%s", project)}
+
+	var matches []*vm.VM
+	for _, v := range running {
+		_, probeErr := deps.runRemoteCommand(ctx, deps.sendKey, v.ID, v.AvailabilityZone,
+			v.PublicIP, defaultSSHPort, defaultSSHUser, probeCmd)
+		if probeErr == nil {
+			// test -d succeeded: project directory exists on this VM.
+			matches = append(matches, v)
+		}
+		// Non-zero exit (probeErr != nil) means directory not found; skip.
+	}
+
+	switch len(matches) {
+	case 0:
+		return false, nil, fmt.Errorf(
+			"project %q not found on any running VM — use mint project add to clone it",
+			project)
+
+	case 1:
+		return true, matches[0], nil
+
+	default:
+		// Collect VM names for the error message.
+		names := make([]string, len(matches))
+		for i, m := range matches {
+			names[i] = m.Name
+		}
+		return false, nil, fmt.Errorf(
+			"project %q found on multiple VMs: %s — use --vm to choose",
+			project, strings.Join(names, ", "))
+	}
 }
 
 // codeDiscoverProjects handles the no-argument code path: SSHes to the VM,
