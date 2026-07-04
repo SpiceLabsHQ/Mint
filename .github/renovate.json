@@ -1,0 +1,15 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "enabledManagers": ["github-actions"],
+  "packageRules": [
+    {
+      "description": "SpiceLabsHQ reusable workflows: release-please monorepo tags like pepper-pr-review-v1.2.3",
+      "matchManagers": ["github-actions"],
+      "matchDatasources": ["github-tags"],
+      "matchPackageNames": ["SpiceLabsHQ/.github**"],
+      "versionCompatibility": "^(?<compatibility>.*)-v(?<version>.*)$",
+      "versioning": "semver"
+    }
+  ]
+}
